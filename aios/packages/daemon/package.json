@@ -1,0 +1,45 @@
+{
+    "name": "@aios/daemon",
+    "version": "0.1.0",
+    "private": true,
+    "type": "module",
+    "main": "./dist/index.js",
+    "bin": {
+        "aios-daemon": "./dist/index.js"
+    },
+    "scripts": {
+        "build": "tsup src/index.ts --format esm --dts",
+        "dev": "tsx watch src/index.ts",
+        "start": "node dist/index.js",
+        "test": "vitest run",
+        "clean": "rm -rf dist"
+    },
+    "dependencies": {
+        "@aios/shared": "workspace:*",
+        "@anthropic-ai/sdk": "^0.32.0",
+        "@google/generative-ai": "^0.21.0",
+        "brightness": "^3.0.0",
+        "loudness": "^0.4.2",
+        "mathjs": "^15.1.0",
+        "node-notifier": "^10.0.1",
+        "node-schedule": "^2.1.1",
+        "open": "^10.1.0",
+        "openai": "^4.67.0",
+        "playwright": "^1.40.0",
+        "ps-list": "^8.1.1",
+        "say": "^0.16.0",
+        "systeminformation": "^5.23.0",
+        "wallpaper": "^7.2.1",
+        "ws": "^8.16.0"
+    },
+    "devDependencies": {
+        "@types/node": "^20.11.0",
+        "@types/node-notifier": "^8.0.5",
+        "@types/node-schedule": "^2.1.8",
+        "@types/ws": "^8.5.10",
+        "tsup": "^8.0.2",
+        "tsx": "^4.7.0",
+        "typescript": "^5.3.3",
+        "vitest": "^1.6.0"
+    }
+}
