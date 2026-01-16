@@ -212,11 +212,10 @@ export class IntentAnalyzerOptimized {
         const directMatch = this.matchDirectTool(input);
         if (directMatch) {
             return {
-                type: TaskType.Simple,
+                taskType: TaskType.Simple,
                 confidence: 0.95,
                 directToolCall: directMatch,
-                requiresVision: false,
-                complexity: 'low',
+                requiresPlanning: false,
             };
         }
 
@@ -224,10 +223,10 @@ export class IntentAnalyzerOptimized {
         const requiresVision = this.detectVisionRequirement(input);
         if (requiresVision) {
             return {
-                type: TaskType.Visual,
+                taskType: TaskType.Visual,
                 confidence: 0.9,
-                requiresVision: true,
-                complexity: 'medium',
+                visionPrompt: `分析屏幕并执行: ${input}`,
+                requiresPlanning: false,
             };
         }
 
@@ -235,19 +234,17 @@ export class IntentAnalyzerOptimized {
         const complexity = this.detectComplexity(input);
         if (complexity === 'high') {
             return {
-                type: TaskType.Complex,
+                taskType: TaskType.Complex,
                 confidence: 0.85,
-                requiresVision: false,
-                complexity: 'high',
+                requiresPlanning: true,
             };
         }
 
         // 4. 默认为简单任务
         return {
-            type: TaskType.Simple,
+            taskType: TaskType.Simple,
             confidence: 0.8,
-            requiresVision: false,
-            complexity: 'low',
+            requiresPlanning: false,
         };
     }
 
@@ -263,7 +260,7 @@ export class IntentAnalyzerOptimized {
                 return {
                     tool: pattern.tool,
                     action: pattern.action,
-                    parameters: params,
+                    params: params,
                 };
             }
         }

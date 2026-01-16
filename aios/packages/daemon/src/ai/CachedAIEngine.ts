@@ -141,8 +141,33 @@ export class CachedAIEngine implements IAIEngine {
         this.cache = new LRUCache(this.config.maxSize);
     }
 
+    // IAIEngine 接口实现
+    get id(): string {
+        return this.engine.id;
+    }
+
     get name(): string {
         return this.engine.name;
+    }
+
+    get provider() {
+        return this.engine.provider;
+    }
+
+    get model(): string {
+        return this.engine.model;
+    }
+
+    supportsVision(): boolean {
+        return this.engine.supportsVision();
+    }
+
+    supportsToolCalling(): boolean {
+        return this.engine.supportsToolCalling();
+    }
+
+    getMaxTokens(): number {
+        return this.engine.getMaxTokens();
     }
 
     /**
@@ -155,7 +180,7 @@ export class CachedAIEngine implements IAIEngine {
                 content: m.content,
                 // 不包含 images，因为图片内容可能很大
             })),
-            tools: tools?.map(t => t.name),
+            tools: tools?.map(t => t.function.name),
         };
         const hash = crypto.createHash('sha256');
         hash.update(JSON.stringify(data));
@@ -229,22 +254,7 @@ export class CachedAIEngine implements IAIEngine {
         return response;
     }
 
-    /**
-     * 流式聊天（不缓存）
-     */
-    async *chatStream(messages: Message[]): AsyncGenerator<string> {
-        yield* this.engine.chatStream(messages);
-    }
 
-    /**
-     * 流式聊天（带工具调用，不缓存）
-     */
-    async *chatStreamWithTools(
-        messages: Message[],
-        tools: ToolDefinition[]
-    ): AsyncGenerator<ChatResponse> {
-        yield* this.engine.chatStreamWithTools(messages, tools);
-    }
 
     /**
      * 获取缓存统计信息
