@@ -13,6 +13,13 @@ let requestId = 0;
 const pendingRequests = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
 let buffer = '';
 
+const DAEMON_EVENT_CHANNELS = new Set([
+    'task:progress',
+    'task:complete',
+    'task:error',
+    'confirmation:request',
+]);
+
 /** 处理 daemon 响应 */
 function processDaemonOutput(data: Buffer): void {
     buffer += data.toString();
@@ -22,15 +29,31 @@ function processDaemonOutput(data: Buffer): void {
     for (const line of lines) {
         if (!line.trim()) continue;
         try {
-            const response = JSON.parse(line);
-            const pending = pendingRequests.get(response.id);
-            if (pending) {
-                pendingRequests.delete(response.id);
-                if (response.error) {
-                    pending.reject(new Error(response.error.message));
-                } else {
-                    pending.resolve(response.result);
+            const message = JSON.parse(line) as {
+                id?: number;
+                result?: unknown;
+                error?: { message?: string };
+                method?: string;
+                params?: unknown;
+            };
+
+            // JSON-RPC response
+            if (typeof message.id === 'number') {
+                const pending = pendingRequests.get(message.id);
+                if (pending) {
+                    pendingRequests.delete(message.id);
+                    if (message.error) {
+                        pending.reject(new Error(message.error.message || 'Daemon error'));
+                    } else {
+                        pending.resolve(message.result);
+                    }
                 }
+                continue;
+            }
+
+            // JSON-RPC notification (events)
+            if (typeof message.method === 'string' && DAEMON_EVENT_CHANNELS.has(message.method)) {
+                mainWindow?.webContents.send(message.method, message.params);
             }
         } catch {
             // Ignore parse errors
@@ -177,6 +200,16 @@ function registerShortcuts(): void {
 
 /** 注册 IPC 处理器 */
 function registerIPCHandlers(): void {
+    // 兼容旧 API：发送消息到 daemon（等同 smartChat）
+    ipcMain.handle('daemon:send', async (_event, message: string) => {
+        try {
+            return await callDaemon('smartChat', { message, hasScreenshot: false });
+        } catch (error) {
+            console.error('[AIOS Client] daemon:send error:', error);
+            throw error;
+        }
+    });
+
     // 获取适配器列表
     ipcMain.handle('daemon:getAdapters', async () => {
         try {
@@ -269,6 +302,109 @@ function registerIPCHandlers(): void {
             throw error;
         }
     });
+
+    // 检查权限
+    ipcMain.handle('daemon:checkPermission', async (_event, params) => {
+        try {
+            return await callDaemon('checkPermission', params);
+        } catch (error) {
+            console.error('[AIOS Client] checkPermission error:', error);
+            throw error;
+        }
+    });
+
+    // 请求权限
+    ipcMain.handle('daemon:requestPermission', async (_event, params) => {
+        try {
+            return await callDaemon('requestPermission', params);
+        } catch (error) {
+            console.error('[AIOS Client] requestPermission error:', error);
+            throw error;
+        }
+    });
+
+    // ============ Task API ============
+
+    // 提交任务
+    ipcMain.handle('task:submit', async (_event, params: { prompt: string; priority?: string; type?: string; metadata?: Record<string, unknown> }) => {
+        try {
+            return await callDaemon('task.submit', params);
+        } catch (error) {
+            console.error('[AIOS Client] task:submit error:', error);
+            throw error;
+        }
+    });
+
+    // 取消任务
+    ipcMain.handle('task:cancel', async (_event, params: { taskId: string }) => {
+        try {
+            return await callDaemon('task.cancel', params);
+        } catch (error) {
+            console.error('[AIOS Client] task:cancel error:', error);
+            throw error;
+        }
+    });
+
+    // 获取任务状态
+    ipcMain.handle('task:getStatus', async (_event, params: { taskId: string }) => {
+        try {
+            return await callDaemon('task.getStatus', params);
+        } catch (error) {
+            console.error('[AIOS Client] task:getStatus error:', error);
+            throw error;
+        }
+    });
+
+    // 获取队列状态
+    ipcMain.handle('task:getQueue', async () => {
+        try {
+            return await callDaemon('task.getQueue');
+        } catch (error) {
+            console.error('[AIOS Client] task:getQueue error:', error);
+            throw error;
+        }
+    });
+
+    // 获取任务历史
+    ipcMain.handle('task:getHistory', async (_event, params?: { sessionId?: string; status?: string; page?: number; pageSize?: number }) => {
+        try {
+            return await callDaemon('task.getHistory', params);
+        } catch (error) {
+            console.error('[AIOS Client] task:getHistory error:', error);
+            throw error;
+        }
+    });
+
+    // ============ Confirmation API ============
+
+    // 确认响应处理器
+    ipcMain.handle('confirmation:respond', async (_event, params: { requestId: string; confirmed: boolean; reason?: string }) => {
+        try {
+            return await callDaemon('confirmation.respond', params);
+        } catch (error) {
+            console.error('[AIOS Client] confirmation:respond error:', error);
+            throw error;
+        }
+    });
+
+    // ============ Progress Events ============
+
+    // 窗口控制
+    ipcMain.on('window:close', () => {
+        mainWindow?.close();
+    });
+
+    ipcMain.on('window:minimize', () => {
+        mainWindow?.minimize();
+    });
+
+    // 系统信息
+    ipcMain.handle('system:info', () => {
+        return {
+            platform: process.platform,
+            version: app.getVersion(),
+        };
+    });
 }
 
 /** 启动 Daemon 进程 */
@@ -280,7 +416,6 @@ function startDaemon(): void {
             stdio: ['pipe', 'pipe', 'inherit'],
             env: {
                 ...process.env,
-                AIOS_WEBSOCKET_PORT: '8765',
             },
         });
 
@@ -334,4 +469,3 @@ app.on('will-quit', () => {
         daemonProcess.kill();
     }
 });
-

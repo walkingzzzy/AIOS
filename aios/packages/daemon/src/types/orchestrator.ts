@@ -18,6 +18,10 @@ export enum TaskType {
 export interface TaskContext {
     /** 是否包含截图 */
     hasScreenshot?: boolean;
+    /** 任务 ID（用于审计/追踪/用量） */
+    taskId?: string;
+    /** 会话 ID（用于审计/用量聚合） */
+    sessionId?: string;
     /** 对话历史 */
     history?: Array<{ role: 'user' | 'assistant'; content: string }>;
 }
@@ -58,6 +62,8 @@ export interface TaskResult {
     executionTime: number;
     /** 使用的模型 */
     model?: string;
+    /** AI 用量信息（用于成本/审计） */
+    usage?: unknown;
 }
 
 /** 执行计划 */

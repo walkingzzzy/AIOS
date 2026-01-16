@@ -40,6 +40,7 @@ export interface Message {
     content: string;
     name?: string;
     toolCallId?: string;
+    images?: string[];  // base64 编码的图像
 }
 
 /** 工具定义 (OpenAI 格式) */

@@ -25,8 +25,8 @@ export class IntentAnalyzer {
         // 音量控制
         { pattern: /(调高|增加|提高|加大).*音量/, tool: 'com.aios.adapter.audio', action: 'set_volume', paramExtractor: () => ({ volume: 80 }) },
         { pattern: /(调低|减小|降低|减少).*音量/, tool: 'com.aios.adapter.audio', action: 'set_volume', paramExtractor: () => ({ volume: 30 }) },
+        { pattern: /取消\s*静音/, tool: 'com.aios.adapter.audio', action: 'set_muted', paramExtractor: () => ({ muted: false }) },
         { pattern: /静音/, tool: 'com.aios.adapter.audio', action: 'set_muted', paramExtractor: () => ({ muted: true }) },
-        { pattern: /取消静音/, tool: 'com.aios.adapter.audio', action: 'set_muted', paramExtractor: () => ({ muted: false }) },
         {
             pattern: /音量.*(\d+)/, tool: 'com.aios.adapter.audio', action: 'set_volume', paramExtractor: (input) => {
                 const match = input.match(/音量.*?(\d+)/);
@@ -52,7 +52,7 @@ export class IntentAnalyzer {
             }
         },
         {
-            pattern: /关闭\s*(.+)/, tool: 'com.aios.adapter.apps', action: 'kill_process', paramExtractor: (input) => {
+            pattern: /关闭\s*(.+)/, tool: 'com.aios.adapter.apps', action: 'close_app', paramExtractor: (input) => {
                 const match = input.match(/关闭\s*(.+)/);
                 return match ? { name: match[1].trim() } : null;
             }

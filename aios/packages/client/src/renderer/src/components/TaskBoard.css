@@ -1,0 +1,278 @@
+/**
+ * TaskBoard 样式
+ */
+
+.task-board {
+    background: var(--card-bg, rgba(255, 255, 255, 0.05));
+    border-radius: 16px;
+    border: 1px solid var(--border-color, rgba(255, 255, 255, 0.1));
+    overflow: hidden;
+}
+
+.task-board.empty {
+    padding: 40px;
+}
+
+.empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    color: var(--text-secondary, rgba(255, 255, 255, 0.5));
+}
+
+.empty-icon {
+    font-size: 48px;
+    opacity: 0.5;
+}
+
+.task-board-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 20px;
+    background: var(--header-bg, rgba(255, 255, 255, 0.03));
+    border-bottom: 1px solid var(--border-color, rgba(255, 255, 255, 0.1));
+}
+
+.task-board-header h3 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-primary, #fff);
+}
+
+.task-count {
+    font-size: 13px;
+    color: var(--text-secondary, rgba(255, 255, 255, 0.6));
+}
+
+.task-groups {
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.task-group {
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    overflow: hidden;
+    transition: all 0.3s ease;
+}
+
+.task-group:hover {
+    border-color: rgba(255, 255, 255, 0.15);
+}
+
+.task-group.running {
+    border-color: rgba(79, 195, 247, 0.3);
+}
+
+.task-group.completed {
+    border-color: rgba(102, 187, 106, 0.3);
+}
+
+.task-group.failed {
+    border-color: rgba(239, 83, 80, 0.3);
+}
+
+.group-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 14px 16px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.group-header:hover {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.group-info {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.group-status-icon {
+    font-size: 18px;
+}
+
+.group-title {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-primary, #fff);
+}
+
+.group-meta {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.progress-text {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--accent-color, #667eea);
+}
+
+.subtask-count {
+    font-size: 12px;
+    color: var(--text-secondary, rgba(255, 255, 255, 0.6));
+}
+
+.expand-btn {
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary, rgba(255, 255, 255, 0.6));
+    cursor: pointer;
+    font-size: 12px;
+    transition: all 0.2s ease;
+}
+
+.expand-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.group-progress-bar {
+    height: 3px;
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.group-progress-bar .progress-fill {
+    height: 100%;
+    transition: width 0.3s ease;
+}
+
+.subtasks-list {
+    padding: 0 16px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.subtask-item {
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 8px;
+    padding: 12px;
+    transition: all 0.2s ease;
+}
+
+.subtask-item.running {
+    background: rgba(79, 195, 247, 0.1);
+}
+
+.subtask-item.completed {
+    opacity: 0.7;
+}
+
+.subtask-item.failed {
+    background: rgba(239, 83, 80, 0.1);
+}
+
+.subtask-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.subtask-status {
+    font-size: 14px;
+}
+
+.subtask-desc {
+    flex: 1;
+    font-size: 13px;
+    color: var(--text-primary, #fff);
+}
+
+.subtask-duration {
+    font-size: 12px;
+    color: var(--text-secondary, rgba(255, 255, 255, 0.5));
+    font-family: 'Fira Code', monospace;
+}
+
+.subtask-progress {
+    height: 2px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 1px;
+    margin-top: 8px;
+    overflow: hidden;
+}
+
+.subtask-progress .progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+    transition: width 0.3s ease;
+}
+
+.subtask-result {
+    margin-top: 8px;
+    padding: 8px;
+    background: rgba(102, 187, 106, 0.1);
+    border-radius: 6px;
+}
+
+.subtask-result pre {
+    margin: 0;
+    font-size: 12px;
+    color: #66bb6a;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: 'Fira Code', monospace;
+}
+
+.subtask-error {
+    margin-top: 8px;
+    padding: 8px;
+    background: rgba(239, 83, 80, 0.1);
+    border-radius: 6px;
+    font-size: 12px;
+    color: #ef5350;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.group-actions {
+    padding: 12px 16px;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+}
+
+.cancel-btn,
+.retry-btn {
+    padding: 8px 16px;
+    border-radius: 8px;
+    border: none;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.cancel-btn {
+    background: rgba(239, 83, 80, 0.2);
+    color: #ef5350;
+}
+
+.cancel-btn:hover {
+    background: rgba(239, 83, 80, 0.3);
+}
+
+.retry-btn {
+    background: rgba(79, 195, 247, 0.2);
+    color: #4fc3f7;
+}
+
+.retry-btn:hover {
+    background: rgba(79, 195, 247, 0.3);
+}

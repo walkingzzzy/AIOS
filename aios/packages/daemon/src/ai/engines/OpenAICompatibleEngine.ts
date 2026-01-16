@@ -5,6 +5,7 @@
 
 import OpenAI from 'openai';
 import { BaseAIEngine } from '../AIEngine.js';
+import { normalizeBase64Image, toDataUrl } from '../utils/images.js';
 import type {
     AIProvider,
     Message,
@@ -29,6 +30,8 @@ export class OpenAICompatibleEngine extends BaseAIEngine {
     readonly model: string;
 
     private client: OpenAI;
+    private baseURL: string;
+    private apiKey: string;
 
     constructor(config: OpenAICompatibleConfig) {
         super();
@@ -49,21 +52,19 @@ export class OpenAICompatibleEngine extends BaseAIEngine {
             xai: 'https://api.x.ai/v1',
         };
 
-        const baseURL = config.baseURL || defaultEndpoints[config.provider] || defaultEndpoints.openai;
+        this.baseURL = config.baseURL || defaultEndpoints[config.provider] || defaultEndpoints.openai;
+        this.apiKey = config.apiKey;
 
         this.client = new OpenAI({
-            apiKey: config.apiKey,
-            baseURL,
+            apiKey: this.apiKey,
+            baseURL: this.baseURL,
         });
     }
 
     async chat(messages: Message[], options?: ChatOptions): Promise<ChatResponse> {
         const response = await this.client.chat.completions.create({
             model: this.model,
-            messages: messages.map((m) => ({
-                role: m.role as 'system' | 'user' | 'assistant',
-                content: m.content,
-            })),
+            messages: messages.map((m) => this.toOpenAIMessage(m)),
             temperature: options?.temperature,
             max_tokens: options?.maxTokens,
             top_p: options?.topP,
@@ -92,10 +93,7 @@ export class OpenAICompatibleEngine extends BaseAIEngine {
     ): Promise<ToolCallResponse> {
         const response = await this.client.chat.completions.create({
             model: this.model,
-            messages: messages.map((m) => ({
-                role: m.role as 'system' | 'user' | 'assistant',
-                content: m.content,
-            })),
+            messages: messages.map((m) => this.toOpenAIMessage(m)),
             tools: tools.map((t) => ({
                 type: 'function' as const,
                 function: t.function,
@@ -143,6 +141,14 @@ export class OpenAICompatibleEngine extends BaseAIEngine {
         return 4096;
     }
 
+    getConfigInfo(): { model: string; apiUrl: string; isConfigured: boolean } {
+        return {
+            model: this.model,
+            apiUrl: this.baseURL,
+            isConfigured: !!this.apiKey,
+        };
+    }
+
     private mapFinishReason(
         reason?: string | null
     ): 'stop' | 'length' | 'tool_calls' | 'content_filter' | null {
@@ -152,5 +158,34 @@ export class OpenAICompatibleEngine extends BaseAIEngine {
         if (reason === 'tool_calls') return 'tool_calls';
         if (reason === 'content_filter') return 'content_filter';
         return null;
+    }
+
+    private toOpenAIMessage(message: Message): any {
+        // Multi-modal content is only supported by some OpenAI-compatible providers/models.
+        // When images are present, prefer structured content parts.
+        if (message.role === 'user' && message.images && message.images.length > 0) {
+            const parts: any[] = [];
+            if (message.content) {
+                parts.push({ type: 'text', text: message.content });
+            }
+
+            for (const image of message.images) {
+                const normalized = normalizeBase64Image(image);
+                parts.push({
+                    type: 'image_url',
+                    image_url: { url: toDataUrl(normalized) },
+                });
+            }
+
+            return {
+                role: 'user',
+                content: parts,
+            };
+        }
+
+        return {
+            role: message.role as 'system' | 'user' | 'assistant' | 'tool',
+            content: message.content,
+        };
     }
 }

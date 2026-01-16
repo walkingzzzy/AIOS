@@ -38,7 +38,7 @@ ${this.formatTools(availableTools)}
     {
       "id": 1,
       "description": "步骤描述",
-      "action": "tool_id.action_id",
+      "action": "tool_name",
       "params": {},
       "requiresVision": false,
       "dependsOn": []
@@ -51,7 +51,8 @@ ${this.formatTools(availableTools)}
 2. 每个步骤应该是原子操作
 3. 标注步骤之间的依赖关系
 4. 需要屏幕理解时设置 requiresVision: true
-5. action 格式为 "适配器ID.能力ID"`;
+5. action 必须是上面“可用工具”列表中的 tool_name（例如：audio_set_volume、apps_open_app）
+6. 如果没有合适工具且需要屏幕理解，将 requiresVision 设为 true，并用自然语言描述要观察/判断的内容`;
 
         try {
             const response = await this.smartEngine.chat([

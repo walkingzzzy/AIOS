@@ -4,14 +4,15 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import { BaseAIEngine } from '../AIEngine.js';
-import type {
+import {
     AIProvider,
-    Message,
-    ChatOptions,
-    ChatResponse,
-    ToolDefinition,
-    ToolCallResponse,
+    type Message,
+    type ChatOptions,
+    type ChatResponse,
+    type ToolDefinition,
+    type ToolCallResponse,
 } from '@aios/shared';
+import { normalizeBase64Image } from '../utils/images.js';
 
 export interface AnthropicConfig {
     model: string;
@@ -21,19 +22,21 @@ export interface AnthropicConfig {
 export class AnthropicEngine extends BaseAIEngine {
     readonly id: string;
     readonly name: string;
-    readonly provider: AIProvider = 'anthropic';
+    readonly provider: AIProvider = AIProvider.ANTHROPIC;
     readonly model: string;
 
     private client: Anthropic;
+    private apiKey: string;
 
     constructor(config: AnthropicConfig) {
         super();
         this.model = config.model;
         this.id = `anthropic/${config.model}`;
         this.name = `Anthropic - ${config.model}`;
+        this.apiKey = config.apiKey;
 
         this.client = new Anthropic({
-            apiKey: config.apiKey,
+            apiKey: this.apiKey,
         });
     }
 
@@ -48,7 +51,7 @@ export class AnthropicEngine extends BaseAIEngine {
             system: systemMessage?.content,
             messages: chatMessages.map((m) => ({
                 role: m.role as 'user' | 'assistant',
-                content: m.content,
+                content: this.toAnthropicContent(m),
             })),
             temperature: options?.temperature,
             top_p: options?.topP,
@@ -82,7 +85,7 @@ export class AnthropicEngine extends BaseAIEngine {
             system: systemMessage?.content,
             messages: chatMessages.map((m) => ({
                 role: m.role as 'user' | 'assistant',
-                content: m.content,
+                content: this.toAnthropicContent(m),
             })),
             tools: tools.map((t) => ({
                 name: t.function.name,
@@ -130,6 +133,14 @@ export class AnthropicEngine extends BaseAIEngine {
         return 100000;
     }
 
+    getConfigInfo(): { model: string; apiUrl: string; isConfigured: boolean } {
+        return {
+            model: this.model,
+            apiUrl: 'https://api.anthropic.com/v1',
+            isConfigured: !!this.apiKey,
+        };
+    }
+
     private mapStopReason(
         reason?: string | null
     ): 'stop' | 'length' | 'tool_calls' | 'content_filter' | null {
@@ -138,5 +149,30 @@ export class AnthropicEngine extends BaseAIEngine {
         if (reason === 'max_tokens') return 'length';
         if (reason === 'tool_use') return 'tool_calls';
         return null;
+    }
+
+    private toAnthropicContent(message: Message): any {
+        if (!message.images || message.images.length === 0) {
+            return message.content;
+        }
+
+        const blocks: any[] = [];
+        if (message.content) {
+            blocks.push({ type: 'text', text: message.content });
+        }
+
+        for (const image of message.images) {
+            const normalized = normalizeBase64Image(image);
+            blocks.push({
+                type: 'image',
+                source: {
+                    type: 'base64',
+                    media_type: normalized.mimeType,
+                    data: normalized.data,
+                },
+            });
+        }
+
+        return blocks;
     }
 }

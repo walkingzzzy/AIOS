@@ -5,12 +5,37 @@
 import type { AIRouterConfig } from '@aios/shared';
 import { AIProvider } from '@aios/shared';
 import { AIRouter } from './ai/index.js';
-import { adapterRegistry, JSONRPCHandler, StdioTransport, WebSocketTransport, TaskOrchestrator } from './core/index.js';
+import { SkillRegistry, ProjectMemoryManager } from './core/skills/index.js';
+import { OAuthManager, getOAuthConfig, OAuthEnvVars } from './auth/index.js';
+import { MCPServer, A2AServer, type AgentCard } from './protocol/index.js';
+import {
+    adapterRegistry,
+    JSONRPCHandler,
+    StdioTransport,
+    WebSocketTransport,
+    TaskOrchestrator,
+    TaskScheduler,
+    SessionManager,
+    confirmationManager,
+    permissionManager,
+    HookManager,
+    LoggingHook,
+    MetricsHook,
+    ToolTraceRepository,
+    ToolTraceHook,
+    UsageRepository,
+    UsageHook,
+    traceContextManager,
+} from './core/index.js';
+import { Storage } from './core/Storage.js';
+import { TaskAPI } from './api/TaskAPI.js';
 import {
     audioAdapter,
     displayAdapter,
     desktopAdapter,
     powerAdapter,
+    networkAdapter,
+    focusModeAdapter,
     appsAdapter,
     systemInfoAdapter,
     fileAdapter,
@@ -23,6 +48,17 @@ import {
     calendarAdapter,
     weatherAdapter,
     translateAdapter,
+    screenshotAdapter,
+    clipboardAdapter,
+    // 新增适配器
+    SpotifyAdapter,
+    SlackAdapter,
+    DiscordAdapter,
+    GmailAdapter,
+    OutlookAdapter,
+    GoogleWorkspaceAdapter,
+    NotionAdapter,
+    Microsoft365Adapter,
 } from './adapters/index.js';
 
 // 默认 API URLs
@@ -76,11 +112,53 @@ function getDefaultAIConfig(): AIRouterConfig {
 async function main() {
     console.error('[AIOS Daemon] Starting...');
 
+    // 初始化存储（KV + 会话/任务持久化）
+    const storage = new Storage();
+    const sessionManager = new SessionManager(storage.getDatabase());
+
+    // ============ Trace / Hooks / Audit / Usage ============
+    const sampleRateEnv = Number(process.env.AIOS_TRACE_SAMPLE_RATE);
+    if (Number.isFinite(sampleRateEnv)) {
+        traceContextManager.setSampleRate(sampleRateEnv);
+    }
+
+    const hookManager = new HookManager({
+        enabled: process.env.AIOS_HOOKS_ENABLED !== '0',
+    });
+
+    hookManager.register(new LoggingHook({
+        logLevel: (process.env.AIOS_HOOK_LOG_LEVEL as 'debug' | 'info' | 'warn' | 'error') || 'info',
+    }));
+    hookManager.register(new MetricsHook());
+
+    const toolTraceRepository = new ToolTraceRepository();
+    hookManager.register(new ToolTraceHook(toolTraceRepository));
+
+    const usageRepository = new UsageRepository();
+    hookManager.register(new UsageHook(usageRepository));
+
+    // ============ OAuth / Token 配置 ============
+    const oauthManager = new OAuthManager(storage);
+    const oauthRedirectUri = process.env.AIOS_OAUTH_REDIRECT_URI;
+
+    for (const [providerId, env] of Object.entries(OAuthEnvVars)) {
+        const clientId = process.env[env.clientId];
+        const clientSecret = process.env[env.clientSecret];
+        if (clientId && clientSecret) {
+            oauthManager.registerProvider(
+                providerId,
+                getOAuthConfig(providerId, clientId, clientSecret, oauthRedirectUri)
+            );
+        }
+    }
+
     // 注册适配器
     adapterRegistry.register(audioAdapter);
     adapterRegistry.register(displayAdapter);
     adapterRegistry.register(desktopAdapter);
     adapterRegistry.register(powerAdapter);
+    adapterRegistry.register(networkAdapter);
+    adapterRegistry.register(focusModeAdapter);
     adapterRegistry.register(appsAdapter);
     adapterRegistry.register(systemInfoAdapter);
     adapterRegistry.register(fileAdapter);
@@ -93,30 +171,218 @@ async function main() {
     adapterRegistry.register(calendarAdapter);
     adapterRegistry.register(weatherAdapter);
     adapterRegistry.register(translateAdapter);
+    adapterRegistry.register(screenshotAdapter);
+    adapterRegistry.register(clipboardAdapter);
+
+    // 注册新增适配器（需要 OAuth 配置后才可用）
+    const spotifyAdapter = new SpotifyAdapter();
+    const slackAdapter = new SlackAdapter();
+    const discordAdapter = new DiscordAdapter();
+    const gmailAdapter = new GmailAdapter();
+    const outlookAdapter = new OutlookAdapter();
+    const googleWorkspaceAdapter = new GoogleWorkspaceAdapter();
+    const notionAdapter = new NotionAdapter();
+    const microsoft365Adapter = new Microsoft365Adapter();
+
+    spotifyAdapter.setOAuthManager(oauthManager);
+    gmailAdapter.setOAuthManager(oauthManager);
+    outlookAdapter.setOAuthManager(oauthManager);
+    googleWorkspaceAdapter.setOAuthManager(oauthManager);
+    microsoft365Adapter.setOAuthManager(oauthManager);
+
+    if (process.env.SLACK_BOT_TOKEN) {
+        slackAdapter.setToken(process.env.SLACK_BOT_TOKEN);
+    }
+    if (process.env.DISCORD_BOT_TOKEN) {
+        discordAdapter.setToken(process.env.DISCORD_BOT_TOKEN);
+    }
+    const notionToken = process.env.NOTION_TOKEN || process.env.NOTION_API_TOKEN;
+    if (notionToken) {
+        notionAdapter.setToken(notionToken);
+    }
+
+    adapterRegistry.register(spotifyAdapter);
+    adapterRegistry.register(slackAdapter);
+    adapterRegistry.register(discordAdapter);
+    adapterRegistry.register(gmailAdapter);
+    adapterRegistry.register(outlookAdapter);
+    adapterRegistry.register(googleWorkspaceAdapter);
+    adapterRegistry.register(notionAdapter);
+    adapterRegistry.register(microsoft365Adapter);
 
     // 初始化所有适配器
     await adapterRegistry.initializeAll();
     console.error(`[AIOS Daemon] Registered ${adapterRegistry.getAll().length} adapters`);
 
+    // 创建 Skills 系统
+    const skillRegistry = new SkillRegistry({
+        userSkillsDir: `${process.env.HOME}/.aios/skills`,
+        projectSkillsDir: '.aios/skills',
+        autoDiscover: true,
+    });
+    const projectMemoryManager = new ProjectMemoryManager();
+    console.error(`[AIOS Daemon] SkillRegistry initialized with ${skillRegistry.count} skills`);
+
     // 创建 AI 路由器
     let aiRouter: AIRouter | null = null;
     let orchestrator: TaskOrchestrator | null = null;
+    let wsTransport: WebSocketTransport | null = null;
+    let mcpServer: MCPServer | null = null;
+    let a2aServer: A2AServer | null = null;
+    const a2aTaskIdByAiosTaskId = new Map<string, string>();
+
+    const emitNotification = (method: string, params: unknown): void => {
+        try {
+            process.stdout.write(JSON.stringify({ jsonrpc: '2.0', method, params }) + '\n');
+        } catch {
+            // ignore
+        }
+        wsTransport?.broadcast(method, params);
+    };
+
+    // 任务调度器（用于 task.* API）
+    const concurrencyEnv = Number(process.env.AIOS_TASK_CONCURRENCY);
+    const scheduler = new TaskScheduler(async (task) => {
+        // 运行状态（持久化）
+        sessionManager.updateTaskStatus(task.id, 'running');
+
+        if (!orchestrator) {
+            const message = 'TaskOrchestrator not configured. Set API keys via environment variables.';
+            sessionManager.updateTaskStatus(task.id, 'failed', { error: message });
+            throw new Error(message);
+        }
+
+        try {
+            const result = await orchestrator.process(task.prompt, { hasScreenshot: false, taskId: task.id });
+            sessionManager.updateTaskStatus(task.id, result.success ? 'completed' : 'failed', {
+                response: result.response,
+                tier: result.tier,
+                model: result.model,
+                executionTime: result.executionTime,
+                error: result.success ? undefined : result.response,
+            });
+            return result;
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            sessionManager.updateTaskStatus(task.id, 'failed', { error: message });
+            throw error;
+        }
+    }, {
+        concurrency: Number.isFinite(concurrencyEnv) && concurrencyEnv > 0 ? concurrencyEnv : 1,
+    });
+
+    // 推送任务事件到客户端（用于渲染进程监听）
+    scheduler.on('task:started', (...args: unknown[]) => {
+        const task = args[0] as { id: string };
+        emitNotification('task:progress', {
+            taskId: task.id,
+            percentage: 0,
+            currentStep: 0,
+            totalSteps: 1,
+            stepDescription: '开始执行',
+        });
+
+        const a2aTaskId = a2aTaskIdByAiosTaskId.get(task.id);
+        if (a2aTaskId && a2aServer) {
+            a2aServer.updateTaskStatus(a2aTaskId, 'processing');
+        }
+    });
+
+    scheduler.on('task:completed', (...args: unknown[]) => {
+        const task = args[0] as { id: string; result?: unknown };
+        const result = task.result as any;
+        emitNotification('task:progress', {
+            taskId: task.id,
+            percentage: 100,
+            currentStep: 1,
+            totalSteps: 1,
+            stepDescription: '已完成',
+        });
+        emitNotification('task:complete', {
+            taskId: task.id,
+            success: true,
+            response: result?.response ?? '',
+            executionTime: result?.executionTime ?? 0,
+        });
+
+        const a2aTaskId = a2aTaskIdByAiosTaskId.get(task.id);
+        if (a2aTaskId && a2aServer) {
+            a2aServer.updateTaskStatus(a2aTaskId, 'completed', result);
+            a2aTaskIdByAiosTaskId.delete(task.id);
+        }
+    });
+
+    scheduler.on('task:failed', (...args: unknown[]) => {
+        const task = args[0] as { id: string };
+        const error = args[1];
+        const message = error instanceof Error ? error.message : String(error);
+        emitNotification('task:error', {
+            taskId: task.id,
+            error: message,
+            recoverable: false,
+        });
+
+        const a2aTaskId = a2aTaskIdByAiosTaskId.get(task.id);
+        if (a2aTaskId && a2aServer) {
+            a2aServer.updateTaskStatus(a2aTaskId, 'failed', undefined, message);
+            a2aTaskIdByAiosTaskId.delete(task.id);
+        }
+    });
+
+    const taskAPI = new TaskAPI(scheduler, sessionManager);
     const aiConfig = getDefaultAIConfig();
     if (aiConfig.fast.apiKey || aiConfig.vision.apiKey || aiConfig.smart.apiKey) {
         try {
             aiRouter = new AIRouter({ config: aiConfig });
             console.error('[AIOS Daemon] AI Router initialized');
 
-            // 创建任务编排器 (三层 AI 协调)
+            // 打印三层AI引擎配置信息
             const engines = (aiRouter as any).engines;
             if (engines) {
+                console.error('[AIOS] AI引擎配置:');
+
+                // Fast层配置
+                const fastConfig = engines.fast.getConfigInfo();
+                console.error(`  Fast层 (${fastConfig.model}):`);
+                console.error(`    - 模型: ${fastConfig.model}`);
+                console.error(`    - API地址: ${fastConfig.apiUrl}`);
+                console.error(`    - 状态: ${fastConfig.isConfigured ? '✓ 已配置' : '✗ 未配置'}`);
+
+                // Vision层配置
+                const visionConfig = engines.vision.getConfigInfo();
+                console.error(`  Vision层 (${visionConfig.model}):`);
+                console.error(`    - 模型: ${visionConfig.model}`);
+                console.error(`    - API地址: ${visionConfig.apiUrl}`);
+                console.error(`    - 状态: ${visionConfig.isConfigured ? '✓ 已配置' : '✗ 未配置'}`);
+
+                // Smart层配置
+                const smartConfig = engines.smart.getConfigInfo();
+                console.error(`  Smart层 (${smartConfig.model}):`);
+                console.error(`    - 模型: ${smartConfig.model}`);
+                console.error(`    - API地址: ${smartConfig.apiUrl}`);
+                console.error(`    - 状态: ${smartConfig.isConfigured ? '✓ 已配置' : '✗ 未配置'}`);
+
+                // 创建任务编排器 (三层 AI 协调)
                 orchestrator = new TaskOrchestrator({
                     fastEngine: engines.fast,
                     visionEngine: engines.vision,
                     smartEngine: engines.smart,
                     adapterRegistry,
+                    hookManager,
+                    // Skills 系统配置
+                    skillRegistry,
+                    projectMemoryManager,
+                    enableSkills: true,
+                    // Phase 6: ReAct 循环 (复杂任务推理)
+                    enableReAct: process.env.AIOS_ENABLE_REACT !== '0',
+                    // Phase 8: O-W 模式 (并行任务分解)
+                    enableOrchestratorWorker: process.env.AIOS_ENABLE_OW !== '0',
+                    maxWorkers: 5,
+                    // Phase 8: 高危操作确认
+                    confirmationManager,
+                    enableConfirmation: process.env.AIOS_ENABLE_CONFIRMATION !== '0',
                 });
-                console.error('[AIOS Daemon] TaskOrchestrator initialized');
+                console.error('[AIOS Daemon] TaskOrchestrator initialized (ReAct + O-W + Confirmation enabled)');
             }
         } catch (error) {
             console.error('[AIOS Daemon] AI Router failed to initialize:', error);
@@ -153,6 +419,20 @@ async function main() {
             throw new Error(`Adapter not found: ${adapterId}`);
         }
 
+        // 查找能力定义
+        const capabilityDef = adapter.capabilities.find(c => c.id === capability);
+        if (!capabilityDef) {
+            throw new Error(`Capability not found: ${capability}`);
+        }
+
+        // 权限检查
+        if (capabilityDef.permissionLevel !== 'public') {
+            const permCheck = await permissionManager.checkPermission(capabilityDef.permissionLevel);
+            if (!permCheck.granted) {
+                throw new Error(`Permission denied: ${capabilityDef.permissionLevel} level required. ${permCheck.details || ''}`);
+            }
+        }
+
         return adapter.invoke(capability, args || {});
     });
 
@@ -182,6 +462,34 @@ async function main() {
             }))
         );
         return results;
+    });
+
+    // 权限检查
+    handler.registerMethod('checkPermission', async (params) => {
+        const { level } = params as { level: 'public' | 'low' | 'medium' | 'high' | 'critical' };
+        return permissionManager.checkPermission(level);
+    });
+
+    // 请求权限
+    handler.registerMethod('requestPermission', async (params) => {
+        const { level } = params as { level: 'public' | 'low' | 'medium' | 'high' | 'critical' };
+        return permissionManager.requestPermission(level);
+    });
+
+    // ============ Task / Confirmation API ============
+
+    // 注册 Task API
+    taskAPI.registerMethods(handler);
+
+    // 确认响应（用于高风险操作）
+    handler.registerMethod('confirmation.respond', async (params) => {
+        const { requestId, confirmed, reason } = params as {
+            requestId: string;
+            confirmed: boolean;
+            reason?: string;
+        };
+        const ok = confirmationManager.respond(requestId, confirmed, reason);
+        return { success: ok };
     });
 
     // 注册 AI 聊天方法 (基础路由)
@@ -239,17 +547,17 @@ async function main() {
     handler.registerMethod('getAIConfig', async () => {
         return {
             fast: {
-                baseUrl: (aiConfig.fast as any).baseUrl || DEFAULT_URLS.openai,
+                baseUrl: (aiConfig.fast as any).baseURL || DEFAULT_URLS.openai,
                 model: aiConfig.fast.model,
                 apiKey: aiConfig.fast.apiKey ? '••••••••' : '',
             },
             vision: {
-                baseUrl: (aiConfig.vision as any).baseUrl || DEFAULT_URLS.google,
+                baseUrl: (aiConfig.vision as any).baseURL || DEFAULT_URLS.google,
                 model: aiConfig.vision.model,
                 apiKey: aiConfig.vision.apiKey ? '••••••••' : '',
             },
             smart: {
-                baseUrl: (aiConfig.smart as any).baseUrl || DEFAULT_URLS.anthropic,
+                baseUrl: (aiConfig.smart as any).baseURL || DEFAULT_URLS.anthropic,
                 model: aiConfig.smart.model,
                 apiKey: aiConfig.smart.apiKey ? '••••••••' : '',
             },
@@ -298,6 +606,29 @@ async function main() {
             aiRouter = new AIRouter({ config: newConfig });
             // 更新存储的配置
             Object.assign(aiConfig, newConfig);
+            // 重建 orchestrator 以使用新配置
+            const engines = (aiRouter as any).engines;
+            if (engines) {
+                orchestrator = new TaskOrchestrator({
+                    fastEngine: engines.fast,
+                    visionEngine: engines.vision,
+                    smartEngine: engines.smart,
+                    adapterRegistry,
+                    hookManager,
+                    // Skills 系统配置
+                    skillRegistry,
+                    projectMemoryManager,
+                    enableSkills: true,
+                    // Phase 6: ReAct 循环
+                    enableReAct: process.env.AIOS_ENABLE_REACT !== '0',
+                    // Phase 8: O-W 模式
+                    enableOrchestratorWorker: process.env.AIOS_ENABLE_OW !== '0',
+                    maxWorkers: 5,
+                    // Phase 8: 高危操作确认
+                    confirmationManager,
+                    enableConfirmation: process.env.AIOS_ENABLE_CONFIRMATION !== '0',
+                });
+            }
             console.error('[AIOS Daemon] AI config updated');
             return { success: true };
         } catch (error) {
@@ -409,14 +740,113 @@ async function main() {
 
     // 可选: 启动 WebSocket 传输
     const wsPort = process.env.AIOS_WEBSOCKET_PORT;
-    let wsTransport: WebSocketTransport | null = null;
     if (wsPort) {
-        wsTransport = new WebSocketTransport({ port: parseInt(wsPort, 10) });
-        wsTransport.setMessageHandler(async (request) => handler.handleRequest(request));
-        await wsTransport.start();
-        console.error(`[AIOS Daemon] WebSocket server started on port ${wsPort}`);
+        const wsToken = process.env.AIOS_WEBSOCKET_TOKEN;
+        if (!wsToken) {
+            console.error('[AIOS Daemon] Refusing to start WebSocket server: AIOS_WEBSOCKET_TOKEN is required');
+        } else {
+            wsTransport = new WebSocketTransport({ port: parseInt(wsPort, 10), authToken: wsToken });
+            wsTransport.setMessageHandler(async (request) => handler.handleRequest(request));
+            await wsTransport.start();
+            console.error(`[AIOS Daemon] WebSocket server started on port ${wsPort}`);
+        }
     }
 
+    // 可选: 启动 MCP WebSocket Server（工具暴露给 MCP 客户端）
+    const mcpPort = process.env.AIOS_MCP_PORT;
+    if (mcpPort) {
+        const mcpToken = process.env.AIOS_MCP_TOKEN;
+        const mcpHost = process.env.AIOS_MCP_HOST ?? '127.0.0.1';
+        if (!mcpToken) {
+            console.error('[AIOS Daemon] Refusing to start MCP server: AIOS_MCP_TOKEN is required');
+        } else {
+            mcpServer = new MCPServer(adapterRegistry);
+            await mcpServer.start({
+                port: parseInt(mcpPort, 10),
+                host: mcpHost,
+                authToken: mcpToken,
+            });
+            console.error(
+                `[AIOS Daemon] MCP server started on ws://${mcpHost}:${mcpPort} (token via ?token=... or Authorization: Bearer ...)`
+            );
+        }
+    }
+
+    // 可选: 启动 A2A HTTP Server（Agent Card + 任务接收）
+    const a2aPort = process.env.AIOS_A2A_PORT;
+    if (a2aPort) {
+        const a2aTokenSecret = process.env.AIOS_A2A_TOKEN_SECRET;
+        const a2aHost = process.env.AIOS_A2A_HOST ?? '127.0.0.1';
+        if (!a2aTokenSecret) {
+            console.error('[AIOS Daemon] Refusing to start A2A server: AIOS_A2A_TOKEN_SECRET is required');
+        } else {
+            const port = parseInt(a2aPort, 10);
+
+            const agentCard: AgentCard = {
+                id: process.env.AIOS_A2A_AGENT_ID ?? 'aios',
+                name: process.env.AIOS_A2A_AGENT_NAME ?? 'AIOS',
+                description: process.env.AIOS_A2A_AGENT_DESCRIPTION ?? 'AIOS Agent',
+                capabilities: adapterRegistry.getAll().map((a) => a.id),
+                endpoint: `http://${a2aHost}:${port}/tasks`,
+            };
+
+            const tokenExpiry = process.env.AIOS_A2A_TOKEN_EXPIRY
+                ? Number(process.env.AIOS_A2A_TOKEN_EXPIRY)
+                : undefined;
+
+            a2aServer = new A2AServer({
+                port,
+                agentCard,
+                tokenSecret: a2aTokenSecret,
+                tokenExpiry: Number.isFinite(tokenExpiry) ? tokenExpiry : undefined,
+            });
+
+            a2aServer.on('task', async (event: { taskId: string; message: { payload: unknown }; clientId: string }) => {
+                const { taskId, message, clientId } = event;
+
+                const payload = message.payload as any;
+                const prompt =
+                    typeof payload === 'string'
+                        ? payload
+                        : typeof payload?.prompt === 'string'
+                            ? payload.prompt
+                            : typeof payload?.text === 'string'
+                                ? payload.text
+                                : (() => {
+                                    try {
+                                        return JSON.stringify(payload);
+                                    } catch {
+                                        return String(payload);
+                                    }
+                                })();
+
+                try {
+                    const dbTask = sessionManager.createTask(prompt, 'simple', {
+                        source: 'a2a',
+                        a2aTaskId: taskId,
+                        clientId,
+                    });
+
+                    a2aTaskIdByAiosTaskId.set(dbTask.id, taskId);
+
+                    await scheduler.submit(prompt, {
+                        id: dbTask.id,
+                        metadata: {
+                            source: 'a2a',
+                            a2aTaskId: taskId,
+                            clientId,
+                        },
+                    });
+                } catch (error) {
+                    const errMsg = error instanceof Error ? error.message : String(error);
+                    a2aServer?.updateTaskStatus(taskId, 'failed', undefined, errMsg);
+                }
+            });
+
+            await a2aServer.start(port, a2aHost);
+            console.error(`[AIOS Daemon] A2A server started on http://${a2aHost}:${port}`);
+        }
+    }
 
     console.error('[AIOS Daemon] Ready');
 
@@ -426,6 +856,8 @@ async function main() {
         if (wsTransport) {
             await wsTransport.stop();
         }
+        mcpServer?.stop();
+        a2aServer?.stop();
         await adapterRegistry.shutdownAll();
         process.exit(0);
     });

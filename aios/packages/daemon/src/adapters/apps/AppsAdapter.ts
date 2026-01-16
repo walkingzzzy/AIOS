@@ -4,10 +4,19 @@
 
 import type { AdapterResult, AdapterCapability } from '@aios/shared';
 import { BaseAdapter } from '../BaseAdapter.js';
+import { SoftwareDiscovery } from '../../core/SoftwareDiscovery.js';
+
+// 进程信息类型（按照 typescript skill 要求，匹配 ps-list 返回类型）
+interface ProcessInfo {
+    pid: number;
+    name: string;
+    cpu?: number;
+    memory?: number;
+}
 
 // 动态导入
 let open: (target: string) => Promise<unknown>;
-let psList: () => Promise<Array<{ pid: number; name: string; cpu: number; memory: number }>>;
+let psList: () => Promise<ProcessInfo[]>;
 
 export class AppsAdapter extends BaseAdapter {
     readonly id = 'com.aios.adapter.apps';
@@ -40,12 +49,45 @@ export class AppsAdapter extends BaseAdapter {
             permissionLevel: 'public',
         },
         {
+            id: 'list_installed_apps',
+            name: '已安装应用列表',
+            description: '扫描并列出已安装应用（跨平台）',
+            permissionLevel: 'public',
+        },
+        {
+            id: 'search_installed_apps',
+            name: '搜索已安装应用',
+            description: '按名称搜索已安装应用',
+            permissionLevel: 'public',
+            parameters: [
+                { name: 'query', type: 'string', required: true, description: '搜索关键词' },
+            ],
+        },
+        {
+            id: 'find_installed_app',
+            name: '按 BundleId/AppId 查找应用',
+            description: '按 bundleId（macOS）或 AppID（Windows）查找已安装应用',
+            permissionLevel: 'public',
+            parameters: [
+                { name: 'bundleId', type: 'string', required: true, description: 'bundleId / AppID' },
+            ],
+        },
+        {
             id: 'kill_process',
             name: '结束进程',
             description: '终止指定进程',
             permissionLevel: 'medium',
             parameters: [
                 { name: 'pid', type: 'number', required: true, description: '进程 ID' },
+            ],
+        },
+        {
+            id: 'close_app',
+            name: '关闭应用',
+            description: '按名称关闭应用程序',
+            permissionLevel: 'medium',
+            parameters: [
+                { name: 'name', type: 'string', required: true, description: '应用名称' },
             ],
         },
     ];
@@ -56,6 +98,8 @@ export class AppsAdapter extends BaseAdapter {
         const psListMod = await import('ps-list');
         psList = psListMod.default;
     }
+
+    private discovery = new SoftwareDiscovery();
 
     async checkAvailability(): Promise<boolean> {
         try {
@@ -75,8 +119,16 @@ export class AppsAdapter extends BaseAdapter {
                     return this.openUrl(args.url as string);
                 case 'list_processes':
                     return this.listProcesses();
+                case 'list_installed_apps':
+                    return this.listInstalledApps();
+                case 'search_installed_apps':
+                    return this.searchInstalledApps(args.query as string);
+                case 'find_installed_app':
+                    return this.findInstalledApp(args.bundleId as string);
                 case 'kill_process':
                     return this.killProcess(args.pid as number);
+                case 'close_app':
+                    return this.closeApp(args.name as string);
                 default:
                     return this.failure('CAPABILITY_NOT_FOUND', `未知能力: ${capability}`);
             }
@@ -107,6 +159,21 @@ export class AppsAdapter extends BaseAdapter {
         return this.success({ processes: topProcesses, count: processes.length });
     }
 
+    private async listInstalledApps(): Promise<AdapterResult> {
+        const apps = await this.discovery.scan();
+        return this.success({ apps, count: apps.length });
+    }
+
+    private async searchInstalledApps(query: string): Promise<AdapterResult> {
+        const apps = await this.discovery.search(query);
+        return this.success({ apps, count: apps.length, query });
+    }
+
+    private async findInstalledApp(bundleId: string): Promise<AdapterResult> {
+        const app = await this.discovery.findByBundleId(bundleId);
+        return this.success({ app: app ?? null });
+    }
+
     private async killProcess(pid: number): Promise<AdapterResult> {
         try {
             process.kill(pid);
@@ -114,6 +181,15 @@ export class AppsAdapter extends BaseAdapter {
         } catch {
             return this.failure('KILL_FAILED', `无法终止进程 ${pid}`);
         }
+    }
+
+    private async closeApp(name: string): Promise<AdapterResult> {
+        const processes = await psList();
+        const matched = processes.filter(p => p.name.toLowerCase().includes(name.toLowerCase()));
+        for (const p of matched) {
+            process.kill(p.pid);
+        }
+        return this.success({ name, killed: matched.length });
     }
 }
 

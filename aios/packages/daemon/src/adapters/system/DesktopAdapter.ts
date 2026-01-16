@@ -49,11 +49,44 @@ export class DesktopAdapter extends BaseAdapter {
                 { name: 'mode', type: 'string', required: true, description: 'dark 或 light' },
             ],
         },
+        {
+            id: 'click',
+            name: '点击',
+            description: '在指定坐标点击',
+            permissionLevel: 'medium',
+            parameters: [
+                { name: 'x', type: 'number', required: true, description: 'X坐标' },
+                { name: 'y', type: 'number', required: true, description: 'Y坐标' },
+            ],
+        },
+        {
+            id: 'type_text',
+            name: '输入文字',
+            description: '输入文字',
+            permissionLevel: 'medium',
+            parameters: [
+                { name: 'text', type: 'string', required: true, description: '要输入的文字' },
+            ],
+        },
+        {
+            id: 'scroll',
+            name: '滚动',
+            description: '滚动页面',
+            permissionLevel: 'low',
+            parameters: [
+                { name: 'direction', type: 'string', required: true, description: 'up/down' },
+                { name: 'amount', type: 'number', required: false, description: '滚动量' },
+            ],
+        },
     ];
 
     async initialize(): Promise<void> {
-        const mod = await import('wallpaper');
-        wallpaper = mod.default || mod;
+        const mod = await import('wallpaper') as unknown as {
+            default?: typeof wallpaper;
+            get?: () => Promise<string>;
+            set?: (imagePath: string) => Promise<void>;
+        };
+        wallpaper = mod.default ?? mod as typeof wallpaper;
     }
 
     async checkAvailability(): Promise<boolean> {
@@ -76,6 +109,12 @@ export class DesktopAdapter extends BaseAdapter {
                     return this.getAppearance();
                 case 'set_appearance':
                     return this.setAppearance(args.mode as 'dark' | 'light');
+                case 'click':
+                    return this.click(args.x as number, args.y as number);
+                case 'type_text':
+                    return this.typeText(args.text as string);
+                case 'scroll':
+                    return this.scroll(args.direction as string, args.amount as number);
                 default:
                     return this.failure('CAPABILITY_NOT_FOUND', `未知能力: ${capability}`);
             }
@@ -124,6 +163,35 @@ export class DesktopAdapter extends BaseAdapter {
         });
 
         return this.success({ mode });
+    }
+
+    private async click(x: number, y: number): Promise<AdapterResult> {
+        await runPlatformCommand({
+            darwin: `osascript -e 'tell application "System Events" to click at {${x}, ${y}}'`,
+            win32: `powershell -c "[System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(${x},${y}); Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('{CLICK}')"`,
+            linux: `xdotool mousemove ${x} ${y} click 1`,
+        });
+        return this.success({ clicked: true, x, y });
+    }
+
+    private async typeText(text: string): Promise<AdapterResult> {
+        const escaped = text.replace(/"/g, '\\"');
+        await runPlatformCommand({
+            darwin: `osascript -e 'tell application "System Events" to keystroke "${escaped}"'`,
+            win32: `powershell -c "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('${escaped.replace(/'/g, "''")}')"`,
+            linux: `xdotool type "${escaped}"`,
+        });
+        return this.success({ typed: true, text });
+    }
+
+    private async scroll(direction: string, amount: number = 3): Promise<AdapterResult> {
+        const scrollAmount = direction === 'up' ? amount : -amount;
+        await runPlatformCommand({
+            darwin: `osascript -e 'tell application "System Events" to scroll ${scrollAmount}'`,
+            win32: `powershell -c "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('{${direction === 'up' ? 'PGUP' : 'PGDN'}}')"`,
+            linux: `xdotool click --repeat ${amount} ${direction === 'up' ? 4 : 5}`,
+        });
+        return this.success({ scrolled: true, direction, amount });
     }
 }
 

@@ -5,6 +5,7 @@
 
 import type { AdapterResult, AdapterCapability } from '@aios/shared';
 import { BaseAdapter } from '../BaseAdapter.js';
+import { networkGuard } from '../../core/security/index.js';
 
 // Playwright 类型
 type Browser = import('playwright').Browser;
@@ -126,11 +127,11 @@ export class BrowserAdapter extends BaseAdapter {
         try {
             const { chromium } = await import('playwright');
             const useHeadless = headless ?? this.headless;
-            
+
             this.browser = await chromium.launch({ headless: useHeadless });
             const context = await this.browser.newContext();
             this.page = await context.newPage();
-            
+
             console.log(`[BrowserAdapter] Browser launched (headless: ${useHeadless})`);
             return { browser: this.browser, page: this.page };
         } catch (error) {
@@ -177,6 +178,13 @@ export class BrowserAdapter extends BaseAdapter {
     }
 
     private async openURL(page: Page, url: string): Promise<AdapterResult> {
+        // 网络安全检查
+        const checkResult = networkGuard.checkUrl(url);
+        if (!checkResult.allowed) {
+            console.warn(`[BrowserAdapter] Blocked URL: ${url} (${checkResult.reason})`);
+            return this.failure('SECURITY_BLOCKED', `访问被拒绝: ${checkResult.domain} 不在白名单中`);
+        }
+
         await page.goto(url, { waitUntil: 'domcontentloaded' });
         return this.success({ url, title: await page.title() });
     }

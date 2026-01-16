@@ -2,16 +2,17 @@
  * Google Gemini 引擎
  */
 
-import { GoogleGenerativeAI, SchemaType } from '@google/generative-ai';
+import { GoogleGenerativeAI, SchemaType, type Content } from '@google/generative-ai';
 import { BaseAIEngine } from '../AIEngine.js';
-import type {
+import {
     AIProvider,
-    Message,
-    ChatOptions,
-    ChatResponse,
-    ToolDefinition,
-    ToolCallResponse,
+    type Message,
+    type ChatOptions,
+    type ChatResponse,
+    type ToolDefinition,
+    type ToolCallResponse,
 } from '@aios/shared';
+import { normalizeBase64Image } from '../utils/images.js';
 
 export interface GoogleConfig {
     model: string;
@@ -21,18 +22,20 @@ export interface GoogleConfig {
 export class GoogleEngine extends BaseAIEngine {
     readonly id: string;
     readonly name: string;
-    readonly provider: AIProvider = 'google';
+    readonly provider: AIProvider = AIProvider.GOOGLE;
     readonly model: string;
 
     private genAI: GoogleGenerativeAI;
+    private apiKey: string;
 
     constructor(config: GoogleConfig) {
         super();
         this.model = config.model;
         this.id = `google/${config.model}`;
         this.name = `Google - ${config.model}`;
+        this.apiKey = config.apiKey;
 
-        this.genAI = new GoogleGenerativeAI(config.apiKey);
+        this.genAI = new GoogleGenerativeAI(this.apiKey);
     }
 
     async chat(messages: Message[], options?: ChatOptions): Promise<ChatResponse> {
@@ -154,11 +157,32 @@ export class GoogleEngine extends BaseAIEngine {
         return 32000;
     }
 
-    private convertToGeminiHistory(messages: Message[]) {
-        return messages.map((m) => ({
-            role: m.role === 'assistant' ? 'model' : 'user',
-            parts: m.content,
-        }));
+    getConfigInfo(): { model: string; apiUrl: string; isConfigured: boolean } {
+        return {
+            model: this.model,
+            apiUrl: 'https://generativelanguage.googleapis.com/v1beta',
+            isConfigured: !!this.apiKey,
+        };
+    }
+
+    private convertToGeminiHistory(messages: Message[]): Content[] {
+        return messages.map((m) => {
+            const parts: Content['parts'] = [];
+
+            if (m.content) {
+                parts.push({ text: m.content });
+            }
+
+            for (const image of m.images ?? []) {
+                const normalized = normalizeBase64Image(image);
+                parts.push({ inlineData: { mimeType: normalized.mimeType, data: normalized.data } });
+            }
+
+            return {
+                role: m.role === 'assistant' ? 'model' : 'user',
+                parts,
+            };
+        });
     }
 
     private mapType(type: string): SchemaType {

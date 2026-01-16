@@ -6,6 +6,8 @@ import React, { useState, useRef, useEffect } from 'react';
 import MessageList from '../components/MessageList';
 import InputBox from '../components/InputBox';
 import { VoiceInput } from '../components/voice';
+import TaskBoard from '../components/TaskBoard';
+import { useTaskBoard } from '../hooks/useTaskBoard';
 import { api } from '../utils/api';
 
 interface Message {
@@ -30,7 +32,9 @@ const ChatView: React.FC<ChatViewProps> = ({ quickLauncherOpen, onQuickLauncherC
         },
     ]);
     const [isLoading, setIsLoading] = useState(false);
+    const [showTaskBoard, setShowTaskBoard] = useState(false);
     const quickLauncherRef = useRef<HTMLInputElement>(null);
+    const { tasks, cancelTask, retryTask, clearCompleted } = useTaskBoard();
 
     useEffect(() => {
         if (quickLauncherOpen && quickLauncherRef.current) {
@@ -100,13 +104,53 @@ const ChatView: React.FC<ChatViewProps> = ({ quickLauncherOpen, onQuickLauncherC
         }
     };
 
+    // 自动显示任务板
+    useEffect(() => {
+        if (tasks.length > 0 && tasks.some(t => t.status === 'running')) {
+            setShowTaskBoard(true);
+        }
+    }, [tasks]);
+
     return (
         <div className="chat-view">
             <header className="chat-header">
                 <h2>AI 助手</h2>
+                {tasks.length > 0 && (
+                    <button
+                        className="task-board-toggle"
+                        onClick={() => setShowTaskBoard(!showTaskBoard)}
+                        title={showTaskBoard ? '隐藏任务板' : '显示任务板'}
+                    >
+                        📋 {tasks.filter(t => t.status === 'running').length > 0 && (
+                            <span className="task-badge">
+                                {tasks.filter(t => t.status === 'running').length}
+                            </span>
+                        )}
+                    </button>
+                )}
             </header>
 
-            <MessageList messages={messages} />
+            <div className="chat-content">
+                <MessageList messages={messages} />
+
+                {showTaskBoard && tasks.length > 0 && (
+                    <div className="task-board-container">
+                        <TaskBoard
+                            tasks={tasks}
+                            onCancel={cancelTask}
+                            onRetry={retryTask}
+                        />
+                        {tasks.filter(t => t.status === 'completed' || t.status === 'failed').length > 0 && (
+                            <button
+                                className="clear-completed-btn"
+                                onClick={clearCompleted}
+                            >
+                                清除已完成
+                            </button>
+                        )}
+                    </div>
+                )}
+            </div>
 
             <InputBox
                 onSend={handleSendMessage}

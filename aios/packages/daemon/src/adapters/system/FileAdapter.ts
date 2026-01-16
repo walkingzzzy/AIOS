@@ -4,7 +4,7 @@
  */
 
 import { promises as fs } from 'fs';
-import { join, dirname, basename, extname, resolve, relative } from 'path';
+import { join, dirname, basename, extname, resolve, relative, isAbsolute, sep } from 'path';
 import { homedir } from 'os';
 import type { AdapterResult, AdapterCapability } from '@aios/shared';
 import { BaseAdapter } from '../BaseAdapter.js';
@@ -124,43 +124,75 @@ export class FileAdapter extends BaseAdapter {
 
     async invoke(capability: string, args: Record<string, unknown>): Promise<AdapterResult> {
         try {
-            const path = this.resolvePath(args.path as string);
-            
-            // 安全检查
-            const securityCheck = this.checkPathSecurity(path);
-            if (!securityCheck.allowed) {
-                return this.failure('SECURITY_DENIED', securityCheck.reason || '路径访问被拒绝');
-            }
+            const guardPath = (
+                input: unknown,
+                kind: string
+            ): { ok: true; path: string } | { ok: false; result: AdapterResult } => {
+                if (typeof input !== 'string' || !input) {
+                    return {
+                        ok: false,
+                        result: this.failure('INVALID_PARAM', `${kind}路径必须是非空字符串`),
+                    };
+                }
+
+                const path = this.resolvePath(input);
+
+                const securityCheck = this.checkPathSecurity(path);
+                if (!securityCheck.allowed) {
+                    return {
+                        ok: false,
+                        result: this.failure('SECURITY_DENIED', securityCheck.reason || '路径访问被拒绝'),
+                    };
+                }
+
+                return { ok: true, path };
+            };
 
             switch (capability) {
-                case 'read_file':
-                    return this.readFile(path);
-                case 'write_file':
-                    return this.writeFile(path, args.content as string);
-                case 'list_dir':
-                    return this.listDir(path);
-                case 'create_dir':
-                    return this.createDir(path);
-                case 'delete_file':
-                    return this.deleteFile(path);
+                case 'read_file': {
+                    const guarded = guardPath(args.path, '文件');
+                    if (!guarded.ok) return guarded.result;
+                    return this.readFile(guarded.path);
+                }
+                case 'write_file': {
+                    const guarded = guardPath(args.path, '文件');
+                    if (!guarded.ok) return guarded.result;
+                    return this.writeFile(guarded.path, args.content as string);
+                }
+                case 'list_dir': {
+                    const guarded = guardPath(args.path, '目录');
+                    if (!guarded.ok) return guarded.result;
+                    return this.listDir(guarded.path);
+                }
+                case 'create_dir': {
+                    const guarded = guardPath(args.path, '目录');
+                    if (!guarded.ok) return guarded.result;
+                    return this.createDir(guarded.path);
+                }
+                case 'delete_file': {
+                    const guarded = guardPath(args.path, '文件/目录');
+                    if (!guarded.ok) return guarded.result;
+                    return this.deleteFile(guarded.path);
+                }
                 case 'copy_file': {
-                    const destPath = this.resolvePath(args.destination as string);
-                    const destCheck = this.checkPathSecurity(destPath);
-                    if (!destCheck.allowed) {
-                        return this.failure('SECURITY_DENIED', destCheck.reason || '目标路径访问被拒绝');
-                    }
-                    return this.copyFile(path, destPath);
+                    const source = guardPath(args.source, '源');
+                    if (!source.ok) return source.result;
+                    const dest = guardPath(args.destination, '目标');
+                    if (!dest.ok) return dest.result;
+                    return this.copyFile(source.path, dest.path);
                 }
                 case 'move_file': {
-                    const destPath = this.resolvePath(args.destination as string);
-                    const destCheck = this.checkPathSecurity(destPath);
-                    if (!destCheck.allowed) {
-                        return this.failure('SECURITY_DENIED', destCheck.reason || '目标路径访问被拒绝');
-                    }
-                    return this.moveFile(path, destPath);
+                    const source = guardPath(args.source, '源');
+                    if (!source.ok) return source.result;
+                    const dest = guardPath(args.destination, '目标');
+                    if (!dest.ok) return dest.result;
+                    return this.moveFile(source.path, dest.path);
                 }
-                case 'get_file_info':
-                    return this.getFileInfo(path);
+                case 'get_file_info': {
+                    const guarded = guardPath(args.path, '文件');
+                    if (!guarded.ok) return guarded.result;
+                    return this.getFileInfo(guarded.path);
+                }
                 default:
                     return this.failure('CAPABILITY_NOT_FOUND', `未知能力: ${capability}`);
             }
@@ -195,7 +227,10 @@ export class FileAdapter extends BaseAdapter {
         // 检查是否在允许的路径下
         const isAllowed = ALLOWED_PATHS.some(allowedPath => {
             const rel = relative(allowedPath, normalizedPath);
-            return rel && !rel.startsWith('..') && !resolve(rel).startsWith('/');
+            // 允许访问允许目录本身，或其子路径
+            if (rel === '') return true;
+            if (rel === '..' || rel.startsWith(`..${sep}`)) return false;
+            return !isAbsolute(rel);
         });
 
         if (!isAllowed) {

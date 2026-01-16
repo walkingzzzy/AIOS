@@ -13,6 +13,37 @@ const MAX_RECONNECT_DELAY = 30000;
 let reconnectAttempts = 0;
 let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
 
+function getWebSocketToken(): string | null {
+    // 1) 运行时注入
+    const globalToken = (globalThis as any).__AIOS_WEBSOCKET_TOKEN__;
+    if (typeof globalToken === 'string' && globalToken.trim()) return globalToken.trim();
+
+    // 2) localStorage（便于调试）
+    try {
+        const stored = globalThis.localStorage?.getItem('AIOS_WEBSOCKET_TOKEN');
+        if (stored && stored.trim()) return stored.trim();
+    } catch {
+        // ignore
+    }
+
+    // 3) Vite 环境变量（构建时注入）
+    const envToken = (import.meta as any).env?.VITE_AIOS_WEBSOCKET_TOKEN;
+    if (typeof envToken === 'string' && envToken.trim()) return envToken.trim();
+
+    return null;
+}
+
+function buildWebSocketUrl(): string {
+    const token = getWebSocketToken();
+    if (!token) {
+        throw new Error(
+            'Missing WebSocket token. Set localStorage AIOS_WEBSOCKET_TOKEN or VITE_AIOS_WEBSOCKET_TOKEN.'
+        );
+    }
+    const encoded = encodeURIComponent(token);
+    return `ws://localhost:8765/?token=${encoded}`;
+}
+
 /** 初始化 WebSocket 连接 */
 function initWebSocket(): Promise<WebSocket> {
     // 如果已经有连接且是打开状态，直接返回
@@ -27,7 +58,13 @@ function initWebSocket(): Promise<WebSocket> {
 
     // 创建新连接
     wsPromise = new Promise((resolve, reject) => {
-        const socket = new WebSocket('ws://localhost:8765');
+        let socket: WebSocket;
+        try {
+            socket = new WebSocket(buildWebSocketUrl());
+        } catch (error) {
+            reject(error);
+            return;
+        }
 
         socket.onopen = () => {
             console.log('[API] WebSocket connected');
@@ -221,5 +258,37 @@ export const api = {
             return window.aios.testAIConnection(params);
         }
         return callDaemonWS('testAIConnection', params);
+    },
+
+    async checkPermission(level: 'public' | 'low' | 'medium' | 'high' | 'critical'): Promise<{
+        granted: boolean;
+        level: string;
+        platform: string;
+        details?: string;
+    }> {
+        if (isElectron()) {
+            return window.aios.checkPermission(level);
+        }
+        return callDaemonWS('checkPermission', { level }) as Promise<{
+            granted: boolean;
+            level: string;
+            platform: string;
+            details?: string;
+        }>;
+    },
+
+    async requestPermission(level: 'public' | 'low' | 'medium' | 'high' | 'critical'): Promise<{
+        success: boolean;
+        granted: boolean;
+        message: string;
+    }> {
+        if (isElectron()) {
+            return window.aios.requestPermission(level);
+        }
+        return callDaemonWS('requestPermission', { level }) as Promise<{
+            success: boolean;
+            granted: boolean;
+            message: string;
+        }>;
     },
 };

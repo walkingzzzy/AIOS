@@ -43,6 +43,13 @@ export abstract class BaseAIEngine implements IAIEngine {
         return 4096;
     }
 
+    /** 获取引擎配置信息 */
+    abstract getConfigInfo(): {
+        model: string;
+        apiUrl: string;
+        isConfigured: boolean;
+    };
+
     /** 生成响应 ID */
     protected generateId(): string {
         return `aios-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;

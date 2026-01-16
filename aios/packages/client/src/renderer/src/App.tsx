@@ -7,6 +7,8 @@ import ChatView from './views/ChatView';
 import SettingsView from './views/SettingsView';
 import ToolsView from './views/ToolsView';
 import WidgetsView from './views/WidgetsView';
+import { ConfirmationDialog } from './components/ConfirmationDialog';
+import { useConfirmation } from './hooks/useConfirmation';
 import './App.css';
 
 type ViewType = 'chat' | 'tools' | 'widgets' | 'settings';
@@ -14,6 +16,7 @@ type ViewType = 'chat' | 'tools' | 'widgets' | 'settings';
 const App: React.FC = () => {
     const [currentView, setCurrentView] = useState<ViewType>('tools');
     const [showQuickLauncher, setShowQuickLauncher] = useState(false);
+    const { currentRequest, confirm, reject, dismiss } = useConfirmation();
 
     useEffect(() => {
         // 监听导航事件
@@ -83,6 +86,14 @@ const App: React.FC = () => {
                 {currentView === 'widgets' && <WidgetsView />}
                 {currentView === 'settings' && <SettingsView />}
             </main>
+
+            {/* 全局确认对话框 */}
+            <ConfirmationDialog
+                request={currentRequest}
+                onConfirm={confirm}
+                onReject={reject}
+                onDismiss={dismiss}
+            />
         </div>
     );
 };

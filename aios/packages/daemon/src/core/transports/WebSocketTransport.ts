@@ -5,10 +5,15 @@
 
 import { WebSocketServer, WebSocket, type RawData } from 'ws';
 import type { JSONRPCRequest, JSONRPCResponse } from '@aios/shared';
+import type { IncomingMessage } from 'http';
 
 export interface WebSocketTransportOptions {
     port?: number;
     host?: string;
+    /** 连接鉴权 Token（建议开启） */
+    authToken?: string;
+    /** 允许的 Origin 列表（可选，额外防护） */
+    allowedOrigins?: string[];
 }
 
 export interface MessageHandler {
@@ -19,12 +24,15 @@ export class WebSocketTransport {
     private wss: WebSocketServer | null = null;
     private clients: Set<WebSocket> = new Set();
     private messageHandler: MessageHandler | null = null;
-    private options: Required<WebSocketTransportOptions>;
+    private options: Required<Pick<WebSocketTransportOptions, 'port' | 'host'>> &
+        Pick<WebSocketTransportOptions, 'authToken' | 'allowedOrigins'>;
 
     constructor(options: WebSocketTransportOptions = {}) {
         this.options = {
             port: options.port ?? 8765,
             host: options.host ?? '127.0.0.1',
+            authToken: options.authToken,
+            allowedOrigins: options.allowedOrigins,
         };
     }
 
@@ -42,8 +50,8 @@ export class WebSocketTransport {
                     host: this.options.host,
                 });
 
-                this.wss.on('connection', (ws: WebSocket) => {
-                    this.handleConnection(ws);
+                this.wss.on('connection', (ws: WebSocket, request: IncomingMessage) => {
+                    this.handleConnection(ws, request);
                 });
 
                 this.wss.on('listening', () => {
@@ -62,7 +70,12 @@ export class WebSocketTransport {
     }
 
     /** 处理客户端连接 */
-    private handleConnection(ws: WebSocket): void {
+    private handleConnection(ws: WebSocket, request: IncomingMessage): void {
+        if (!this.isAuthorized(request)) {
+            ws.close(1008, 'Unauthorized');
+            return;
+        }
+
         console.log('[WebSocket] Client connected');
         this.clients.add(ws);
 
@@ -82,6 +95,38 @@ export class WebSocketTransport {
 
         // 发送欢迎消息
         this.sendNotification(ws, 'connected', { message: 'AIOS Daemon WebSocket connected' });
+    }
+
+    /**
+     * 基于连接信息进行鉴权/限制
+     */
+    private isAuthorized(request: IncomingMessage): boolean {
+        // 仅允许本机回环连接（额外保险）
+        const remoteAddress = request.socket.remoteAddress;
+        if (remoteAddress && remoteAddress !== '127.0.0.1' && remoteAddress !== '::1') {
+            return false;
+        }
+
+        // Origin allowlist（可选）
+        if (this.options.allowedOrigins && this.options.allowedOrigins.length > 0) {
+            const origin = request.headers.origin;
+            if (!origin || !this.options.allowedOrigins.includes(origin)) {
+                return false;
+            }
+        }
+
+        // Token 校验（可选，但建议启用）
+        if (this.options.authToken) {
+            try {
+                const url = new URL(request.url || '/', `http://${this.options.host}:${this.options.port}`);
+                const token = url.searchParams.get('token');
+                return token === this.options.authToken;
+            } catch {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /** 处理接收到的消息 */

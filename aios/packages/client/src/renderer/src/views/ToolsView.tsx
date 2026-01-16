@@ -57,8 +57,20 @@ const QUICK_TEST_PRESETS: Record<string, Record<string, Record<string, unknown>>
         'set_appearance': { mode: 'dark' },
     },
     'com.aios.adapter.power': {
-        'shutdown': { delay: 60 },
-        'restart': { delay: 60 },
+        'shutdown': { delay: 60, confirm: false },
+        'restart': { delay: 60, confirm: false },
+    },
+    'com.aios.adapter.clipboard': {
+        'write_text': { text: 'Hello from AIOS!' },
+    },
+    'com.aios.adapter.notification': {
+        'show': { title: 'AIOS 测试', message: '这是一条测试通知' },
+    },
+    'com.aios.adapter.calculator': {
+        'evaluate': { expression: '2 + 2 * 3' },
+    },
+    'com.aios.adapter.speech': {
+        'speak': { text: '你好，我是 AIOS' },
     },
 };
 
@@ -72,6 +84,15 @@ const ADAPTER_ICONS: Record<string, string> = {
     'com.aios.adapter.apps': '📱',
     'com.aios.adapter.window': '🪟',
     'com.aios.adapter.browser': '🌐',
+    'com.aios.adapter.speech': '🗣️',
+    'com.aios.adapter.notification': '🔔',
+    'com.aios.adapter.timer': '⏰',
+    'com.aios.adapter.calculator': '🧮',
+    'com.aios.adapter.calendar': '📅',
+    'com.aios.adapter.weather': '🌤️',
+    'com.aios.adapter.translate': '🌍',
+    'com.aios.adapter.screenshot': '📸',
+    'com.aios.adapter.clipboard': '📋',
 };
 
 const ToolsView: React.FC = () => {
@@ -123,7 +144,8 @@ const ToolsView: React.FC = () => {
             if (selectedCapability.parameters) {
                 for (const param of selectedCapability.parameters) {
                     const value = testParams[param.name];
-                    if (param.required && !value) {
+                    const hasValue = value !== undefined && value.trim() !== '';
+                    if (param.required && !hasValue) {
                         setTestResult({
                             success: false,
                             error: `缺少必填参数: ${param.name}`,
@@ -131,8 +153,46 @@ const ToolsView: React.FC = () => {
                         setTesting(false);
                         return;
                     }
-                    if (value) {
-                        args[param.name] = param.type === 'number' ? Number(value) : value;
+                    if (hasValue) {
+                        try {
+                            if (param.type === 'number') {
+                                const num = Number(value);
+                                if (Number.isNaN(num)) {
+                                    throw new Error(`参数 ${param.name} 必须是数字`);
+                                }
+                                args[param.name] = num;
+                            } else if (param.type === 'boolean') {
+                                const lower = value.trim().toLowerCase();
+                                if (lower === 'true' || lower === '1' || lower === 'yes') {
+                                    args[param.name] = true;
+                                } else if (lower === 'false' || lower === '0' || lower === 'no') {
+                                    args[param.name] = false;
+                                } else {
+                                    throw new Error(`参数 ${param.name} 必须是 boolean (true/false)`);
+                                }
+                            } else if (param.type === 'object' || param.type === 'array') {
+                                const parsed = JSON.parse(value);
+                                if (param.type === 'array' && !Array.isArray(parsed)) {
+                                    throw new Error(`参数 ${param.name} 必须是 JSON 数组`);
+                                }
+                                if (
+                                    param.type === 'object' &&
+                                    (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed))
+                                ) {
+                                    throw new Error(`参数 ${param.name} 必须是 JSON 对象`);
+                                }
+                                args[param.name] = parsed;
+                            } else {
+                                args[param.name] = value;
+                            }
+                        } catch (error) {
+                            setTestResult({
+                                success: false,
+                                error: error instanceof Error ? error.message : `参数 ${param.name} 解析失败`,
+                            });
+                            setTesting(false);
+                            return;
+                        }
                     }
                 }
             }
