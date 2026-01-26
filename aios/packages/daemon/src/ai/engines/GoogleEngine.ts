@@ -11,6 +11,8 @@ import {
     type ChatResponse,
     type ToolDefinition,
     type ToolCallResponse,
+    type StreamChunk,
+    type StreamOptions,
 } from '@aios/shared';
 import { normalizeBase64Image } from '../utils/images.js';
 
@@ -146,9 +148,106 @@ export class GoogleEngine extends BaseAIEngine {
         };
     }
 
+    /**
+     * 流式聊天
+     */
+    async *chatStream(
+        messages: Message[],
+        options?: StreamOptions
+    ): AsyncGenerator<StreamChunk, void, unknown> {
+        const model = this.genAI.getGenerativeModel({
+            model: this.model,
+            generationConfig: {
+                temperature: options?.temperature,
+                maxOutputTokens: options?.maxTokens,
+                topP: options?.topP,
+                stopSequences: options?.stop,
+            },
+        });
+
+        const systemInstruction = messages.find((m) => m.role === 'system')?.content;
+        const history = this.convertToGeminiHistory(messages.filter((m) => m.role !== 'system'));
+
+        const chat = model.startChat({
+            history: history.slice(0, -1),
+            systemInstruction,
+        });
+
+        const lastMessage = history[history.length - 1];
+        const result = await chat.sendMessageStream(lastMessage?.parts || '');
+
+        for await (const chunk of result.stream) {
+            // 检查中止信号
+            if (options?.signal?.aborted) {
+                break;
+            }
+
+            const text = chunk.text();
+            const candidate = chunk.candidates?.[0];
+
+            const streamChunk: StreamChunk = {};
+
+            if (text) {
+                streamChunk.content = text;
+            }
+
+            if (candidate?.finishReason) {
+                streamChunk.finishReason = this.mapFinishReason(candidate.finishReason);
+            }
+
+            // 只有有内容时才 yield
+            if (streamChunk.content || streamChunk.finishReason) {
+                yield streamChunk;
+            }
+        }
+
+        // 获取最终的 usage 信息
+        const finalResponse = await result.response;
+        if (finalResponse.usageMetadata) {
+            yield {
+                usage: {
+                    promptTokens: finalResponse.usageMetadata.promptTokenCount || 0,
+                    completionTokens: finalResponse.usageMetadata.candidatesTokenCount || 0,
+                    totalTokens: finalResponse.usageMetadata.totalTokenCount || 0,
+                },
+            };
+        }
+    }
+
+    /**
+     * 流式带工具调用的聊天
+     * 注意：Gemini 的流式模式对工具调用支持有限，这里使用非流式模拟
+     */
+    async *chatStreamWithTools(
+        messages: Message[],
+        tools: ToolDefinition[],
+        options?: StreamOptions
+    ): AsyncGenerator<StreamChunk, void, unknown> {
+        // Gemini 的流式工具调用支持有限，使用父类默认实现（非流式模拟）
+        const response = await this.chatWithTools(messages, tools, options);
+        yield {
+            content: response.content,
+            toolCalls: response.toolCalls?.map((tc, index) => ({
+                index,
+                id: tc.id,
+                type: tc.type,
+                function: {
+                    name: tc.function.name,
+                    arguments: tc.function.arguments,
+                },
+            })),
+            finishReason: response.finishReason,
+            usage: response.usage,
+        };
+    }
+
     supportsVision(): boolean {
         // Gemini Pro Vision 和 2.5 Flash 支持视觉
         return this.model.includes('vision') || this.model.includes('flash') || this.model.includes('pro');
+    }
+
+    supportsStreaming(): boolean {
+        return true; // Gemini 支持流式
     }
 
     getMaxTokens(): number {

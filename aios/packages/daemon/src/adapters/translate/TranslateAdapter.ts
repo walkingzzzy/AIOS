@@ -1,6 +1,6 @@
 /**
  * 翻译适配器
- * 使用免费翻译API进行多语言翻译
+ * 使用 Google Translate API 进行多语言翻译
  */
 
 import type { AdapterResult, AdapterCapability } from '@aios/shared';
@@ -24,6 +24,9 @@ export class TranslateAdapter extends BaseAdapter {
     readonly id = 'com.aios.adapter.translate';
     readonly name = '翻译';
     readonly description = '多语言翻译适配器';
+
+    private apiKey = '';
+    private baseUrl = 'https://translation.googleapis.com/language/translate/v2';
 
     readonly capabilities: AdapterCapability[] = [
         {
@@ -52,6 +55,15 @@ export class TranslateAdapter extends BaseAdapter {
             description: '获取支持的语言列表',
             permissionLevel: 'public',
         },
+        {
+            id: 'set_api_key',
+            name: '设置 API Key',
+            description: '配置 Google Translate API Key',
+            permissionLevel: 'medium',
+            parameters: [
+                { name: 'apiKey', type: 'string', required: true, description: 'API Key' },
+            ],
+        },
     ];
 
     async checkAvailability(): Promise<boolean> {
@@ -71,12 +83,21 @@ export class TranslateAdapter extends BaseAdapter {
                     return this.detectLanguage(args.text as string);
                 case 'get_languages':
                     return this.getLanguages();
+                case 'set_api_key':
+                    return this.setApiKey(args.apiKey as string);
                 default:
                     return this.failure('CAPABILITY_NOT_FOUND', `未知能力: ${capability}`);
             }
         } catch (error) {
             return this.failure('OPERATION_FAILED', String(error));
         }
+    }
+
+    private ensureApiKey(): string | null {
+        if (!this.apiKey) {
+            this.apiKey = process.env.GOOGLE_TRANSLATE_API_KEY || '';
+        }
+        return this.apiKey || null;
     }
 
     private async translate(text: string, targetLang: string, sourceLang?: string): Promise<AdapterResult> {
@@ -88,97 +109,120 @@ export class TranslateAdapter extends BaseAdapter {
             return this.failure('INVALID_ARGS', '目标语言是必需的');
         }
 
-        try {
-            // 使用 LibreTranslate 免费API (或可配置其他API)
-            const source = sourceLang || 'auto';
-            const url = 'https://libretranslate.com/translate';
+        const apiKey = this.ensureApiKey();
+        if (!apiKey) {
+            return this.failure('API_KEY_MISSING', '请先配置 Google Translate API Key');
+        }
 
+        try {
+            const source = sourceLang || 'auto';
+            const url = `${this.baseUrl}?key=${encodeURIComponent(apiKey)}`;
             const response = await fetch(url, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     q: text,
-                    source: source,
+                    source,
                     target: targetLang,
+                    format: 'text',
                 }),
             });
 
-            if (response.ok) {
-                const data = await response.json() as { translatedText: string };
-                return this.success({
-                    originalText: text,
-                    translatedText: data.translatedText,
-                    sourceLang: source,
-                    targetLang,
-                });
+            if (!response.ok) {
+                return this.failure('TRANSLATE_ERROR', `API 错误: ${response.status}`);
             }
 
-            // 如果外部API失败，使用简单的回退逻辑
-            return this.fallbackTranslate(text, targetLang);
-        } catch {
-            // 网络错误时使用回退
-            return this.fallbackTranslate(text, targetLang);
+            const data = await response.json() as { data?: { translations?: Array<{ translatedText?: string; detectedSourceLanguage?: string }> } };
+            const translation = data.data?.translations?.[0];
+            if (!translation?.translatedText) {
+                return this.failure('TRANSLATE_ERROR', '翻译结果为空');
+            }
+
+            return this.success({
+                originalText: text,
+                translatedText: translation.translatedText,
+                sourceLang: translation.detectedSourceLanguage || source,
+                targetLang,
+            });
+        } catch (error) {
+            return this.failure('NETWORK_ERROR', `网络错误: ${String(error)}`);
         }
     }
 
-    private fallbackTranslate(text: string, targetLang: string): AdapterResult {
-        // 简单的回退：返回原文并提示需要API
-        return this.success({
-            originalText: text,
-            translatedText: text,
-            targetLang,
-            warning: '翻译API不可用，返回原文。建议配置翻译服务。',
-        });
-    }
-
-    private detectLanguage(text: string): AdapterResult {
+    private async detectLanguage(text: string): Promise<AdapterResult> {
         if (!text) {
             return this.failure('INVALID_ARGS', '文本不能为空');
         }
 
-        // 简单的语言检测（基于字符范围）
-        const hasChineseChar = /[\u4e00-\u9fff]/.test(text);
-        const hasJapaneseChar = /[\u3040-\u309f\u30a0-\u30ff]/.test(text);
-        const hasKoreanChar = /[\uac00-\ud7af]/.test(text);
-        const hasCyrillic = /[\u0400-\u04ff]/.test(text);
-
-        let detectedLang = 'en'; // 默认英语
-        let confidence = 0.5;
-
-        if (hasChineseChar && !hasJapaneseChar) {
-            detectedLang = 'zh';
-            confidence = 0.9;
-        } else if (hasJapaneseChar) {
-            detectedLang = 'ja';
-            confidence = 0.9;
-        } else if (hasKoreanChar) {
-            detectedLang = 'ko';
-            confidence = 0.9;
-        } else if (hasCyrillic) {
-            detectedLang = 'ru';
-            confidence = 0.8;
-        } else if (/^[a-zA-Z\s.,!?'"()-]+$/.test(text)) {
-            detectedLang = 'en';
-            confidence = 0.7;
+        const apiKey = this.ensureApiKey();
+        if (!apiKey) {
+            return this.failure('API_KEY_MISSING', '请先配置 Google Translate API Key');
         }
 
-        return this.success({
-            text: text.substring(0, 50) + (text.length > 50 ? '...' : ''),
-            language: detectedLang,
-            languageName: LANGUAGE_CODES[detectedLang] || detectedLang,
-            confidence,
-        });
+        try {
+            const url = `${this.baseUrl}/detect?key=${encodeURIComponent(apiKey)}`;
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ q: text }),
+            });
+
+            if (!response.ok) {
+                return this.failure('TRANSLATE_ERROR', `API 错误: ${response.status}`);
+            }
+
+            const data = await response.json() as {
+                data?: { detections?: Array<Array<{ language: string; confidence?: number }>> };
+            };
+
+            const detection = data.data?.detections?.[0]?.[0];
+            if (!detection?.language) {
+                return this.failure('TRANSLATE_ERROR', '语言检测结果为空');
+            }
+
+            return this.success({
+                text: text.length > 50 ? `${text.substring(0, 50)}...` : text,
+                language: detection.language,
+                languageName: LANGUAGE_CODES[detection.language] || detection.language,
+                confidence: detection.confidence ?? null,
+            });
+        } catch (error) {
+            return this.failure('NETWORK_ERROR', `网络错误: ${String(error)}`);
+        }
     }
 
-    private getLanguages(): AdapterResult {
-        const languages = Object.entries(LANGUAGE_CODES).map(([code, name]) => ({
-            code,
-            name,
-        }));
+    private async getLanguages(): Promise<AdapterResult> {
+        const apiKey = this.ensureApiKey();
+        if (!apiKey) {
+            return this.failure('API_KEY_MISSING', '请先配置 Google Translate API Key');
+        }
 
-        return this.success({ languages });
+        try {
+            const url = `${this.baseUrl}/languages?key=${encodeURIComponent(apiKey)}&target=zh-CN`;
+            const response = await fetch(url);
+            if (!response.ok) {
+                return this.failure('TRANSLATE_ERROR', `API 错误: ${response.status}`);
+            }
+
+            const data = await response.json() as { data?: { languages?: Array<{ language: string; name?: string }> } };
+            const languages = (data.data?.languages ?? []).map((lang) => ({
+                code: lang.language,
+                name: lang.name || LANGUAGE_CODES[lang.language] || lang.language,
+            }));
+
+            return this.success({ languages });
+        } catch (error) {
+            return this.failure('NETWORK_ERROR', `网络错误: ${String(error)}`);
+        }
+    }
+
+    private setApiKey(apiKey: string): AdapterResult {
+        if (!apiKey) {
+            return this.failure('INVALID_ARGS', 'API Key 不能为空');
+        }
+
+        this.apiKey = apiKey;
+        return this.success({ configured: true });
     }
 }
 

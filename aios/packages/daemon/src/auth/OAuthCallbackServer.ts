@@ -14,7 +14,7 @@ export class OAuthCallbackServer {
         this.port = port;
     }
     
-    async waitForCallback(timeoutMs: number = 120000): Promise<CallbackResult> {
+    async waitForCallback(timeoutMs: number = 120000, expectedState?: string): Promise<CallbackResult> {
         return new Promise((resolve, reject) => {
             const timeout = setTimeout(() => {
                 this.stop();
@@ -39,6 +39,14 @@ export class OAuthCallbackServer {
                     }
                     
                     if (code) {
+                        if (expectedState && state !== expectedState) {
+                            res.writeHead(400, { 'Content-Type': 'text/html' });
+                            res.end('<html><body><h1>State 校验失败</h1><p>请重新授权</p></body></html>');
+                            clearTimeout(timeout);
+                            this.stop();
+                            reject(new Error('OAuth state mismatch'));
+                            return;
+                        }
                         res.writeHead(200, { 'Content-Type': 'text/html' });
                         res.end('<html><body><h1>授权成功</h1><p>您可以关闭此窗口</p></body></html>');
                         clearTimeout(timeout);

@@ -14,18 +14,19 @@
     },
     "dependencies": {
         "react": "^18.2.0",
-        "react-dom": "^18.2.0"
+        "react-dom": "^18.2.0",
+        "react-markdown": "^10.1.0"
     },
     "devDependencies": {
-        "electron": "^29.0.0",
-        "electron-vite": "^2.0.0",
-        "electron-builder": "^24.9.1",
-        "vite": "^5.0.0",
-        "@vitejs/plugin-react": "^4.2.1",
-        "typescript": "^5.3.3",
+        "@types/node": "^20.11.0",
         "@types/react": "^18.2.0",
         "@types/react-dom": "^18.2.0",
-        "@types/node": "^20.11.0"
+        "@vitejs/plugin-react": "^4.2.1",
+        "electron": "^29.0.0",
+        "electron-builder": "^24.9.1",
+        "electron-vite": "^2.0.0",
+        "typescript": "^5.3.3",
+        "vite": "^5.0.0"
     },
     "build": {
         "appId": "com.aios.client",
@@ -38,14 +39,20 @@
                 "dmg",
                 "zip"
             ],
-            "icon": "resources/icon.icns"
+            "icon": "resources/icon.icns",
+            "hardenedRuntime": true,
+            "entitlements": "resources/entitlements.mac.plist",
+            "entitlementsInherit": "resources/entitlements.mac.plist"
         },
         "win": {
             "target": [
                 "nsis",
                 "zip"
             ],
-            "icon": "resources/icon.ico"
+            "icon": "resources/icon.ico",
+            "signingHashAlgorithms": [
+                "sha256"
+            ]
         },
         "linux": {
             "target": [

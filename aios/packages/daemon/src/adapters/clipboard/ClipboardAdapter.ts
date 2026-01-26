@@ -6,10 +6,34 @@
 import type { AdapterResult, AdapterCapability } from '@aios/shared';
 import { getPlatform } from '@aios/shared';
 import { BaseAdapter } from '../BaseAdapter.js';
-import { exec } from 'child_process';
+import { execFile, spawn } from 'child_process';
 import { promisify } from 'util';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
+
+const runWithInput = (command: string, args: string[], input: string): Promise<void> => {
+    return new Promise((resolve, reject) => {
+        const child = spawn(command, args, { stdio: ['pipe', 'ignore', 'pipe'] });
+        let stderr = '';
+        if (child.stderr) {
+            child.stderr.on('data', (chunk) => {
+                stderr += chunk.toString();
+            });
+        }
+        child.on('error', reject);
+        child.on('close', (code) => {
+            if (code === 0) {
+                resolve();
+                return;
+            }
+            const message = stderr.trim() || `${command} exited with code ${code ?? 'unknown'}`;
+            reject(new Error(message));
+        });
+        if (child.stdin) {
+            child.stdin.end(input);
+        }
+    });
+};
 
 export class ClipboardAdapter extends BaseAdapter {
     readonly id = 'com.aios.adapter.clipboard';
@@ -50,17 +74,17 @@ export class ClipboardAdapter extends BaseAdapter {
         const platform = getPlatform();
         try {
             if (platform === 'darwin') {
-                await execAsync('which pbcopy');
+                await execFileAsync('which', ['pbcopy']);
                 return true;
             } else if (platform === 'win32') {
                 return true; // Windows 总是有 clip 和 PowerShell
             } else {
                 // Linux 检查 xclip 或 xsel
                 try {
-                    await execAsync('which xclip');
+                    await execFileAsync('which', ['xclip']);
                     return true;
                 } catch {
-                    await execAsync('which xsel');
+                    await execFileAsync('which', ['xsel']);
                     return true;
                 }
             }
@@ -93,18 +117,24 @@ export class ClipboardAdapter extends BaseAdapter {
         let text = '';
 
         if (platform === 'darwin') {
-            const { stdout } = await execAsync('pbpaste');
+            const { stdout } = await execFileAsync('pbpaste', [], { encoding: 'utf8' });
             text = stdout;
         } else if (platform === 'win32') {
-            const { stdout } = await execAsync('powershell -Command "Get-Clipboard"');
-            text = stdout.trim();
+            const { stdout } = await execFileAsync('powershell', ['-NoProfile', '-Command', 'Get-Clipboard'], {
+                encoding: 'utf8',
+            });
+            text = stdout.trimEnd();
         } else {
             // Linux
             try {
-                const { stdout } = await execAsync('xclip -selection clipboard -o');
+                const { stdout } = await execFileAsync('xclip', ['-selection', 'clipboard', '-o'], {
+                    encoding: 'utf8',
+                });
                 text = stdout;
             } catch {
-                const { stdout } = await execAsync('xsel --clipboard --output');
+                const { stdout } = await execFileAsync('xsel', ['--clipboard', '--output'], {
+                    encoding: 'utf8',
+                });
                 text = stdout;
             }
         }
@@ -113,26 +143,27 @@ export class ClipboardAdapter extends BaseAdapter {
     }
 
     private async writeText(text: string): Promise<AdapterResult> {
-        if (!text) {
+        if (typeof text !== 'string' || !text) {
             return this.failure('INVALID_PARAM', '文本不能为空');
         }
 
         const platform = getPlatform();
-        // 转义特殊字符
-        const escapedText = text.replace(/'/g, "'\\''");
 
         if (platform === 'darwin') {
-            await execAsync(`echo '${escapedText}' | pbcopy`);
+            await runWithInput('pbcopy', [], text);
         } else if (platform === 'win32') {
             // Windows PowerShell
-            const psText = text.replace(/'/g, "''");
-            await execAsync(`powershell -Command "Set-Clipboard -Value '${psText}'"`);
+            await runWithInput(
+                'powershell',
+                ['-NoProfile', '-Command', 'Set-Clipboard -Value ([Console]::In.ReadToEnd())'],
+                text,
+            );
         } else {
             // Linux
             try {
-                await execAsync(`echo '${escapedText}' | xclip -selection clipboard`);
+                await runWithInput('xclip', ['-selection', 'clipboard'], text);
             } catch {
-                await execAsync(`echo '${escapedText}' | xsel --clipboard --input`);
+                await runWithInput('xsel', ['--clipboard', '--input'], text);
             }
         }
 
@@ -143,15 +174,15 @@ export class ClipboardAdapter extends BaseAdapter {
         const platform = getPlatform();
 
         if (platform === 'darwin') {
-            await execAsync('pbcopy < /dev/null');
+            await runWithInput('pbcopy', [], '');
         } else if (platform === 'win32') {
-            await execAsync('powershell -Command "Set-Clipboard -Value $null"');
+            await execFileAsync('powershell', ['-NoProfile', '-Command', 'Set-Clipboard -Value $null']);
         } else {
             // Linux
             try {
-                await execAsync('xclip -selection clipboard < /dev/null');
+                await runWithInput('xclip', ['-selection', 'clipboard'], '');
             } catch {
-                await execAsync('xsel --clipboard --clear');
+                await execFileAsync('xsel', ['--clipboard', '--clear']);
             }
         }
 

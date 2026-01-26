@@ -6,6 +6,10 @@
 import type { AdapterResult, AdapterCapability } from '@aios/shared';
 import { BaseAdapter } from '../BaseAdapter.js';
 import { runPlatformCommand } from '@aios/shared';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
+
+const execFileAsync = promisify(execFile);
 
 // 动态导入 wallpaper (ESM)
 let wallpaper: {
@@ -80,6 +84,14 @@ export class DesktopAdapter extends BaseAdapter {
         },
     ];
 
+    private ensureNumber(value: unknown, name: string): number | null {
+        const num = Number(value);
+        if (!Number.isFinite(num)) {
+            return null;
+        }
+        return num;
+    }
+
     async initialize(): Promise<void> {
         const mod = await import('wallpaper') as unknown as {
             default?: typeof wallpaper;
@@ -110,11 +122,31 @@ export class DesktopAdapter extends BaseAdapter {
                 case 'set_appearance':
                     return this.setAppearance(args.mode as 'dark' | 'light');
                 case 'click':
-                    return this.click(args.x as number, args.y as number);
+                    {
+                        const x = this.ensureNumber(args.x, 'x');
+                        const y = this.ensureNumber(args.y, 'y');
+                        if (x === null || y === null) {
+                            return this.failure('INVALID_PARAM', '参数 x/y 必须是有效数字');
+                        }
+                        return this.click(x, y);
+                    }
                 case 'type_text':
+                    if (typeof args.text !== 'string' || !args.text) {
+                        return this.failure('INVALID_PARAM', '参数 text 必须是非空字符串');
+                    }
                     return this.typeText(args.text as string);
                 case 'scroll':
-                    return this.scroll(args.direction as string, args.amount as number);
+                    {
+                        const direction = args.direction as string;
+                        if (direction !== 'up' && direction !== 'down') {
+                            return this.failure('INVALID_PARAM', '参数 direction 必须是 up 或 down');
+                        }
+                        const amount = args.amount === undefined ? undefined : this.ensureNumber(args.amount, 'amount');
+                        if (amount === null) {
+                            return this.failure('INVALID_PARAM', '参数 amount 必须是有效数字');
+                        }
+                        return this.scroll(direction, amount);
+                    }
                 default:
                     return this.failure('CAPABILITY_NOT_FOUND', `未知能力: ${capability}`);
             }
@@ -166,21 +198,55 @@ export class DesktopAdapter extends BaseAdapter {
     }
 
     private async click(x: number, y: number): Promise<AdapterResult> {
-        await runPlatformCommand({
-            darwin: `osascript -e 'tell application "System Events" to click at {${x}, ${y}}'`,
-            win32: `powershell -c "[System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point(${x},${y}); Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('{CLICK}')"`,
-            linux: `xdotool mousemove ${x} ${y} click 1`,
-        });
+        if (process.platform === 'win32') {
+            const psScript = `
+                Add-Type @"
+                    using System;
+                    using System.Runtime.InteropServices;
+                    public class User32 {
+                        [DllImport("user32.dll")]
+                        public static extern bool SetCursorPos(int X, int Y);
+                        [DllImport("user32.dll")]
+                        public static extern void mouse_event(int dwFlags, int dx, int dy, int cButtons, int dwExtraInfo);
+                    }
+"@
+                [User32]::SetCursorPos(${x}, ${y}) | Out-Null
+                $MOUSEEVENTF_LEFTDOWN = 0x02
+                $MOUSEEVENTF_LEFTUP = 0x04
+                [User32]::mouse_event($MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+                [User32]::mouse_event($MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+            `.replace(/\n/g, ' ');
+            await execFileAsync('powershell', ['-NoProfile', '-Command', psScript]);
+        } else {
+            await runPlatformCommand({
+                darwin: `osascript -e 'tell application "System Events" to click at {${x}, ${y}}'`,
+                linux: `xdotool mousemove ${x} ${y} click 1`,
+                win32: '',
+            });
+        }
         return this.success({ clicked: true, x, y });
     }
 
     private async typeText(text: string): Promise<AdapterResult> {
-        const escaped = text.replace(/"/g, '\\"');
-        await runPlatformCommand({
-            darwin: `osascript -e 'tell application "System Events" to keystroke "${escaped}"'`,
-            win32: `powershell -c "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('${escaped.replace(/'/g, "''")}')"`,
-            linux: `xdotool type "${escaped}"`,
-        });
+        if (process.platform === 'darwin') {
+            await execFileAsync('osascript', [
+                '-e',
+                'on run argv\n' +
+                'tell application "System Events" to keystroke (item 1 of argv)\n' +
+                'end run',
+                '--',
+                text,
+            ]);
+        } else if (process.platform === 'win32') {
+            const encoded = Buffer.from(text, 'utf8').toString('base64');
+            const psScript = `$bytes=[System.Convert]::FromBase64String("${encoded}");` +
+                '$text=[System.Text.Encoding]::UTF8.GetString($bytes);' +
+                'Add-Type -AssemblyName System.Windows.Forms;' +
+                '[System.Windows.Forms.SendKeys]::SendWait($text)';
+            await execFileAsync('powershell', ['-NoProfile', '-Command', psScript]);
+        } else {
+            await execFileAsync('xdotool', ['type', '--', text]);
+        }
         return this.success({ typed: true, text });
     }
 

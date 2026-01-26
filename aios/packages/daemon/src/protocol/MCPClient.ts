@@ -41,7 +41,14 @@ export class MCPClient extends EventEmitter {
             const lines = buffer.split('\n');
             buffer = lines.pop() || '';
             for (const line of lines) {
-                if (line.trim()) this.handleMessage(JSON.parse(line));
+                if (!line.trim()) {
+                    continue;
+                }
+                try {
+                    this.handleMessage(JSON.parse(line));
+                } catch {
+                    // Ignore malformed lines to keep connection alive.
+                }
             }
         });
     }
@@ -51,7 +58,13 @@ export class MCPClient extends EventEmitter {
             this.ws = new WebSocket(url);
             this.ws.on('open', () => resolve());
             this.ws.on('error', (e) => reject(e));
-            this.ws.on('message', (data) => this.handleMessage(JSON.parse(data.toString())));
+            this.ws.on('message', (data) => {
+                try {
+                    this.handleMessage(JSON.parse(data.toString()));
+                } catch {
+                    // Ignore malformed messages.
+                }
+            });
         });
     }
 

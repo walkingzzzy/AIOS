@@ -101,9 +101,15 @@ export class WebSocketTransport {
      * 基于连接信息进行鉴权/限制
      */
     private isAuthorized(request: IncomingMessage): boolean {
-        // 仅允许本机回环连接（额外保险）
+        // 仅允许本机连接（IPv4 和 IPv6 回环地址，以及 ::ffff:127.0.0.1）
         const remoteAddress = request.socket.remoteAddress;
-        if (remoteAddress && remoteAddress !== '127.0.0.1' && remoteAddress !== '::1') {
+        const isLocalhost = !remoteAddress ||
+            remoteAddress === '127.0.0.1' ||
+            remoteAddress === '::1' ||
+            remoteAddress === '::ffff:127.0.0.1';
+
+        if (!isLocalhost) {
+            console.warn(`[WebSocket] Rejecting non-local connection from: ${remoteAddress}`);
             return false;
         }
 

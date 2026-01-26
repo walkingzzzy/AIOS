@@ -3,8 +3,8 @@
  * 三层 AI 协调的核心：意图分析 → 任务路由 → 执行 → 汇总
  */
 
-import type { IAIEngine, Message, ToolDefinition } from '@aios/shared';
-import { toOpenAIToolDefinition } from '@aios/shared';
+import type { IAIEngine, Message, ToolCall, ToolDefinition, StreamChunk } from '@aios/shared';
+import { createStreamProcessingState, mergeToolCallDelta, toOpenAIToolDefinition } from '@aios/shared';
 import type { AdapterRegistry } from './AdapterRegistry.js';
 import { IntentAnalyzer } from './IntentAnalyzer.js';
 import { ToolExecutor, type ToolExecutionResult } from './ToolExecutor.js';
@@ -31,13 +31,16 @@ import {
     type TaskAnalysis,
     type StepResult,
     type ExecutionStep,
+    type ExecutionPlan,
 } from '../types/orchestrator.js';
 import { SkillRegistry } from './skills/SkillRegistry.js';
 import { ProjectMemoryManager } from './skills/ProjectMemoryManager.js';
 import { WorkerPool, type WorkerExecutor } from './orchestration/WorkerPool.js';
 import { TaskDecomposer } from './orchestration/TaskDecomposer.js';
-import type { HookManager } from './hooks/index.js';
+import type { HookManager, PrepareRequestContext } from './hooks/index.js';
 import { traceContextManager } from './trace/index.js';
+import { PlanConfirmationManager } from './planning/PlanConfirmationManager.js';
+import type { PlanDraft, PlanApprovalResponse } from '../types/orchestrator.js';
 
 export interface OrchestratorConfig {
     fastEngine: IAIEngine;
@@ -62,6 +65,10 @@ export interface OrchestratorConfig {
     maxWorkers?: number;
     /** Hook 管理器（用于审计/用量/追踪/进度） */
     hookManager?: HookManager;
+    /** 是否启用计划确认流程（复杂任务执行前需用户确认） */
+    enablePlanConfirmation?: boolean;
+    /** 计划确认超时时间 (ms)，默认 5 分钟 */
+    planConfirmationTimeout?: number;
 }
 
 interface ExecutionContext {
@@ -90,6 +97,11 @@ export class TaskOrchestrator {
     private taskDecomposer?: TaskDecomposer;
     private workerPool?: WorkerPool;
     private enableOW: boolean;
+
+    // Plan Confirmation Workflow
+    private planConfirmationManager: PlanConfirmationManager;
+    private enablePlanConfirmation: boolean;
+    private planConfirmationTimeout: number;
 
     private fastEngine: IAIEngine;
     private visionEngine: IAIEngine;
@@ -152,6 +164,14 @@ export class TaskOrchestrator {
             };
             this.workerPool = new WorkerPool(workerExecutor, { maxWorkers: config.maxWorkers ?? 5 });
         }
+
+        // Plan Confirmation Workflow - 计划确认流程
+        this.enablePlanConfirmation = config.enablePlanConfirmation ?? false;
+        this.planConfirmationTimeout = config.planConfirmationTimeout ?? 5 * 60 * 1000; // 5 minutes
+        this.planConfirmationManager = new PlanConfirmationManager({
+            defaultTimeout: this.planConfirmationTimeout,
+            autoRiskAssessment: true,
+        });
     }
 
     private async captureScreenshotBase64(): Promise<string | null> {
@@ -271,8 +291,8 @@ export class TaskOrchestrator {
                 }
 
                 // 3. 保存到对话历史
-                this.contextManager.addMessage({ role: 'user', content: input });
-                this.contextManager.addMessage({ role: 'assistant', content: result.response });
+                this.contextManager.addMessage({ role: 'user', content: input }, execCtx.sessionId);
+                this.contextManager.addMessage({ role: 'assistant', content: result.response }, execCtx.sessionId);
 
                 result.executionTime = Date.now() - startTime;
                 console.log(`[TaskOrchestrator] Completed in ${result.executionTime}ms, tier: ${result.tier}`);
@@ -318,6 +338,217 @@ export class TaskOrchestrator {
     }
 
     /**
+     * 流式处理用户请求
+     * 实时输出 AI 响应内容，适用于需要即时反馈的场景
+     */
+    async *processStream(
+        input: string,
+        context: TaskContext = {}
+    ): AsyncGenerator<StreamChunk, TaskResult, unknown> {
+        const startTime = Date.now();
+        const execCtx: ExecutionContext = {
+            taskId: context.taskId ?? `task_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
+            sessionId: context.sessionId,
+        };
+
+        try {
+            console.log(`[TaskOrchestrator] Stream processing: "${input.substring(0, 50)}..."`);
+
+            // 1. 分析任务类型
+            const analysis = await this.analyzeWithCache(input, context);
+            console.log(`[TaskOrchestrator] Task type: ${analysis.taskType}, confidence: ${analysis.confidence}`);
+
+            await this.hookManager?.triggerTaskStart({
+                taskId: execCtx.taskId,
+                input,
+                analysis,
+                timestamp: startTime,
+            });
+
+            // 2. 流式执行 (目前仅支持 Simple 任务的流式输出)
+            if (analysis.taskType === TaskType.Simple && !analysis.directToolCall) {
+                // 使用 Fast 层流式处理
+                let fullContent = '';
+
+                for await (const chunk of this.executeFastLayerStream(input, execCtx, context.abortSignal)) {
+                    yield chunk;
+                    if (chunk.content) {
+                        fullContent += chunk.content;
+                    }
+                }
+
+                // 保存到对话历史
+                this.contextManager.addMessage({ role: 'user', content: input }, execCtx.sessionId);
+                this.contextManager.addMessage({ role: 'assistant', content: fullContent }, execCtx.sessionId);
+
+                const result: TaskResult = {
+                    success: true,
+                    response: fullContent,
+                    tier: 'fast',
+                    executionTime: Date.now() - startTime,
+                    model: this.fastEngine.name,
+                };
+
+                await this.hookManager?.triggerTaskComplete({
+                    taskId: execCtx.taskId,
+                    result,
+                    timestamp: Date.now(),
+                    duration: result.executionTime,
+                    sessionId: execCtx.sessionId,
+                });
+
+                return result;
+            }
+
+            // 3. 非流式任务回退到同步处理
+            const result = await this.process(input, context);
+            yield { content: result.response, finishReason: 'stop' };
+            return result;
+
+        } catch (error) {
+            const err = error instanceof Error ? error : new Error(String(error));
+            await this.hookManager?.triggerTaskError({
+                taskId: execCtx.taskId,
+                error: err,
+                timestamp: Date.now(),
+                recoverable: false,
+            });
+
+            const result: TaskResult = {
+                success: false,
+                response: `任务执行失败: ${err.message}`,
+                tier: 'smart',
+                executionTime: Date.now() - startTime,
+            };
+
+            yield { content: result.response, finishReason: 'stop' };
+            return result;
+        }
+    }
+
+    /**
+     * Fast 层流式执行
+     */
+    private async *executeFastLayerStream(
+        input: string,
+        execCtx?: ExecutionContext,
+        signal?: AbortSignal
+    ): AsyncGenerator<StreamChunk, void, unknown> {
+        // 获取对话历史
+        const history = this.contextManager.getMessagesForAI(5, execCtx?.sessionId);
+
+        // 构建系统提示词
+        const systemPrompt = this.buildSystemPrompt();
+        const skillContext = this.loadMatchingSkills(input);
+
+        const messages: Message[] = [
+            ...(systemPrompt ? [{ role: 'system' as const, content: systemPrompt }] : []),
+            ...(skillContext ? [{ role: 'system' as const, content: '## Skill Instructions\\n' + skillContext }] : []),
+            ...history,
+            { role: 'user', content: input },
+        ];
+
+        // 获取可用工具
+        const internalTools = this.toolExecutor.getAvailableTools();
+        const tools: ToolDefinition[] = internalTools.slice(0, 20).map(t => toOpenAIToolDefinition(t));
+
+        // 生成请求 ID
+        const requestId = `req_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        const requestStartTime = Date.now();
+
+        // 触发 PrepareRequest 钩子 - 允许 Hook 修改请求消息
+        const prepareCtx: PrepareRequestContext = {
+            requestId,
+            engineId: this.fastEngine.id,
+            messages: messages.map(m => ({ role: m.role, content: String(m.content) })),
+            options: { stream: true },
+            mutableMessages: messages.map(m => ({ role: m.role, content: String(m.content) })),
+            mutableOptions: { stream: true },
+        };
+        await this.hookManager?.triggerPrepareRequest(prepareCtx);
+
+        // 使用修改后的消息
+        const finalMessages: Message[] = prepareCtx.mutableMessages.map(m => ({
+            role: m.role as 'system' | 'user' | 'assistant',
+            content: m.content,
+        }));
+
+        // 触发 LLM 请求钩子（流式）
+        await this.hookManager?.triggerLLMRequest({
+            requestId,
+            taskId: execCtx?.taskId,
+            engineId: this.fastEngine.id,
+            model: this.fastEngine.model,
+            messages: finalMessages.map(m => ({ role: m.role, content: m.content })),
+            options: { stream: true },
+            tools: tools.map(t => ({ name: t.function.name, description: t.function.description })),
+            timestamp: requestStartTime,
+        });
+
+        let chunkIndex = 0;
+        const streamState = createStreamProcessingState();
+
+        // 检查引擎是否支持流式
+        if (this.fastEngine.supportsStreaming()) {
+            // 使用真正的流式 API
+            for await (const chunk of this.fastEngine.chatStreamWithTools(finalMessages, tools, { signal })) {
+                // 触发流式块钩子
+                await this.hookManager?.triggerLLMStreamChunk({
+                    requestId,
+                    taskId: execCtx?.taskId,
+                    engineId: this.fastEngine.id,
+                    content: chunk.content,
+                    reasoningContent: chunk.reasoningContent,
+                    toolCalls: chunk.toolCalls?.map(tc => ({
+                        index: tc.index,
+                        id: tc.id,
+                        name: tc.function?.name,
+                        arguments: tc.function?.arguments,
+                    })),
+                    finished: chunk.finishReason !== null && chunk.finishReason !== undefined,
+                    finishReason: chunk.finishReason,
+                    chunkIndex: chunkIndex++,
+                    timestamp: Date.now(),
+                });
+
+                if (chunk.content) {
+                    streamState.contentBuffer += chunk.content;
+                }
+                if (chunk.toolCalls) {
+                    for (const delta of chunk.toolCalls) {
+                        mergeToolCallDelta(streamState, delta);
+                    }
+                }
+
+                if (chunk.finishReason === 'tool_calls') {
+                    const toolCalls = Array.from(streamState.toolCalls.values());
+                    if (toolCalls.length > 0) {
+                        console.log(`[TaskOrchestrator] Stream tool call(s): ${toolCalls.map(c => c.function.name).join(', ')}`);
+                        const toolResults = await this.executeToolCalls(toolCalls, execCtx);
+                        const followUpMessages: Message[] = [
+                            ...finalMessages,
+                            ...(streamState.contentBuffer ? [{ role: 'assistant' as const, content: streamState.contentBuffer }] : []),
+                            {
+                                role: 'user',
+                                content: `以下是工具执行结果：\n${this.formatToolResults(toolResults)}\n请基于结果完成回复。`,
+                            },
+                        ];
+                        const followUp = await this.fastEngine.chat(followUpMessages);
+                        yield { content: followUp.content, finishReason: followUp.finishReason ?? 'stop', usage: followUp.usage };
+                        return;
+                    }
+                }
+
+                yield chunk;
+            }
+        } else {
+            // 回退到非流式（一次性返回）
+            const response = await this.fastEngine.chatWithTools(finalMessages, tools);
+            yield { content: response.content, finishReason: 'stop' };
+        }
+    }
+
+    /**
      * 带缓存的意图分析
      */
     private async analyzeWithCache(input: string, context: TaskContext): Promise<TaskAnalysis> {
@@ -332,6 +563,61 @@ export class TaskOrchestrator {
         this.intentCache.setClassification(input, analysis);
 
         return analysis;
+    }
+
+    private parseToolName(name: string): { tool: string; action: string } {
+        if (name.includes('_')) {
+            return { tool: name, action: '' };
+        }
+        const lastDot = name.lastIndexOf('.');
+        if (lastDot > 0 && lastDot < name.length - 1) {
+            return {
+                tool: name.slice(0, lastDot),
+                action: name.slice(lastDot + 1),
+            };
+        }
+        return { tool: name, action: '' };
+    }
+
+    private safeParseParams(raw: string | undefined): Record<string, unknown> {
+        if (!raw) return {};
+        try {
+            const parsed = JSON.parse(raw) as unknown;
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                return parsed as Record<string, unknown>;
+            }
+        } catch {
+            // ignore
+        }
+        return {};
+    }
+
+    private formatToolResults(results: Array<{ name: string; success: boolean; message?: string; data?: unknown }>): string {
+        return results.map((r) => {
+            const payload = r.data !== undefined ? JSON.stringify(r.data) : '';
+            return `- ${r.name}: ${r.success ? '成功' : '失败'}${r.message ? ` (${r.message})` : ''}${payload ? ` -> ${payload}` : ''}`;
+        }).join('\n');
+    }
+
+    private async executeToolCalls(toolCalls: ToolCall[], execCtx?: ExecutionContext): Promise<Array<{
+        name: string;
+        success: boolean;
+        message?: string;
+        data?: unknown;
+    }>> {
+        const results: Array<{ name: string; success: boolean; message?: string; data?: unknown }> = [];
+        for (const call of toolCalls) {
+            const { tool, action } = this.parseToolName(call.function.name);
+            const params = this.safeParseParams(call.function.arguments);
+            const result = await this.toolExecutor.execute({ tool, action, params }, execCtx);
+            results.push({
+                name: call.function.name,
+                success: result.success,
+                message: result.message,
+                data: result.data,
+            });
+        }
+        return results;
     }
 
     /**
@@ -366,7 +652,7 @@ export class TaskOrchestrator {
     private async executeFastLayer(input: string, execCtx?: ExecutionContext): Promise<TaskResult> {
         try {
             // 获取对话历史
-            const history = this.contextManager.getMessagesForAI(5);
+            const history = this.contextManager.getMessagesForAI(5, execCtx?.sessionId);
 
             // 构建系统提示词（包含项目记忆和技能摘要）
             const systemPrompt = this.buildSystemPrompt();
@@ -384,32 +670,83 @@ export class TaskOrchestrator {
             const internalTools = this.toolExecutor.getAvailableTools();
             const tools: ToolDefinition[] = internalTools.slice(0, 20).map(t => toOpenAIToolDefinition(t));
 
+            // 生成请求 ID
+            const requestId = `req_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+            const requestStartTime = Date.now();
+
+            // 触发 PrepareRequest 钩子 - 允许 Hook 修改请求消息
+            const prepareCtx: PrepareRequestContext = {
+                requestId,
+                engineId: this.fastEngine.id,
+                messages: messages.map(m => ({ role: m.role, content: String(m.content) })),
+                options: { stream: false },
+                mutableMessages: messages.map(m => ({ role: m.role, content: String(m.content) })),
+                mutableOptions: { stream: false },
+            };
+            await this.hookManager?.triggerPrepareRequest(prepareCtx);
+
+            // 使用修改后的消息
+            const finalMessages: Message[] = prepareCtx.mutableMessages.map(m => ({
+                role: m.role as 'system' | 'user' | 'assistant',
+                content: m.content,
+            }));
+
+            // 触发 LLM 请求钩子
+            await this.hookManager?.triggerLLMRequest({
+                requestId,
+                taskId: execCtx?.taskId,
+                engineId: this.fastEngine.id,
+                model: this.fastEngine.model,
+                messages: finalMessages.map(m => ({ role: m.role, content: m.content })),
+                options: { stream: false },
+                tools: tools.map(t => ({ name: t.function.name, description: t.function.description })),
+                timestamp: requestStartTime,
+            });
+
             // 调用 Fast 层 AI（带工具）
-            const response = await this.fastEngine.chatWithTools(messages, tools);
+            const response = await this.fastEngine.chatWithTools(finalMessages, tools);
+
+            // 触发 LLM 响应钩子
+            await this.hookManager?.triggerLLMResponse({
+                requestId,
+                taskId: execCtx?.taskId,
+                engineId: this.fastEngine.id,
+                model: this.fastEngine.model,
+                content: response.content,
+                finishReason: response.finishReason,
+                toolCalls: response.toolCalls?.map(tc => ({
+                    id: tc.id,
+                    name: tc.function.name,
+                    arguments: tc.function.arguments,
+                })),
+                usage: response.usage,
+                timestamp: Date.now(),
+                latency: Date.now() - requestStartTime,
+            });
 
             // 如果有工具调用
             if (response.toolCalls && response.toolCalls.length > 0) {
-                const toolCall = response.toolCalls[0];
-                const [tool, action] = toolCall.function.name.split('.');
+                console.log(`[TaskOrchestrator] Fast layer tool call(s): ${response.toolCalls.map(c => c.function.name).join(', ')}`);
 
-                console.log(`[TaskOrchestrator] Fast layer tool call: ${toolCall.function.name}`);
+                const toolResults = await this.executeToolCalls(response.toolCalls, execCtx);
+                const followUpMessages: Message[] = [
+                    ...finalMessages,
+                    ...(response.content ? [{ role: 'assistant' as const, content: response.content }] : []),
+                    {
+                        role: 'user',
+                        content: `以下是工具执行结果：\n${this.formatToolResults(toolResults)}\n请基于结果完成回复。`,
+                    },
+                ];
 
-                // 解析参数
-                const params = JSON.parse(toolCall.function.arguments || '{}');
-
-                const toolResult = await this.toolExecutor.execute({
-                    tool,
-                    action,
-                    params,
-                }, execCtx);
+                const followUp = await this.fastEngine.chat(followUpMessages);
 
                 return {
-                    success: toolResult.success,
-                    response: toolResult.message || response.content || '操作完成',
+                    success: toolResults.every(r => r.success),
+                    response: followUp.content || response.content || '操作完成',
                     tier: 'fast',
                     executionTime: 0,
                     model: this.fastEngine.name,
-                    usage: response.usage,
+                    usage: followUp.usage ?? response.usage,
                 };
             }
 
@@ -444,7 +781,7 @@ export class TaskOrchestrator {
             const visionPrompt = analysis.visionPrompt || `分析屏幕并执行: ${input}`;
 
             const screenshotBase64 = await this.captureScreenshotBase64();
-            const history = this.contextManager.getMessagesForAI(5) as Message[];
+            const history = this.contextManager.getMessagesForAI(5, execCtx.sessionId) as Message[];
             const visionResponse = await this.visionEngine.chat([
                 ...history,
                 { role: 'user', content: visionPrompt, ...(screenshotBase64 ? { images: [screenshotBase64] } : {}) },
@@ -563,7 +900,62 @@ export class TaskOrchestrator {
 
             // 传统执行: Smart 层生成执行计划
             const tools = this.toolExecutor.getAvailableTools();
-            const plan = await this.taskPlanner.planTask(input, tools);
+
+            // 如果启用计划确认，使用详细规划
+            let plan: ExecutionPlan;
+            let planDraft: PlanDraft | undefined;
+
+            if (this.enablePlanConfirmation) {
+                planDraft = await this.taskPlanner.planTaskDetailed(execCtx.taskId, input, tools);
+                plan = planDraft;
+                console.log(`[TaskOrchestrator] Detailed plan generated: ${plan.steps.length} steps, risks: ${planDraft.risks.length}`);
+
+                // 检查是否需要用户确认
+                if (this.isPlanSignificant(planDraft)) {
+                    console.log(`[TaskOrchestrator] Plan requires user approval...`);
+
+                    // 发送审批请求事件
+                    this.emitPlanApprovalRequired(execCtx.taskId, planDraft);
+
+                    try {
+                        // 等待用户确认
+                        const approval = await this.planConfirmationManager.submitForApproval(
+                            execCtx.taskId,
+                            planDraft,
+                            this.planConfirmationTimeout
+                        );
+
+                        if (!approval.approved) {
+                            console.log(`[TaskOrchestrator] Plan rejected by user`);
+                            return {
+                                success: false,
+                                response: approval.feedback || '用户取消了计划执行',
+                                tier: 'smart',
+                                executionTime: 0,
+                            };
+                        }
+
+                        // 如果用户修改了计划
+                        if (approval.modifiedSteps && approval.modifiedSteps.length > 0) {
+                            plan = { ...plan, steps: approval.modifiedSteps };
+                            console.log(`[TaskOrchestrator] Plan modified by user, ${plan.steps.length} steps`);
+                        }
+
+                        console.log(`[TaskOrchestrator] Plan approved, proceeding with execution`);
+                    } catch (error) {
+                        console.error('[TaskOrchestrator] Plan approval failed:', error);
+                        return {
+                            success: false,
+                            response: `计划确认超时或失败: ${error instanceof Error ? error.message : '未知错误'}`,
+                            tier: 'smart',
+                            executionTime: 0,
+                        };
+                    }
+                }
+            } else {
+                plan = await this.taskPlanner.planTask(input, tools);
+            }
+
             console.log(`[TaskOrchestrator] Plan generated: ${plan.steps.length} steps`);
 
             await this.hookManager?.triggerProgress({
@@ -634,6 +1026,14 @@ export class TaskOrchestrator {
      * 执行单个步骤
      */
     private async executeStep(step: ExecutionStep, execCtx: ExecutionContext): Promise<StepResult> {
+        // 发送步骤开始事件
+        this.emitStepEvent('step:started', {
+            taskId: execCtx.taskId,
+            stepId: step.id,
+            description: step.description,
+            timestamp: Date.now(),
+        });
+
         try {
             // 视觉步骤
             if (step.requiresVision) {
@@ -641,6 +1041,16 @@ export class TaskOrchestrator {
                 const visionResult = await this.visionEngine.chat([
                     { role: 'user', content: step.description, ...(screenshotBase64 ? { images: [screenshotBase64] } : {}) },
                 ]);
+
+                // 发送步骤完成事件
+                this.emitStepEvent('step:completed', {
+                    taskId: execCtx.taskId,
+                    stepId: step.id,
+                    success: true,
+                    output: visionResult.content,
+                    timestamp: Date.now(),
+                });
+
                 return {
                     stepId: step.id,
                     success: true,
@@ -651,6 +1061,14 @@ export class TaskOrchestrator {
             // 工具步骤
             const actionSpec = step.action.trim();
             if (!actionSpec) {
+                // 发送步骤失败事件
+                this.emitStepEvent('step:failed', {
+                    taskId: execCtx.taskId,
+                    stepId: step.id,
+                    error: '步骤缺少 action',
+                    timestamp: Date.now(),
+                });
+
                 return {
                     stepId: step.id,
                     success: false,
@@ -686,6 +1104,14 @@ export class TaskOrchestrator {
                     });
 
                     if (!approved) {
+                        // 发送步骤失败事件
+                        this.emitStepEvent('step:failed', {
+                            taskId: execCtx.taskId,
+                            stepId: step.id,
+                            error: '用户拒绝执行此高危操作',
+                            timestamp: Date.now(),
+                        });
+
                         return {
                             stepId: step.id,
                             success: false,
@@ -701,6 +1127,24 @@ export class TaskOrchestrator {
                 params: step.params,
             }, execCtx);
 
+            // 发送步骤完成/失败事件
+            if (result.success) {
+                this.emitStepEvent('step:completed', {
+                    taskId: execCtx.taskId,
+                    stepId: step.id,
+                    success: true,
+                    output: result.data,
+                    timestamp: Date.now(),
+                });
+            } else {
+                this.emitStepEvent('step:failed', {
+                    taskId: execCtx.taskId,
+                    stepId: step.id,
+                    error: result.message || '执行失败',
+                    timestamp: Date.now(),
+                });
+            }
+
             return {
                 stepId: step.id,
                 success: result.success,
@@ -708,11 +1152,87 @@ export class TaskOrchestrator {
                 error: result.success ? undefined : new Error(result.message),
             };
         } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+
+            // 发送步骤失败事件
+            this.emitStepEvent('step:failed', {
+                taskId: execCtx.taskId,
+                stepId: step.id,
+                error: errorMessage,
+                timestamp: Date.now(),
+            });
+
             return {
                 stepId: step.id,
                 success: false,
                 error: error instanceof Error ? error : new Error(String(error)),
             };
         }
+    }
+
+    /**
+     * 发送步骤级事件到前端
+     */
+    private emitStepEvent(method: string, params: unknown): void {
+        const notification = {
+            jsonrpc: '2.0',
+            method,
+            params,
+        };
+
+        try {
+            process.stdout.write(JSON.stringify(notification) + '\n');
+        } catch (error) {
+            console.error(`[TaskOrchestrator] Failed to emit ${method}:`, error);
+        }
+    }
+
+    // =========================================================================
+    // Plan Confirmation Workflow 辅助方法
+    // =========================================================================
+
+    /**
+     * 判断计划是否需要用户确认
+     * 根据步骤数量、风险级别和所需权限判断
+     */
+    private isPlanSignificant(plan: PlanDraft): boolean {
+        // 超过 2 个步骤需要确认
+        if (plan.steps.length > 2) {
+            return true;
+        }
+        // 存在中/高风险需要确认
+        if (plan.risks.some(r => r.level === 'medium' || r.level === 'high')) {
+            return true;
+        }
+        // 需要敏感权限需要确认
+        if (plan.requiredPermissions.length > 0) {
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * 发送计划审批请求事件
+     * 通过 stdout JSON-RPC notification 发送给前端
+     */
+    private emitPlanApprovalRequired(taskId: string, draft: PlanDraft): void {
+        // Plan confirmation manager 会在 submitForApproval 时触发 plan.approval_required 事件
+        // 这里我们通过 console.log 触发额外通知（daemon 中 emitNotification 在 index.ts 中）
+        // 实际上 PlanConfirmationManager.emitPlanEvent 已经处理了事件发送
+        // 但我们需要通过 stdout 发送给 Electron client
+
+        const notification = {
+            jsonrpc: '2.0',
+            method: 'plan:approval-required',
+            params: draft,
+        };
+
+        try {
+            process.stdout.write(JSON.stringify(notification) + '\n');
+        } catch (error) {
+            console.error('[TaskOrchestrator] Failed to emit plan approval notification:', error);
+        }
+
+        console.log(`[TaskOrchestrator] Emitted plan:approval-required for draft ${draft.draftId}`);
     }
 }

@@ -2,7 +2,32 @@
  * NetworkAdapter 单元测试
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+const execSyncMock = vi.hoisted(() => vi.fn((command: string) => {
+    if (command.includes('networksetup -getairportpower')) {
+        return Buffer.from('Wi-Fi Power (en0): On');
+    }
+    if (command.includes('nmcli radio wifi')) {
+        return Buffer.from('enabled');
+    }
+    if (command.includes('Bluetooth ControllerPowerState')) {
+        return Buffer.from('1');
+    }
+    if (command.includes('bluetoothctl show')) {
+        return Buffer.from('Powered: yes');
+    }
+    return Buffer.from('');
+}));
+
+vi.mock('child_process', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('child_process')>();
+    return {
+        ...actual,
+        execSync: execSyncMock,
+    };
+});
+
 import { NetworkAdapter } from '../../adapters/system/NetworkAdapter';
 
 describe('NetworkAdapter', () => {
@@ -14,57 +39,61 @@ describe('NetworkAdapter', () => {
 
     describe('基本功能', () => {
         it('应该正确初始化', () => {
-            expect(adapter.id).toBe('network');
-            expect(adapter.name).toBe('Network Control');
-            expect(adapter.permissionLevel).toBe('medium');
+            expect(adapter.id).toBe('com.aios.adapter.network');
+            expect(adapter.name).toBe('网络管理');
+            expect(adapter.capabilities.length).toBeGreaterThan(0);
         });
 
-        it('应该返回正确的工具列表', () => {
-            const tools = adapter.getTools();
-            expect(tools.length).toBeGreaterThan(0);
-
-            const toolNames = tools.map(t => t.name);
-            expect(toolNames).toContain('network_get_status');
-            expect(toolNames).toContain('network_list_interfaces');
+        it('应该返回正确的能力列表', () => {
+            const capabilityIds = adapter.capabilities.map((cap) => cap.id);
+            expect(capabilityIds).toContain('wifi_status');
+            expect(capabilityIds).toContain('wifi_toggle');
+            expect(capabilityIds).toContain('bluetooth_status');
+            expect(capabilityIds).toContain('bluetooth_toggle');
         });
     });
 
     describe('网络状态', () => {
-        it('应该能获取网络状态', async () => {
-            const result = await adapter.execute('network_get_status', {});
+        it('应该能获取 WiFi 状态', async () => {
+            const result = await adapter.invoke('wifi_status', {});
 
-            expect(result).toBeDefined();
-            expect(typeof result.online).toBe('boolean');
-        });
-
-        it('应该能列出网络接口', async () => {
-            const result = await adapter.execute('network_list_interfaces', {});
-
-            expect(result).toBeDefined();
-            expect(Array.isArray(result.interfaces)).toBe(true);
-        });
-
-        it('应该能获取接口详情', async () => {
-            const listResult = await adapter.execute('network_list_interfaces', {});
-
-            if (listResult.interfaces.length > 0) {
-                const interfaceName = listResult.interfaces[0].name;
-                const result = await adapter.execute('network_get_interface_info', {
-                    interface: interfaceName
-                });
-
-                expect(result).toBeDefined();
-                expect(result.name).toBe(interfaceName);
+            if (process.platform === 'darwin' || process.platform === 'linux') {
+                expect(result.success).toBe(true);
+            } else {
+                expect(result.success).toBe(false);
             }
         });
 
-        it('应该能测试连接', async () => {
-            const result = await adapter.execute('network_test_connection', {
-                host: 'google.com'
-            });
+        it('应该能切换 WiFi', async () => {
+            const result = await adapter.invoke('wifi_toggle', { enabled: true });
 
-            expect(result).toBeDefined();
-            expect(typeof result.reachable).toBe('boolean');
+            if (process.platform === 'darwin' || process.platform === 'linux') {
+                expect(result.success).toBe(true);
+                expect((result.data as { enabled?: boolean }).enabled).toBe(true);
+            } else {
+                expect(result.success).toBe(false);
+            }
+        });
+
+        it('应该能获取蓝牙状态', async () => {
+            const result = await adapter.invoke('bluetooth_status', {});
+
+            if (process.platform === 'darwin' || process.platform === 'linux') {
+                expect(result.success).toBe(true);
+            } else {
+                expect(result.success).toBe(false);
+            }
+        });
+
+        it('应该能切换蓝牙', async () => {
+            const result = await adapter.invoke('bluetooth_toggle', { enabled: false });
+
+            if (process.platform === 'darwin' || process.platform === 'linux') {
+                expect(result.success).toBe(true);
+                expect((result.data as { enabled?: boolean }).enabled).toBe(false);
+            } else {
+                expect(result.success).toBe(false);
+            }
         });
     });
 });

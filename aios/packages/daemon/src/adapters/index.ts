@@ -55,7 +55,8 @@ export { SpotifyAdapter } from './media/SpotifyAdapter.js';
 // Messaging adapters
 export { SlackAdapter } from './messaging/SlackAdapter.js';
 export { DiscordAdapter } from './messaging/DiscordAdapter.js';
-export { EmailAdapter, SMTPConfig } from './messaging/EmailAdapter.js';
+export { EmailAdapter } from './messaging/EmailAdapter.js';
+export type { SMTPConfig } from './messaging/EmailAdapter.js';
 
 // Productivity adapters
 export { GmailAdapter } from './productivity/GmailAdapter.js';
@@ -64,3 +65,19 @@ export { NotionAdapter } from './productivity/NotionAdapter.js';
 export { OutlookAdapter } from './productivity/OutlookAdapter.js';
 export { Microsoft365Adapter } from './productivity/Microsoft365Adapter.js';
 
+// Office adapters
+export { OfficeLocalAdapter, officeLocalAdapter } from './office/OfficeLocalAdapter.js';
+
+// CN adapters
+export {
+    QQNTAdapter,
+    qqntAdapter,
+    WpsAirScriptAdapter,
+    wpsAirScriptAdapter,
+    FeishuAdapter,
+    feishuAdapter,
+    CapCutDraftAdapter,
+    capcutDraftAdapter,
+    WeChatOcrAdapter,
+    wechatOcrAdapter,
+} from './cn/index.js';

@@ -193,6 +193,13 @@ export const api = {
         return callDaemonWS('getAdaptersWithStatus');
     },
 
+    async getHealth(): Promise<unknown> {
+        if (isElectron()) {
+            return window.aios.getHealth();
+        }
+        return callDaemonWS('health.check');
+    },
+
     async invoke(adapterId: string, capability: string, args: Record<string, unknown>): Promise<unknown> {
         if (isElectron()) {
             return window.aios.invoke(adapterId, capability, args);
@@ -290,5 +297,177 @@ export const api = {
             granted: boolean;
             message: string;
         }>;
+    },
+
+    // ============ 任务管理 API ============
+
+    async createTask(prompt: string, options?: { sessionId?: string }): Promise<{ taskId: string }> {
+        if (isElectron() && (window.aios as any).createTask) {
+            return (window.aios as any).createTask(prompt, options);
+        }
+        return callDaemonWS('task.create', { prompt, ...options }) as Promise<{ taskId: string }>;
+    },
+
+    async getTask(taskId: string): Promise<unknown> {
+        if (isElectron() && (window.aios as any).getTask) {
+            return (window.aios as any).getTask(taskId);
+        }
+        return callDaemonWS('task.get', { taskId });
+    },
+
+    async cancelTask(taskId: string): Promise<{ success: boolean }> {
+        if (isElectron() && (window.aios as any).cancelTask) {
+            return (window.aios as any).cancelTask(taskId);
+        }
+        return callDaemonWS('task.cancel', { taskId }) as Promise<{ success: boolean }>;
+    },
+
+    // ============ 系统信息 API ============
+
+    async getVersion(): Promise<{ version: string }> {
+        if (isElectron() && (window.aios as any).getVersion) {
+            return (window.aios as any).getVersion();
+        }
+        return callDaemonWS('getVersion') as Promise<{ version: string }>;
+    },
+
+    async getEventStats(): Promise<unknown> {
+        if (isElectron() && (window.aios as any).getEventStats) {
+            return (window.aios as any).getEventStats();
+        }
+        return callDaemonWS('events.getStats');
+    },
+
+    // ============ MCP 配置 API ============
+
+    async getMCPConfig(): Promise<{ enabled: boolean; port: number | null; host: string }> {
+        if (isElectron() && (window.aios as any).getMCPConfig) {
+            return (window.aios as any).getMCPConfig();
+        }
+        return callDaemonWS('mcp.getConfig') as Promise<{ enabled: boolean; port: number | null; host: string }>;
+    },
+
+    async getMCPStatus(): Promise<{ running: boolean; connectedClients: number; exposedTools: string[] }> {
+        if (isElectron() && (window.aios as any).getMCPStatus) {
+            return (window.aios as any).getMCPStatus();
+        }
+        return callDaemonWS('mcp.getStatus') as Promise<{ running: boolean; connectedClients: number; exposedTools: string[] }>;
+    },
+
+    async listMCPServers(): Promise<Array<{
+        name: string;
+        type: 'stdio' | 'websocket';
+        command?: string;
+        args?: string[];
+        url?: string;
+        status: 'disconnected' | 'connecting' | 'connected' | 'error';
+        tools: string[];
+        lastError?: string;
+    }>> {
+        if (isElectron() && (window.aios as any).listMCPServers) {
+            return (window.aios as any).listMCPServers();
+        }
+        return callDaemonWS('mcp.listServers') as any;
+    },
+
+    async addMCPServer(config: {
+        name: string;
+        type: 'stdio' | 'websocket';
+        command?: string;
+        args?: string[];
+        url?: string;
+    }): Promise<{
+        name: string;
+        type: 'stdio' | 'websocket';
+        status: string;
+        tools: string[];
+    }> {
+        if (isElectron() && (window.aios as any).addMCPServer) {
+            return (window.aios as any).addMCPServer(config);
+        }
+        return callDaemonWS('mcp.addServer', config) as any;
+    },
+
+    async removeMCPServer(name: string): Promise<{ success: boolean }> {
+        if (isElectron() && (window.aios as any).removeMCPServer) {
+            return (window.aios as any).removeMCPServer(name);
+        }
+        return callDaemonWS('mcp.removeServer', { name }) as Promise<{ success: boolean }>;
+    },
+
+    async testMCPConnection(name: string): Promise<{ success: boolean; tools?: string[]; error?: string }> {
+        if (isElectron() && (window.aios as any).testMCPConnection) {
+            return (window.aios as any).testMCPConnection(name);
+        }
+        return callDaemonWS('mcp.testConnection', { name }) as any;
+    },
+
+    async connectMCPServer(name: string): Promise<{ success: boolean; error?: string }> {
+        if (isElectron() && (window.aios as any).connectMCPServer) {
+            return (window.aios as any).connectMCPServer(name);
+        }
+        return callDaemonWS('mcp.connect', { name }) as any;
+    },
+
+    async disconnectMCPServer(name: string): Promise<{ success: boolean }> {
+        if (isElectron() && (window.aios as any).disconnectMCPServer) {
+            return (window.aios as any).disconnectMCPServer(name);
+        }
+        return callDaemonWS('mcp.disconnect', { name }) as Promise<{ success: boolean }>;
+    },
+
+    async getMCPExternalTools(): Promise<Array<{ serverName: string; toolName: string; description?: string }>> {
+        if (isElectron() && (window.aios as any).getMCPExternalTools) {
+            return (window.aios as any).getMCPExternalTools();
+        }
+        return callDaemonWS('mcp.getExternalTools') as any;
+    },
+
+    // ============ A2A 配置 API ============
+
+    async getA2AConfig(): Promise<{ enabled: boolean; port: number | null; host: string }> {
+        if (isElectron() && (window.aios as any).getA2AConfig) {
+            return (window.aios as any).getA2AConfig();
+        }
+        return callDaemonWS('a2a.getConfig') as Promise<{ enabled: boolean; port: number | null; host: string }>;
+    },
+
+    async getA2AStatus(): Promise<{ running: boolean; tasksProcessed: number }> {
+        if (isElectron() && (window.aios as any).getA2AStatus) {
+            return (window.aios as any).getA2AStatus();
+        }
+        return callDaemonWS('a2a.getStatus') as Promise<{ running: boolean; tasksProcessed: number }>;
+    },
+
+    async getAgentCard(): Promise<{
+        id: string;
+        name: string;
+        description: string;
+        capabilities: string[];
+        endpoint: string;
+    }> {
+        if (isElectron() && (window.aios as any).getAgentCard) {
+            return (window.aios as any).getAgentCard();
+        }
+        return callDaemonWS('a2a.getAgentCard') as any;
+    },
+
+    async setAgentCard(params: {
+        id?: string;
+        name?: string;
+        description?: string;
+        capabilities?: string[];
+    }): Promise<{ success: boolean; agentCard: any }> {
+        if (isElectron() && (window.aios as any).setAgentCard) {
+            return (window.aios as any).setAgentCard(params);
+        }
+        return callDaemonWS('a2a.setAgentCard', params) as any;
+    },
+
+    async generateA2AToken(clientId: string, skills?: string[]): Promise<{ success: boolean; token?: string; error?: string }> {
+        if (isElectron() && (window.aios as any).generateA2AToken) {
+            return (window.aios as any).generateA2AToken(clientId, skills);
+        }
+        return callDaemonWS('a2a.generateToken', { clientId, skills }) as any;
     },
 };

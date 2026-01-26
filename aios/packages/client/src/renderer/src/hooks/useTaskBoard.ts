@@ -1,10 +1,12 @@
 /**
  * useTaskBoard - 任务板 Hook
  * 监听并管理任务执行状态
+ * 支持 Electron IPC 和 Web (WebSocket) 两种模式
  */
 
 import { useState, useEffect, useCallback } from 'react';
 import type { TaskGroup } from '../components/TaskBoard';
+import { isElectron } from '../utils/api';
 
 export interface UseTaskBoardResult {
     /** 任务组列表 */
@@ -22,6 +24,10 @@ export function useTaskBoard(): UseTaskBoardResult {
 
     // 取消任务
     const cancelTask = useCallback(async (taskId: string) => {
+        if (!isElectron()) {
+            console.warn('Task board only works in Electron mode');
+            return;
+        }
         try {
             await window.aios.cancelTask(taskId);
             setTasks(prev => prev.map(task =>
@@ -36,8 +42,12 @@ export function useTaskBoard(): UseTaskBoardResult {
 
     // 重试任务
     const retryTask = useCallback(async (taskId: string) => {
+        if (!isElectron()) {
+            console.warn('Task board only works in Electron mode');
+            return;
+        }
         try {
-            await window.aios.retryTask(taskId);
+            await (window.aios as any).retryTask(taskId);
             setTasks(prev => prev.map(task =>
                 task.id === taskId
                     ? {
@@ -66,33 +76,39 @@ export function useTaskBoard(): UseTaskBoardResult {
 
     // 监听任务更新
     useEffect(() => {
-        const unsubscribe = window.aios?.onTaskUpdate?.((update) => {
+        if (!isElectron()) {
+            return;
+        }
+
+        const unsubscribe = window.aios.onTaskUpdate((update) => {
             setTasks(prev => {
                 const existingIndex = prev.findIndex(t => t.id === update.taskId);
 
                 if (existingIndex >= 0) {
                     // 更新现有任务
                     const updated = [...prev];
-                    const task = updated[existingIndex];
+                    const task = { ...updated[existingIndex] };
 
-                    if (update.type === 'task_status') {
-                        task.status = update.status;
-                    } else if (update.type === 'subtask_update') {
+                    if (update.type === 'task_status' && update.status) {
+                        task.status = update.status as TaskGroup['status'];
+                    } else if (update.type === 'subtask_update' && update.subTaskId) {
                         const subTaskIndex = task.subTasks.findIndex(
                             st => st.id === update.subTaskId
                         );
-                        if (subTaskIndex >= 0) {
+                        if (subTaskIndex >= 0 && update.data) {
+                            task.subTasks = [...task.subTasks];
                             task.subTasks[subTaskIndex] = {
                                 ...task.subTasks[subTaskIndex],
-                                ...update.data,
+                                ...update.data as Partial<TaskGroup['subTasks'][0]>,
                             };
                         }
                     }
 
+                    updated[existingIndex] = task;
                     return updated;
-                } else if (update.type === 'task_created') {
+                } else if (update.type === 'task_created' && update.task) {
                     // 创建新任务
-                    return [...prev, update.task];
+                    return [...prev, update.task as TaskGroup];
                 }
 
                 return prev;
@@ -109,3 +125,4 @@ export function useTaskBoard(): UseTaskBoardResult {
         clearCompleted,
     };
 }
+

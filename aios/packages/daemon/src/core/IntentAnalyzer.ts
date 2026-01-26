@@ -45,21 +45,22 @@ export class IntentAnalyzer {
         },
 
         // 应用控制 - 修正 action ID
+        // 使用非贪婪匹配，遇到逗号/句号/分号等停止
         {
-            pattern: /打开\s*(.+)/, tool: 'com.aios.adapter.apps', action: 'open_app', paramExtractor: (input) => {
-                const match = input.match(/打开\s*(.+)/);
+            pattern: /打开\s*([^，。；！？,.:;!?\s]+)/, tool: 'com.aios.adapter.apps', action: 'open_app', paramExtractor: (input) => {
+                const match = input.match(/打开\s*([^，。；！？,.:;!?\s]+)/);
                 return match ? { name: match[1].trim() } : null;
             }
         },
         {
-            pattern: /关闭\s*(.+)/, tool: 'com.aios.adapter.apps', action: 'close_app', paramExtractor: (input) => {
-                const match = input.match(/关闭\s*(.+)/);
+            pattern: /关闭\s*([^，。；！？,.:;!?\s]+)/, tool: 'com.aios.adapter.apps', action: 'close_app', paramExtractor: (input) => {
+                const match = input.match(/关闭\s*([^，。；！？,.:;!?\s]+)/);
                 return match ? { name: match[1].trim() } : null;
             }
         },
         {
-            pattern: /启动\s*(.+)/, tool: 'com.aios.adapter.apps', action: 'open_app', paramExtractor: (input) => {
-                const match = input.match(/启动\s*(.+)/);
+            pattern: /启动\s*([^，。；！？,.:;!?\s]+)/, tool: 'com.aios.adapter.apps', action: 'open_app', paramExtractor: (input) => {
+                const match = input.match(/启动\s*([^，。；！？,.:;!?\s]+)/);
                 return match ? { name: match[1].trim() } : null;
             }
         },
@@ -163,6 +164,16 @@ export class IntentAnalyzer {
      * 分析用户输入
      */
     async analyze(input: string, context: TaskContext = {}): Promise<TaskAnalysis> {
+        // 0. 检查是否是多动作命令（如"打开浏览器，搜索新闻"）
+        // 这类命令应该交给 AI 层处理，而不是直达匹配
+        if (this.isMultiActionCommand(input)) {
+            return {
+                taskType: TaskType.Simple,
+                requiresPlanning: false,
+                confidence: 0.8,
+            };
+        }
+
         // 1. 尝试直达工具匹配
         const directMatch = this.matchDirectTool(input);
         if (directMatch) {
@@ -240,5 +251,21 @@ export class IntentAnalyzer {
      */
     private generateVisionPrompt(input: string): string {
         return `分析屏幕内容，完成用户请求：${input}`;
+    }
+
+    /**
+     * 判断是否是多动作命令
+     * 例如："打开浏览器，搜索今天的新闻" 包含两个动作
+     */
+    private isMultiActionCommand(input: string): boolean {
+        // 检查是否包含中文或英文逗号/分号分隔的多个部分
+        const parts = input.split(/[，,；;]/);
+        if (parts.length < 2) return false;
+
+        // 第二部分是否包含动作关键词
+        const actionKeywords = ['搜索', '查找', '查看', '打开', '关闭', '发送', '下载', '播放', '暂停', '停止', '保存', '导出'];
+        const secondPart = parts.slice(1).join('').trim();
+
+        return actionKeywords.some(keyword => secondPart.includes(keyword));
     }
 }

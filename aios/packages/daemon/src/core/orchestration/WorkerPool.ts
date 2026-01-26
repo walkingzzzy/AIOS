@@ -127,41 +127,30 @@ export class WorkerPool {
     async executeParallel(tasks: SubTask[]): Promise<Map<string, unknown>> {
         const results = new Map<string, unknown>();
         const pending = [...tasks];
-        const running: Promise<void>[] = [];
+        const running = new Set<Promise<void>>();
 
-        while (pending.length > 0 || running.length > 0) {
-            // 尝试分配更多任务
+        const runTask = (task: SubTask): Promise<void> => {
+            const promise = this.assign(task)
+                .then(({ result }) => {
+                    results.set(task.id, result);
+                })
+                .catch(error => {
+                    results.set(task.id, { error: error.message });
+                })
+                .finally(() => {
+                    running.delete(promise);
+                });
+            running.add(promise);
+            return promise;
+        };
+
+        while (pending.length > 0 || running.size > 0) {
             while (pending.length > 0 && this.getAvailable()) {
-                const task = pending.shift()!;
-                const promise = this.assign(task)
-                    .then(({ result }) => {
-                        results.set(task.id, result);
-                    })
-                    .catch(error => {
-                        results.set(task.id, { error: error.message });
-                    });
-                running.push(promise);
+                runTask(pending.shift()!);
             }
 
-            // 等待至少一个任务完成
-            if (running.length > 0) {
+            if (running.size > 0) {
                 await Promise.race(running);
-                // 移除已完成的 promise
-                const completedIndices: number[] = [];
-                for (let i = 0; i < running.length; i++) {
-                    // 检查是否已完成
-                    const completed = await Promise.race([
-                        running[i].then(() => true),
-                        Promise.resolve(false),
-                    ]);
-                    if (completed) {
-                        completedIndices.push(i);
-                    }
-                }
-                // 从后向前移除
-                for (const idx of completedIndices.reverse()) {
-                    running.splice(idx, 1);
-                }
             }
         }
 

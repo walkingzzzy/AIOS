@@ -4,15 +4,15 @@
  */
 
 import type { AdapterResult, AdapterCapability } from '@aios/shared';
-import { runPlatformCommand, getPlatform } from '@aios/shared';
+import { getPlatform } from '@aios/shared';
 import { BaseAdapter } from '../BaseAdapter.js';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { existsSync, mkdirSync, readFileSync, unlinkSync } from 'fs';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import { tmpdir, homedir } from 'os';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 export class ScreenshotAdapter extends BaseAdapter {
     readonly id = 'com.aios.adapter.screenshot';
@@ -75,7 +75,7 @@ export class ScreenshotAdapter extends BaseAdapter {
         try {
             if (platform === 'darwin') {
                 // macOS 使用 screencapture
-                await execAsync('which screencapture');
+                await execFileAsync('which', ['screencapture']);
                 return true;
             } else if (platform === 'win32') {
                 // Windows 使用 PowerShell
@@ -83,10 +83,10 @@ export class ScreenshotAdapter extends BaseAdapter {
             } else {
                 // Linux 检查 gnome-screenshot 或 scrot
                 try {
-                    await execAsync('which gnome-screenshot');
+                    await execFileAsync('which', ['gnome-screenshot']);
                     return true;
                 } catch {
-                    await execAsync('which scrot');
+                    await execFileAsync('which', ['scrot']);
                     return true;
                 }
             }
@@ -99,10 +99,19 @@ export class ScreenshotAdapter extends BaseAdapter {
         try {
             switch (capability) {
                 case 'capture_screen':
+                    if (args.save_path !== undefined && typeof args.save_path !== 'string') {
+                        return this.failure('INVALID_PARAM', 'save_path 必须是字符串');
+                    }
                     return this.captureScreen(args.save_path as string | undefined);
                 case 'capture_window':
+                    if (args.save_path !== undefined && typeof args.save_path !== 'string') {
+                        return this.failure('INVALID_PARAM', 'save_path 必须是字符串');
+                    }
                     return this.captureWindow(args.save_path as string | undefined);
                 case 'capture_region':
+                    if (args.save_path !== undefined && typeof args.save_path !== 'string') {
+                        return this.failure('INVALID_PARAM', 'save_path 必须是字符串');
+                    }
                     return this.captureRegion(args.save_path as string | undefined);
                 case 'get_screenshot_dir':
                     return this.getScreenshotDir();
@@ -126,32 +135,33 @@ export class ScreenshotAdapter extends BaseAdapter {
         const platform = getPlatform();
 
         // 确保目录存在
-        const dir = join(outputPath, '..');
+        const dir = dirname(outputPath);
         if (!existsSync(dir)) {
             mkdirSync(dir, { recursive: true });
         }
 
         if (platform === 'darwin') {
-            await execAsync(`screencapture -x "${outputPath}"`);
+            await execFileAsync('screencapture', ['-x', outputPath]);
         } else if (platform === 'win32') {
             // Windows PowerShell 截图
-            const psScript = `
-                Add-Type -AssemblyName System.Windows.Forms
-                $screen = [System.Windows.Forms.Screen]::PrimaryScreen
-                $bitmap = New-Object System.Drawing.Bitmap($screen.Bounds.Width, $screen.Bounds.Height)
-                $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-                $graphics.CopyFromScreen($screen.Bounds.Location, [System.Drawing.Point]::Empty, $screen.Bounds.Size)
-                $bitmap.Save("${outputPath.replace(/\\/g, '\\\\')}")
-                $graphics.Dispose()
-                $bitmap.Dispose()
-            `;
-            await execAsync(`powershell -Command "${psScript.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`);
+            const psScript = [
+                'Add-Type -AssemblyName System.Windows.Forms',
+                'Add-Type -AssemblyName System.Drawing',
+                '$screen = [System.Windows.Forms.Screen]::PrimaryScreen',
+                '$bitmap = New-Object System.Drawing.Bitmap($screen.Bounds.Width, $screen.Bounds.Height)',
+                '$graphics = [System.Drawing.Graphics]::FromImage($bitmap)',
+                '$graphics.CopyFromScreen($screen.Bounds.Location, [System.Drawing.Point]::Empty, $screen.Bounds.Size)',
+                '$bitmap.Save($args[0])',
+                '$graphics.Dispose()',
+                '$bitmap.Dispose()',
+            ].join('; ');
+            await execFileAsync('powershell', ['-NoProfile', '-Command', psScript, outputPath]);
         } else {
             // Linux
             try {
-                await execAsync(`gnome-screenshot -f "${outputPath}"`);
+                await execFileAsync('gnome-screenshot', ['-f', outputPath]);
             } catch {
-                await execAsync(`scrot "${outputPath}"`);
+                await execFileAsync('scrot', [outputPath]);
             }
         }
 
@@ -168,50 +178,39 @@ export class ScreenshotAdapter extends BaseAdapter {
         const platform = getPlatform();
 
         // 确保目录存在
-        const dir = join(outputPath, '..');
+        const dir = dirname(outputPath);
         if (!existsSync(dir)) {
             mkdirSync(dir, { recursive: true });
         }
 
         if (platform === 'darwin') {
             // -l 参数需要窗口 ID，使用 -w 交互式选择
-            await execAsync(`screencapture -x -w "${outputPath}"`);
+            await execFileAsync('screencapture', ['-x', '-w', outputPath]);
         } else if (platform === 'win32') {
             // Windows 截取活动窗口
-            const psScript = `
-                Add-Type -AssemblyName System.Windows.Forms
-                Add-Type @"
-                    using System;
-                    using System.Runtime.InteropServices;
-                    public class Win32 {
-                        [DllImport("user32.dll")]
-                        public static extern IntPtr GetForegroundWindow();
-                        [DllImport("user32.dll")]
-                        public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
-                    }
-                    public struct RECT {
-                        public int Left, Top, Right, Bottom;
-                    }
-"@
-                $hwnd = [Win32]::GetForegroundWindow()
-                $rect = New-Object RECT
-                [Win32]::GetWindowRect($hwnd, [ref]$rect)
-                $width = $rect.Right - $rect.Left
-                $height = $rect.Bottom - $rect.Top
-                $bitmap = New-Object System.Drawing.Bitmap($width, $height)
-                $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-                $graphics.CopyFromScreen($rect.Left, $rect.Top, 0, 0, [System.Drawing.Size]::new($width, $height))
-                $bitmap.Save("${outputPath.replace(/\\/g, '\\\\')}")
-                $graphics.Dispose()
-                $bitmap.Dispose()
-            `;
-            await execAsync(`powershell -Command "${psScript.replace(/"/g, '\\"').replace(/\n/g, ' ')}"`);
+            const psScript = [
+                'Add-Type -AssemblyName System.Windows.Forms',
+                'Add-Type -AssemblyName System.Drawing',
+                `Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class Win32 { [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow(); [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect); public struct RECT { public int Left, Top, Right, Bottom; } }'`,
+                '$hwnd = [Win32]::GetForegroundWindow()',
+                '$rect = New-Object Win32+RECT',
+                '[Win32]::GetWindowRect($hwnd, [ref]$rect) | Out-Null',
+                '$width = $rect.Right - $rect.Left',
+                '$height = $rect.Bottom - $rect.Top',
+                '$bitmap = New-Object System.Drawing.Bitmap($width, $height)',
+                '$graphics = [System.Drawing.Graphics]::FromImage($bitmap)',
+                '$graphics.CopyFromScreen($rect.Left, $rect.Top, 0, 0, [System.Drawing.Size]::new($width, $height))',
+                '$bitmap.Save($args[0])',
+                '$graphics.Dispose()',
+                '$bitmap.Dispose()',
+            ].join('; ');
+            await execFileAsync('powershell', ['-NoProfile', '-Command', psScript, outputPath]);
         } else {
             // Linux
             try {
-                await execAsync(`gnome-screenshot -w -f "${outputPath}"`);
+                await execFileAsync('gnome-screenshot', ['-w', '-f', outputPath]);
             } catch {
-                await execAsync(`scrot -u "${outputPath}"`);
+                await execFileAsync('scrot', ['-u', outputPath]);
             }
         }
 
@@ -228,14 +227,14 @@ export class ScreenshotAdapter extends BaseAdapter {
         const platform = getPlatform();
 
         // 确保目录存在
-        const dir = join(outputPath, '..');
+        const dir = dirname(outputPath);
         if (!existsSync(dir)) {
             mkdirSync(dir, { recursive: true });
         }
 
         if (platform === 'darwin') {
             // -s 交互式选择区域
-            await execAsync(`screencapture -x -s "${outputPath}"`);
+            await execFileAsync('screencapture', ['-x', '-s', outputPath]);
         } else if (platform === 'win32') {
             // Windows 使用 Snipping Tool 或提示用户
             // 简化实现：使用全屏截图
@@ -243,9 +242,9 @@ export class ScreenshotAdapter extends BaseAdapter {
         } else {
             // Linux
             try {
-                await execAsync(`gnome-screenshot -a -f "${outputPath}"`);
+                await execFileAsync('gnome-screenshot', ['-a', '-f', outputPath]);
             } catch {
-                await execAsync(`scrot -s "${outputPath}"`);
+                await execFileAsync('scrot', ['-s', outputPath]);
             }
         }
 

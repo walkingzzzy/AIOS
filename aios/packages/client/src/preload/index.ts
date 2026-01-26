@@ -22,6 +22,11 @@ const api = {
         return ipcRenderer.invoke('daemon:getAdaptersWithStatus');
     },
 
+    /** 获取健康检查信息 */
+    getHealth: async (): Promise<unknown> => {
+        return ipcRenderer.invoke('daemon:getHealth');
+    },
+
     /** 调用适配器能力 */
     invoke: async (adapterId: string, capability: string, args: Record<string, unknown>): Promise<unknown> => {
         return ipcRenderer.invoke('daemon:invoke', { adapterId, capability, args });
@@ -183,6 +188,33 @@ const api = {
         return () => ipcRenderer.removeListener('task:progress', handler);
     },
 
+    /** 监听任务更新（支持 TaskBoard）*/
+    onTaskUpdate: (callback: (event: {
+        type: 'task_created' | 'task_status' | 'subtask_update';
+        taskId: string;
+        task?: {
+            id: string;
+            title: string;
+            status: 'pending' | 'running' | 'completed' | 'failed';
+            subTasks: Array<{
+                id: string;
+                description: string;
+                status: 'pending' | 'running' | 'completed' | 'failed';
+                progress?: number;
+                result?: string;
+                error?: string;
+            }>;
+            createdAt: number;
+        };
+        status?: string;
+        subTaskId?: string;
+        data?: Record<string, unknown>;
+    }) => void): (() => void) => {
+        const handler = (_event: Electron.IpcRendererEvent, data: unknown) => callback(data as any);
+        ipcRenderer.on('task:update', handler);
+        return () => ipcRenderer.removeListener('task:update', handler);
+    },
+
     /** 监听任务完成 */
     onTaskComplete: (callback: (event: {
         taskId: string;
@@ -206,6 +238,65 @@ const api = {
         return () => ipcRenderer.removeListener('task:error', handler);
     },
 
+    // ============ Streaming API ============
+
+    /** 智能流式对话 - 发起流式请求 */
+    smartChatStream: async (message: string, options?: {
+        hasScreenshot?: boolean;
+        signal?: AbortSignal;
+    }): Promise<{ taskId: string }> => {
+        const result = await ipcRenderer.invoke('daemon:smartChatStream', {
+            message,
+            hasScreenshot: options?.hasScreenshot ?? false
+        });
+        return result;
+    },
+
+    /** 监听流式响应块 */
+    onStreamChunk: (callback: (event: {
+        taskId: string;
+        content?: string;
+        reasoningContent?: string;
+        toolCalls?: Array<{
+            index: number;
+            id?: string;
+            type?: 'function';
+            function?: {
+                name?: string;
+                arguments?: string;
+            };
+        }>;
+        finishReason?: 'stop' | 'tool_calls' | 'length' | 'content_filter' | null;
+        usage?: {
+            promptTokens: number;
+            completionTokens: number;
+            totalTokens: number;
+        };
+    }) => void): (() => void) => {
+        const handler = (_event: Electron.IpcRendererEvent, data: unknown) => callback(data as any);
+        ipcRenderer.on('task:stream-chunk', handler);
+        return () => ipcRenderer.removeListener('task:stream-chunk', handler);
+    },
+
+    /** 监听流式响应完成 */
+    onStreamComplete: (callback: (event: {
+        taskId: string;
+        success: boolean;
+        response: string;
+        executionTime: number;
+        tier: 'direct' | 'fast' | 'vision' | 'smart';
+        model?: string;
+    }) => void): (() => void) => {
+        const handler = (_event: Electron.IpcRendererEvent, data: unknown) => callback(data as any);
+        ipcRenderer.on('task:stream-complete', handler);
+        return () => ipcRenderer.removeListener('task:stream-complete', handler);
+    },
+
+    /** 取消流式请求 */
+    cancelStream: async (taskId: string): Promise<{ success: boolean }> => {
+        return ipcRenderer.invoke('daemon:cancelStream', { taskId });
+    },
+
     // ============ Confirmation ============
 
     /** 监听确认请求 */
@@ -227,6 +318,60 @@ const api = {
     respondConfirmation: async (requestId: string, confirmed: boolean, reason?: string): Promise<{ success: boolean }> => {
         return ipcRenderer.invoke('confirmation:respond', { requestId, confirmed, reason });
     },
+
+    // ============ Plan Approval API ============
+
+    /** 监听计划审批请求 */
+    onPlanApprovalRequired: (callback: (plan: {
+        draftId: string;
+        taskId: string;
+        goal: string;
+        summary?: string;
+        status: 'draft' | 'pending_approval' | 'approved' | 'rejected' | 'modified';
+        version: number;
+        createdAt: number;
+        updatedAt: number;
+        estimatedDuration: number;
+        steps: Array<{
+            id: number;
+            description: string;
+            action: string;
+            params: Record<string, unknown>;
+            requiresVision: boolean;
+            dependsOn: number[];
+        }>;
+        risks: Array<{
+            level: 'low' | 'medium' | 'high';
+            description: string;
+            mitigation?: string;
+        }>;
+        requiredPermissions: string[];
+        userFeedback?: string;
+    }) => void): (() => void) => {
+        const handler = (_event: Electron.IpcRendererEvent, data: unknown) => callback(data as any);
+        ipcRenderer.on('plan:approval-required', handler);
+        return () => ipcRenderer.removeListener('plan:approval-required', handler);
+    },
+
+    /** 获取待审批计划 */
+    getPendingPlan: async (taskId: string): Promise<unknown> => {
+        return ipcRenderer.invoke('plan:getPending', { taskId });
+    },
+
+    /** 确认计划 */
+    approvePlan: async (draftId: string, modifications?: unknown[]): Promise<{ success: boolean }> => {
+        return ipcRenderer.invoke('plan:approve', { draftId, modifications });
+    },
+
+    /** 拒绝计划 */
+    rejectPlan: async (draftId: string, feedback?: string): Promise<{ success: boolean }> => {
+        return ipcRenderer.invoke('plan:reject', { draftId, feedback });
+    },
+
+    /** 修改计划 */
+    modifyPlan: async (draftId: string, modifications: unknown): Promise<{ success: boolean }> => {
+        return ipcRenderer.invoke('plan:modify', { draftId, modifications });
+    },
 };
 
 // 暴露 API 到渲染进程
@@ -238,4 +383,3 @@ declare global {
         aios: typeof api;
     }
 }
-

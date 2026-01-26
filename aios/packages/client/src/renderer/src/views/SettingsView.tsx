@@ -5,6 +5,8 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { api } from '../utils/api';
+import MCPConfigView from './MCPConfigView';
+import A2AConfigView from './A2AConfigView';
 
 interface LayerConfig {
     baseUrl: string;
@@ -57,9 +59,19 @@ const SettingsView: React.FC = () => {
     const [fast, setFast] = useState<LayerState>(createInitialState());
     const [vision, setVision] = useState<LayerState>(createInitialState());
     const [smart, setSmart] = useState<LayerState>(createInitialState());
+    const [mainTab, setMainTab] = useState<'ai' | 'mcp' | 'a2a'>('ai');
+    const [aiSubTab, setAiSubTab] = useState<'fast' | 'vision' | 'smart'>('fast');
     const [saving, setSaving] = useState(false);
     const [saveStatus, setSaveStatus] = useState<'idle' | 'success' | 'error'>('idle');
     const [initialLoading, setInitialLoading] = useState(true);
+    const [version, setVersion] = useState<string>('');
+
+    // 加载版本信息
+    useEffect(() => {
+        api.getVersion()
+            .then(res => setVersion(res?.version || ''))
+            .catch(() => setVersion(''));
+    }, []);
 
     // 加载已有配置
     useEffect(() => {
@@ -156,10 +168,10 @@ const SettingsView: React.FC = () => {
         const { baseUrl, apiKey, model } = state.config;
 
         if (!baseUrl || !model) {
-            setState(prev => ({ 
-                ...prev, 
-                testResult: 'error', 
-                testMessage: '请填写 API 地址并选择模型' 
+            setState(prev => ({
+                ...prev,
+                testResult: 'error',
+                testMessage: '请填写 API 地址并选择模型'
             }));
             return;
         }
@@ -172,8 +184,8 @@ const SettingsView: React.FC = () => {
                 ...prev,
                 testing: false,
                 testResult: result.success ? 'success' : 'error',
-                testMessage: result.success 
-                    ? `连接成功! "${result.response?.substring(0, 50)}${result.response?.length > 50 ? '...' : ''}"` 
+                testMessage: result.success
+                    ? `连接成功! "${result.response?.substring(0, 50)}${result.response?.length > 50 ? '...' : ''}"`
                     : result.error,
             }));
         } catch (error: any) {
@@ -251,7 +263,7 @@ const SettingsView: React.FC = () => {
     ) => {
         const info = LAYER_INFO[layer];
         const activePreset = getActivePreset(state.config.baseUrl);
-        
+
         return (
             <div className="settings-section" key={layer}>
                 <h3>
@@ -382,22 +394,83 @@ const SettingsView: React.FC = () => {
 
     return (
         <div className="settings-view">
-            <h2>⚙️ AI 模型配置</h2>
-            <p className="settings-intro">
-                配置三层 AI 模型，支持 OpenAI 兼容接口。输入 API 地址后点击获取模型列表，或手动输入模型名称。
-            </p>
+            <h2>⚙️ 设置</h2>
 
-            {renderLayerConfig('fast', fast, setFast)}
-            {renderLayerConfig('vision', vision, setVision)}
-            {renderLayerConfig('smart', smart, setSmart)}
+            {/* 主导航 Tab */}
+            <div className="settings-main-tabs">
+                <button
+                    className={`settings-main-tab ${mainTab === 'ai' ? 'active' : ''}`}
+                    onClick={() => setMainTab('ai')}
+                >
+                    🧠 AI 模型
+                </button>
+                <button
+                    className={`settings-main-tab ${mainTab === 'mcp' ? 'active' : ''}`}
+                    onClick={() => setMainTab('mcp')}
+                >
+                    🔌 MCP
+                </button>
+                <button
+                    className={`settings-main-tab ${mainTab === 'a2a' ? 'active' : ''}`}
+                    onClick={() => setMainTab('a2a')}
+                >
+                    🤝 A2A
+                </button>
+            </div>
 
-            <button 
-                className="save-button" 
-                onClick={handleSave} 
-                disabled={saving}
-            >
-                {saving ? '💾 保存中...' : saveStatus === 'success' ? '✅ 配置已保存' : saveStatus === 'error' ? '❌ 保存失败' : '💾 保存配置'}
-            </button>
+            {/* AI 模型配置 */}
+            {mainTab === 'ai' && (
+                <>
+                    <p className="settings-intro">
+                        配置三层 AI 模型，支持 OpenAI 兼容接口。输入 API 地址后点击获取模型列表，或手动输入模型名称。
+                    </p>
+
+                    <div className="settings-tabs">
+                        <button
+                            className={`settings-tab ${aiSubTab === 'fast' ? 'active' : ''}`}
+                            onClick={() => setAiSubTab('fast')}
+                        >
+                            ⚡ Fast
+                        </button>
+                        <button
+                            className={`settings-tab ${aiSubTab === 'vision' ? 'active' : ''}`}
+                            onClick={() => setAiSubTab('vision')}
+                        >
+                            👁️ Vision
+                        </button>
+                        <button
+                            className={`settings-tab ${aiSubTab === 'smart' ? 'active' : ''}`}
+                            onClick={() => setAiSubTab('smart')}
+                        >
+                            🧠 Smart
+                        </button>
+                    </div>
+
+                    <div className="settings-content">
+                        {aiSubTab === 'fast' && renderLayerConfig('fast', fast, setFast)}
+                        {aiSubTab === 'vision' && renderLayerConfig('vision', vision, setVision)}
+                        {aiSubTab === 'smart' && renderLayerConfig('smart', smart, setSmart)}
+                    </div>
+
+                    <button
+                        className="save-button"
+                        onClick={handleSave}
+                        disabled={saving}
+                    >
+                        {saving ? '💾 保存中...' : saveStatus === 'success' ? '✅ 配置已保存' : saveStatus === 'error' ? '❌ 保存失败' : '💾 保存配置'}
+                    </button>
+                </>
+            )}
+
+            {/* MCP 配置 */}
+            {mainTab === 'mcp' && <MCPConfigView />}
+
+            {/* A2A 配置 */}
+            {mainTab === 'a2a' && <A2AConfigView />}
+
+            <footer className="settings-footer">
+                <span className="version-info">AIOS v{version || '...'}</span>
+            </footer>
         </div>
     );
 };

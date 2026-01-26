@@ -21,8 +21,8 @@ export interface OAuthToken {
 interface OAuthTokenResponse {
     access_token: string;
     refresh_token?: string;
-    expires_in: number;
-    token_type: string;
+    expires_in?: number | string;
+    token_type?: string;
     scope?: string;
 }
 
@@ -69,12 +69,12 @@ export class OAuthManager {
             }),
         });
 
-        const data = await response.json() as OAuthTokenResponse;
+        const data = await this.parseTokenResponse(response, 'OAuth token exchange');
         const token: OAuthToken = {
             accessToken: data.access_token,
             refreshToken: data.refresh_token,
-            expiresAt: Date.now() + (data.expires_in * 1000),
-            tokenType: data.token_type,
+            expiresAt: Date.now() + (this.normalizeExpiresIn(data.expires_in) * 1000),
+            tokenType: data.token_type ?? 'Bearer',
             scope: data.scope,
         };
 
@@ -102,12 +102,12 @@ export class OAuthManager {
             }),
         });
 
-        const data = await response.json() as OAuthTokenResponse;
+        const data = await this.parseTokenResponse(response, 'OAuth token refresh');
         const token: OAuthToken = {
             accessToken: data.access_token,
             refreshToken: data.refresh_token ?? currentToken.refreshToken,
-            expiresAt: Date.now() + (data.expires_in * 1000),
-            tokenType: data.token_type,
+            expiresAt: Date.now() + (this.normalizeExpiresIn(data.expires_in) * 1000),
+            tokenType: data.token_type ?? 'Bearer',
             scope: data.scope,
         };
 
@@ -141,5 +141,35 @@ export class OAuthManager {
 
     revokeToken(providerId: string): void {
         this.storage.delete(`oauth_token_${providerId}`);
+    }
+
+    private async parseTokenResponse(response: Response, context: string): Promise<OAuthTokenResponse> {
+        if (!response.ok) {
+            const text = await response.text().catch(() => '');
+            const message = text ? `${text}` : response.statusText;
+            throw new Error(`${context} failed (${response.status}): ${message}`);
+        }
+
+        let data: OAuthTokenResponse;
+        try {
+            data = await response.json() as OAuthTokenResponse;
+        } catch (error) {
+            throw new Error(`${context} returned invalid JSON`);
+        }
+
+        if (!data.access_token) {
+            throw new Error(`${context} missing access_token`);
+        }
+
+        return data;
+    }
+
+    private normalizeExpiresIn(expiresIn?: number | string): number {
+        const parsed = typeof expiresIn === 'number' ? expiresIn : Number(expiresIn);
+        if (Number.isFinite(parsed) && parsed > 0) {
+            return parsed;
+        }
+        // Fallback for providers that return non-expiring tokens.
+        return 365 * 24 * 60 * 60;
     }
 }

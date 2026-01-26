@@ -39,6 +39,12 @@ export class SystemInfoAdapter extends BaseAdapter {
             permissionLevel: 'public',
         },
         {
+            id: 'get_display',
+            name: '获取显示信息',
+            description: '获取显示器与显卡信息',
+            permissionLevel: 'public',
+        },
+        {
             id: 'get_system',
             name: '获取系统信息',
             description: '获取操作系统信息',
@@ -70,6 +76,8 @@ export class SystemInfoAdapter extends BaseAdapter {
                     return this.getBattery();
                 case 'get_disk':
                     return this.getDisk();
+                case 'get_display':
+                    return this.getDisplay();
                 case 'get_system':
                     return this.getSystem();
                 default:
@@ -129,6 +137,26 @@ export class SystemInfoAdapter extends BaseAdapter {
             release: os.release,
             arch: os.arch,
             hostname: os.hostname,
+        });
+    }
+
+    private async getDisplay(): Promise<AdapterResult> {
+        const graphics = await si.graphics();
+        return this.success({
+            controllers: graphics.controllers.map((controller) => ({
+                model: controller.model,
+                vendor: controller.vendor,
+                vram: controller.vram,
+            })),
+            displays: graphics.displays.map((display) => ({
+                model: display.model,
+                resolutionX: display.resolutionX,
+                resolutionY: display.resolutionY,
+                currentResX: display.currentResX,
+                currentResY: display.currentResY,
+                sizeX: display.sizeX,
+                sizeY: display.sizeY,
+            })),
         });
     }
 }

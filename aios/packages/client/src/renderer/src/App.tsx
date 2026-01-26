@@ -8,7 +8,9 @@ import SettingsView from './views/SettingsView';
 import ToolsView from './views/ToolsView';
 import WidgetsView from './views/WidgetsView';
 import { ConfirmationDialog } from './components/ConfirmationDialog';
+import { PlanPreview } from './components/PlanPreview';
 import { useConfirmation } from './hooks/useConfirmation';
+import { usePlanApproval } from './hooks/usePlanApproval';
 import './App.css';
 
 type ViewType = 'chat' | 'tools' | 'widgets' | 'settings';
@@ -17,6 +19,7 @@ const App: React.FC = () => {
     const [currentView, setCurrentView] = useState<ViewType>('tools');
     const [showQuickLauncher, setShowQuickLauncher] = useState(false);
     const { currentRequest, confirm, reject, dismiss } = useConfirmation();
+    const { pendingPlan, isLoading: isPlanLoading, approvePlan, rejectPlan } = usePlanApproval();
 
     useEffect(() => {
         // 监听导航事件
@@ -94,9 +97,23 @@ const App: React.FC = () => {
                 onReject={reject}
                 onDismiss={dismiss}
             />
+
+            {/* 计划审批预览（全局覆盖层） */}
+            {pendingPlan && (
+                <div className="plan-overlay">
+                    <div className="plan-overlay-backdrop" />
+                    <div className="plan-overlay-content">
+                        <PlanPreview
+                            plan={pendingPlan}
+                            onApprove={() => approvePlan()}
+                            onReject={(feedback) => rejectPlan(feedback)}
+                            isLoading={isPlanLoading}
+                        />
+                    </div>
+                </div>
+            )}
         </div>
     );
 };
 
 export default App;
-

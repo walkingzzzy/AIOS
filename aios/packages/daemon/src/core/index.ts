@@ -3,6 +3,7 @@
  */
 
 export { AdapterRegistry, adapterRegistry } from './AdapterRegistry.js';
+export { HealthCheckService, type HealthSnapshot, type HealthTransportStatus, type HealthAdapterStatus } from './HealthCheck.js';
 export { JSONRPCHandler, type MethodHandler } from './JSONRPCHandler.js';
 export { StdioTransport, WebSocketTransport } from './transports/index.js';
 
@@ -36,6 +37,20 @@ export {
     type CallbackHandler,
     type AggregatedMetrics,
 } from './hooks/index.js';
+
+// 事件流系统
+export {
+    EventStream,
+    EventType,
+    getEventStream,
+    setEventStream,
+    type BaseEvent,
+    type EventFilter,
+    type SubscriptionOptions,
+    type EventCallback,
+    type Subscription,
+    type EventStreamConfig,
+} from './events/index.js';
 
 // 任务调度系统
 export {

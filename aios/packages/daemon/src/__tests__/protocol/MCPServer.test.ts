@@ -66,9 +66,8 @@ describe('MCPServer', () => {
 
         expect(googleWorkspace.invoke).toHaveBeenCalledWith('send_email', { foo: 'bar' });
         expect(google.invoke).not.toHaveBeenCalled();
-        expect(callResponse.result).toEqual({
-            content: [{ type: 'text', text: JSON.stringify({ success: true, data: { from: 'workspace' } }) }],
-        });
+        const payload = JSON.parse(callResponse.result.content[0].text);
+        expect(payload.success).toBe(true);
+        expect(payload.data).toEqual({ from: 'workspace' });
     });
 });
-

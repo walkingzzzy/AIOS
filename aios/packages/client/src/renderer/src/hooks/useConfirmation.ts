@@ -1,8 +1,10 @@
 /**
  * useConfirmation - 确认请求 Hook
+ * 支持 Electron IPC 和 Web (WebSocket) 两种模式
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import { isElectron } from '../utils/api';
 
 export interface ConfirmationRequest {
     id: string;
@@ -34,7 +36,10 @@ export function useConfirmation(): UseConfirmationResult {
     // 确认
     const confirm = useCallback(async (requestId: string) => {
         try {
-            await window.aios.respondConfirmation(requestId, true);
+            if (isElectron()) {
+                await window.aios.respondConfirmation(requestId, true);
+            }
+            // TODO: Web 模式下通过 WebSocket 发送确认
             setPendingRequests(prev => prev.filter(r => r.id !== requestId));
             setCurrentRequest(null);
         } catch (error) {
@@ -45,7 +50,10 @@ export function useConfirmation(): UseConfirmationResult {
     // 拒绝
     const reject = useCallback(async (requestId: string, reason?: string) => {
         try {
-            await window.aios.respondConfirmation(requestId, false, reason);
+            if (isElectron()) {
+                await window.aios.respondConfirmation(requestId, false, reason);
+            }
+            // TODO: Web 模式下通过 WebSocket 发送拒绝
             setPendingRequests(prev => prev.filter(r => r.id !== requestId));
             setCurrentRequest(null);
         } catch (error) {
@@ -58,8 +66,14 @@ export function useConfirmation(): UseConfirmationResult {
         setCurrentRequest(null);
     }, []);
 
-    // 监听确认请求
+    // 监听确认请求 (仅在 Electron 模式下)
     useEffect(() => {
+        if (!isElectron()) {
+            // Web 模式下，确认请求通过 WebSocket 事件监听
+            // TODO: 实现 WebSocket 事件监听
+            return;
+        }
+
         const unsubscribe = window.aios.onConfirmationRequest((request) => {
             setPendingRequests(prev => [...prev, request]);
             // 如果没有当前显示的请求，显示这个

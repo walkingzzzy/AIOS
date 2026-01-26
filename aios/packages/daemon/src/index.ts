@@ -7,13 +7,14 @@ import { AIProvider } from '@aios/shared';
 import { AIRouter } from './ai/index.js';
 import { SkillRegistry, ProjectMemoryManager } from './core/skills/index.js';
 import { OAuthManager, getOAuthConfig, OAuthEnvVars } from './auth/index.js';
-import { MCPServer, A2AServer, type AgentCard } from './protocol/index.js';
+import { MCPServer, MCPServerV2, A2AServer, type AgentCard } from './protocol/index.js';
 import {
     adapterRegistry,
     JSONRPCHandler,
     StdioTransport,
     WebSocketTransport,
     TaskOrchestrator,
+    ToolExecutor,
     TaskScheduler,
     SessionManager,
     confirmationManager,
@@ -26,6 +27,10 @@ import {
     UsageRepository,
     UsageHook,
     traceContextManager,
+    EventStream,
+    EventType,
+    setEventStream,
+    HealthCheckService,
 } from './core/index.js';
 import { Storage } from './core/Storage.js';
 import { TaskAPI } from './api/TaskAPI.js';
@@ -50,6 +55,7 @@ import {
     translateAdapter,
     screenshotAdapter,
     clipboardAdapter,
+    officeLocalAdapter,
     // 新增适配器
     SpotifyAdapter,
     SlackAdapter,
@@ -59,6 +65,11 @@ import {
     GoogleWorkspaceAdapter,
     NotionAdapter,
     Microsoft365Adapter,
+    qqntAdapter,
+    wpsAirScriptAdapter,
+    feishuAdapter,
+    capcutDraftAdapter,
+    wechatOcrAdapter,
 } from './adapters/index.js';
 
 // 默认 API URLs
@@ -109,7 +120,57 @@ function getDefaultAIConfig(): AIRouterConfig {
     };
 }
 
+// AI 配置持久化键名
+const AI_CONFIG_STORAGE_KEY = 'ai_config';
+const DAEMON_VERSION = '0.1.0';
+
+/**
+ * 从 Storage 加载保存的 AI 配置，与默认配置合并
+ */
+function loadSavedAIConfig(storage: import('./core/Storage.js').Storage): AIRouterConfig {
+    const defaults = getDefaultAIConfig();
+
+    try {
+        const saved = storage.getJSON<Partial<AIRouterConfig>>(AI_CONFIG_STORAGE_KEY);
+        if (saved) {
+            console.error('[AIOS Daemon] Loading saved AI config from storage');
+            return {
+                fast: saved.fast ? { ...defaults.fast, ...saved.fast } : defaults.fast,
+                vision: saved.vision ? { ...defaults.vision, ...saved.vision } : defaults.vision,
+                smart: saved.smart ? { ...defaults.smart, ...saved.smart } : defaults.smart,
+            };
+        }
+    } catch (error) {
+        console.error('[AIOS Daemon] Failed to load saved AI config:', error);
+    }
+
+    return defaults;
+}
+
+/**
+ * 保存 AI 配置到 Storage
+ */
+function saveAIConfig(storage: import('./core/Storage.js').Storage, config: AIRouterConfig): void {
+    try {
+        // 保存时不存储敏感的完整 API Key，只保存必要的配置
+        storage.setJSON(AI_CONFIG_STORAGE_KEY, config);
+        console.error('[AIOS Daemon] AI config saved to storage');
+    } catch (error) {
+        console.error('[AIOS Daemon] Failed to save AI config:', error);
+    }
+}
+
 async function main() {
+    const daemonStartedAt = Date.now();
+    const wsPort = process.env.AIOS_WEBSOCKET_PORT;
+    const mcpPort = process.env.AIOS_MCP_PORT;
+    const useMcpV2 = process.env.AIOS_MCP_USE_V2 === '1';
+    const a2aPort = process.env.AIOS_A2A_PORT;
+    // Keep stdout clean for JSON-RPC responses over stdio.
+    console.log = console.error;
+    console.info = console.error;
+    console.debug = console.error;
+
     console.error('[AIOS Daemon] Starting...');
 
     // 初始化存储（KV + 会话/任务持久化）
@@ -136,6 +197,28 @@ async function main() {
 
     const usageRepository = new UsageRepository();
     hookManager.register(new UsageHook(usageRepository));
+
+    const mcpToolExecutor = new ToolExecutor(adapterRegistry);
+    mcpToolExecutor.setHookManager(hookManager);
+
+    // ============ 统一事件流系统 ============
+    const eventStream = new EventStream({
+        maxEvents: 10000,
+        eventTTL: 3600000, // 1 hour
+        enablePersistence: false,
+    });
+    setEventStream(eventStream);
+    console.error('[AIOS Daemon] EventStream initialized');
+
+    // 注册 EventBridgeHook - 将 Hook 事件桥接到 EventStream
+    const { EventBridgeHook } = await import('./core/hooks/EventBridgeHook.js');
+    hookManager.register(new EventBridgeHook(eventStream, {
+        bridgeTaskEvents: true,
+        bridgeLLMEvents: true,
+        bridgeToolEvents: true,
+        bridgeProgressEvents: true,
+    }));
+    console.error('[AIOS Daemon] EventBridgeHook registered');
 
     // ============ OAuth / Token 配置 ============
     const oauthManager = new OAuthManager(storage);
@@ -164,6 +247,7 @@ async function main() {
     adapterRegistry.register(fileAdapter);
     adapterRegistry.register(windowAdapter);
     adapterRegistry.register(browserAdapter);
+    adapterRegistry.register(officeLocalAdapter);
     adapterRegistry.register(speechAdapter);
     adapterRegistry.register(notificationAdapter);
     adapterRegistry.register(timerAdapter);
@@ -173,6 +257,11 @@ async function main() {
     adapterRegistry.register(translateAdapter);
     adapterRegistry.register(screenshotAdapter);
     adapterRegistry.register(clipboardAdapter);
+    adapterRegistry.register(qqntAdapter);
+    adapterRegistry.register(wpsAirScriptAdapter);
+    adapterRegistry.register(feishuAdapter);
+    adapterRegistry.register(capcutDraftAdapter);
+    adapterRegistry.register(wechatOcrAdapter);
 
     // 注册新增适配器（需要 OAuth 配置后才可用）
     const spotifyAdapter = new SpotifyAdapter();
@@ -189,6 +278,7 @@ async function main() {
     outlookAdapter.setOAuthManager(oauthManager);
     googleWorkspaceAdapter.setOAuthManager(oauthManager);
     microsoft365Adapter.setOAuthManager(oauthManager);
+    calendarAdapter.setOAuthManager(oauthManager);
 
     if (process.env.SLACK_BOT_TOKEN) {
         slackAdapter.setToken(process.env.SLACK_BOT_TOKEN);
@@ -227,7 +317,7 @@ async function main() {
     let aiRouter: AIRouter | null = null;
     let orchestrator: TaskOrchestrator | null = null;
     let wsTransport: WebSocketTransport | null = null;
-    let mcpServer: MCPServer | null = null;
+    let mcpServer: MCPServer | MCPServerV2 | null = null;
     let a2aServer: A2AServer | null = null;
     const a2aTaskIdByAiosTaskId = new Map<string, string>();
 
@@ -239,6 +329,12 @@ async function main() {
         }
         wsTransport?.broadcast(method, params);
     };
+    eventStream.subscribe((event) => {
+        emitNotification('events:emit', event);
+    });
+    confirmationManager.setNotifier((request) => {
+        emitNotification('confirmation:request', request);
+    });
 
     // 任务调度器（用于 task.* API）
     const concurrencyEnv = Number(process.env.AIOS_TASK_CONCURRENCY);
@@ -253,7 +349,12 @@ async function main() {
         }
 
         try {
-            const result = await orchestrator.process(task.prompt, { hasScreenshot: false, taskId: task.id });
+            const sessionId = typeof task.context?.sessionId === 'string' ? task.context.sessionId : undefined;
+            const result = await orchestrator.process(task.prompt, {
+                hasScreenshot: false,
+                taskId: task.id,
+                sessionId,
+            });
             sessionManager.updateTaskStatus(task.id, result.success ? 'completed' : 'failed', {
                 response: result.response,
                 tier: result.tier,
@@ -270,16 +371,39 @@ async function main() {
     }, {
         concurrency: Number.isFinite(concurrencyEnv) && concurrencyEnv > 0 ? concurrencyEnv : 1,
     });
+    const schedulerCleanupTimer = setInterval(() => {
+        scheduler.cleanup();
+    }, 10 * 60 * 1000);
+    schedulerCleanupTimer.unref?.();
 
     // 推送任务事件到客户端（用于渲染进程监听）
     scheduler.on('task:started', (...args: unknown[]) => {
-        const task = args[0] as { id: string };
+        const task = args[0] as { id: string; prompt?: string };
+
+        // 发送 task:progress 事件
         emitNotification('task:progress', {
             taskId: task.id,
             percentage: 0,
             currentStep: 0,
             totalSteps: 1,
             stepDescription: '开始执行',
+        });
+
+        // 发送 task:update 事件（用于 TaskBoard）
+        emitNotification('task:update', {
+            type: 'task_created',
+            taskId: task.id,
+            task: {
+                id: task.id,
+                title: (task.prompt || '执行任务').substring(0, 50),
+                status: 'running',
+                subTasks: [{
+                    id: `${task.id}_main`,
+                    description: '正在处理...',
+                    status: 'running',
+                }],
+                createdAt: Date.now(),
+            }
         });
 
         const a2aTaskId = a2aTaskIdByAiosTaskId.get(task.id);
@@ -305,6 +429,13 @@ async function main() {
             executionTime: result?.executionTime ?? 0,
         });
 
+        // 更新 TaskBoard 状态
+        emitNotification('task:update', {
+            type: 'task_status',
+            taskId: task.id,
+            status: 'completed',
+        });
+
         const a2aTaskId = a2aTaskIdByAiosTaskId.get(task.id);
         if (a2aTaskId && a2aServer) {
             a2aServer.updateTaskStatus(a2aTaskId, 'completed', result);
@@ -322,6 +453,13 @@ async function main() {
             recoverable: false,
         });
 
+        // 更新 TaskBoard 状态
+        emitNotification('task:update', {
+            type: 'task_status',
+            taskId: task.id,
+            status: 'failed',
+        });
+
         const a2aTaskId = a2aTaskIdByAiosTaskId.get(task.id);
         if (a2aTaskId && a2aServer) {
             a2aServer.updateTaskStatus(a2aTaskId, 'failed', undefined, message);
@@ -330,7 +468,7 @@ async function main() {
     });
 
     const taskAPI = new TaskAPI(scheduler, sessionManager);
-    const aiConfig = getDefaultAIConfig();
+    const aiConfig = loadSavedAIConfig(storage);
     if (aiConfig.fast.apiKey || aiConfig.vision.apiKey || aiConfig.smart.apiKey) {
         try {
             aiRouter = new AIRouter({ config: aiConfig });
@@ -381,8 +519,11 @@ async function main() {
                     // Phase 8: 高危操作确认
                     confirmationManager,
                     enableConfirmation: process.env.AIOS_ENABLE_CONFIRMATION !== '0',
+                    // Phase 9: 计划确认流程（复杂任务执行前需用户确认）
+                    enablePlanConfirmation: process.env.AIOS_ENABLE_PLAN_CONFIRMATION !== '0',
+                    planConfirmationTimeout: 5 * 60 * 1000, // 5 分钟
                 });
-                console.error('[AIOS Daemon] TaskOrchestrator initialized (ReAct + O-W + Confirmation enabled)');
+                console.error('[AIOS Daemon] TaskOrchestrator initialized (ReAct + O-W + Confirmation + PlanConfirmation enabled)');
             }
         } catch (error) {
             console.error('[AIOS Daemon] AI Router failed to initialize:', error);
@@ -395,7 +536,34 @@ async function main() {
     // 注册系统方法
     handler.registerMethod('ping', async () => ({ pong: true, timestamp: Date.now() }));
 
-    handler.registerMethod('getVersion', async () => ({ version: '0.1.0' }));
+    handler.registerMethod('getVersion', async () => ({ version: DAEMON_VERSION }));
+
+    const healthCheckService = new HealthCheckService({
+        adapterRegistry,
+        version: DAEMON_VERSION,
+        startedAt: daemonStartedAt,
+        transportProvider: () => ({
+            stdio: { enabled: true },
+            websocket: {
+                enabled: !!wsTransport,
+                port: wsPort ? parseInt(wsPort, 10) : undefined,
+                clients: wsTransport?.getClientCount(),
+            },
+            mcp: {
+                enabled: !!mcpServer,
+                mode: useMcpV2 ? 'v2' : 'v1',
+                port: mcpPort ? parseInt(mcpPort, 10) : undefined,
+                host: process.env.AIOS_MCP_HOST ?? '127.0.0.1',
+            },
+            a2a: {
+                enabled: !!a2aServer,
+                port: a2aPort ? parseInt(a2aPort, 10) : undefined,
+                host: process.env.AIOS_A2A_HOST ?? '127.0.0.1',
+            },
+        }),
+    });
+
+    handler.registerMethod('health.check', async () => healthCheckService.check());
 
     handler.registerMethod('getAdapters', async () => {
         return adapterRegistry.getAll().map((a) => ({
@@ -492,6 +660,96 @@ async function main() {
         return { success: ok };
     });
 
+    // ============ Plan Approval API ============
+
+    // 获取待审批计划
+    handler.registerMethod('plan.getPending', async (params) => {
+        const { taskId } = params as { taskId: string };
+        if (!orchestrator) {
+            return null;
+        }
+        // 通过 orchestrator 访问 planConfirmationManager
+        const manager = (orchestrator as any).planConfirmationManager;
+        if (!manager) {
+            return null;
+        }
+        return manager.getPendingPlan(taskId) || null;
+    });
+
+    // 确认计划
+    handler.registerMethod('plan.approve', async (params) => {
+        const { draftId, modifications } = params as {
+            draftId: string;
+            modifications?: unknown[];
+        };
+        if (!orchestrator) {
+            return { success: false, message: 'Orchestrator not initialized' };
+        }
+        const manager = (orchestrator as any).planConfirmationManager;
+        if (!manager) {
+            return { success: false, message: 'PlanConfirmationManager not available' };
+        }
+        try {
+            manager.handleApprovalResponse(draftId, {
+                approved: true,
+                modifiedSteps: modifications as any,
+            });
+            return { success: true };
+        } catch (error) {
+            return { success: false, message: error instanceof Error ? error.message : String(error) };
+        }
+    });
+
+    // 拒绝计划
+    handler.registerMethod('plan.reject', async (params) => {
+        const { draftId, feedback } = params as {
+            draftId: string;
+            feedback?: string;
+        };
+        if (!orchestrator) {
+            return { success: false, message: 'Orchestrator not initialized' };
+        }
+        const manager = (orchestrator as any).planConfirmationManager;
+        if (!manager) {
+            return { success: false, message: 'PlanConfirmationManager not available' };
+        }
+        try {
+            manager.handleApprovalResponse(draftId, {
+                approved: false,
+                feedback,
+            });
+            return { success: true };
+        } catch (error) {
+            return { success: false, message: error instanceof Error ? error.message : String(error) };
+        }
+    });
+
+    // 修改计划
+    handler.registerMethod('plan.modify', async (params) => {
+        const { draftId, modifications } = params as {
+            draftId: string;
+            modifications: unknown;
+        };
+        if (!orchestrator) {
+            return { success: false, message: 'Orchestrator not initialized' };
+        }
+        const manager = (orchestrator as any).planConfirmationManager;
+        if (!manager) {
+            return { success: false, message: 'PlanConfirmationManager not available' };
+        }
+        try {
+            const updatedPlan = manager.updatePlan(draftId, modifications);
+            if (updatedPlan) {
+                // 发送修改事件到前端
+                emitNotification('plan:modified', updatedPlan);
+                return { success: true, plan: updatedPlan };
+            }
+            return { success: false, message: 'Draft not found' };
+        } catch (error) {
+            return { success: false, message: error instanceof Error ? error.message : String(error) };
+        }
+    });
+
     // 注册 AI 聊天方法 (基础路由)
     handler.registerMethod('chat', async (params) => {
         if (!aiRouter) {
@@ -512,12 +770,13 @@ async function main() {
             throw new Error('TaskOrchestrator not configured. Set API keys via environment variables.');
         }
 
-        const { message, hasScreenshot } = params as {
+        const { message, hasScreenshot, sessionId } = params as {
             message: string;
             hasScreenshot?: boolean;
+            sessionId?: string;
         };
 
-        const result = await orchestrator.process(message, { hasScreenshot });
+        const result = await orchestrator.process(message, { hasScreenshot, sessionId });
 
         return {
             success: result.success,
@@ -526,6 +785,138 @@ async function main() {
             executionTime: result.executionTime,
             model: result.model,
         };
+    });
+
+    // ============ 流式智能对话 ============
+
+    // 正在进行的流式任务
+    const activeStreamTasks = new Map<string, AbortController>();
+
+    // 流式智能聊天
+    handler.registerMethod('smartChatStream', async (params) => {
+        if (!orchestrator) {
+            throw new Error('TaskOrchestrator not configured. Set API keys via environment variables.');
+        }
+
+        const { message, hasScreenshot, sessionId } = params as {
+            message: string;
+            hasScreenshot?: boolean;
+            sessionId?: string;
+        };
+
+        const taskId = `stream_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+        const abortController = new AbortController();
+        activeStreamTasks.set(taskId, abortController);
+
+        // 异步执行流式处理
+        (async () => {
+            const startTime = Date.now();
+            try {
+                const stream = orchestrator!.processStream(message, {
+                    hasScreenshot,
+                    taskId,
+                    sessionId,
+                    abortSignal: abortController.signal,
+                });
+
+                let fullContent = '';
+
+                for await (const chunk of stream) {
+                    if (abortController.signal.aborted) {
+                        break;
+                    }
+
+                    // 发送流式块事件
+                    emitNotification('task:stream-chunk', {
+                        taskId,
+                        content: chunk.content,
+                        reasoningContent: chunk.reasoningContent,
+                        toolCalls: chunk.toolCalls,
+                        finishReason: chunk.finishReason,
+                        usage: chunk.usage,
+                    });
+
+                    if (chunk.content) {
+                        fullContent += chunk.content;
+                    }
+                }
+
+                // 发送完成事件
+                emitNotification('task:stream-complete', {
+                    taskId,
+                    success: true,
+                    response: fullContent,
+                    executionTime: Date.now() - startTime,
+                    tier: 'fast',  // 流式处理总是使用 Fast 层
+                });
+            } catch (error) {
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                emitNotification('task:stream-complete', {
+                    taskId,
+                    success: false,
+                    response: errorMessage,
+                    executionTime: Date.now() - startTime,
+                    tier: 'fast',
+                });
+            } finally {
+                activeStreamTasks.delete(taskId);
+            }
+        })();
+
+        // 立即返回 taskId
+        return { taskId };
+    });
+
+    // 取消流式请求
+    handler.registerMethod('cancelStream', async (params) => {
+        const { taskId } = params as { taskId: string };
+        const controller = activeStreamTasks.get(taskId);
+        if (controller) {
+            controller.abort();
+            activeStreamTasks.delete(taskId);
+            return { success: true };
+        }
+        return { success: false, message: 'Task not found' };
+    });
+
+    // ============ 事件流 API ============
+
+    // 获取最近事件
+    handler.registerMethod('events.getRecent', async (params) => {
+        const { count } = params as { count?: number };
+        return eventStream.getRecent(count ?? 100);
+    });
+
+    // 查询事件
+    handler.registerMethod('events.query', async (params) => {
+        const { filter } = params as {
+            filter?: {
+                types?: string[];
+                taskId?: string;
+                source?: string;
+                startTime?: number;
+                endTime?: number;
+            };
+        };
+
+        // 转换类型字符串为 EventType 枚举
+        const eventFilter = filter ? {
+            ...filter,
+            types: filter.types?.map(t => t as EventType),
+        } : {};
+
+        return eventStream.query(eventFilter);
+    });
+
+    // 按任务 ID 查询事件
+    handler.registerMethod('events.queryByTask', async (params) => {
+        const { taskId } = params as { taskId: string };
+        return eventStream.queryByTask(taskId);
+    });
+
+    // 获取事件统计
+    handler.registerMethod('events.getStats', async () => {
+        return eventStream.getStats();
     });
 
     // 注册带工具的聊天方法
@@ -606,6 +997,8 @@ async function main() {
             aiRouter = new AIRouter({ config: newConfig });
             // 更新存储的配置
             Object.assign(aiConfig, newConfig);
+            // 持久化配置到 Storage
+            saveAIConfig(storage, newConfig);
             // 重建 orchestrator 以使用新配置
             const engines = (aiRouter as any).engines;
             if (engines) {
@@ -734,12 +1127,151 @@ async function main() {
         }
     });
 
+    // ============ MCP 配置 API ============
+
+    // 初始化 MCP 服务器注册表
+    const { getMCPServerRegistry } = await import('./core/MCPServerRegistry.js');
+    const mcpServerRegistry = getMCPServerRegistry();
+    await mcpServerRegistry.initialize();
+
+    // 获取 MCP 服务器配置
+    handler.registerMethod('mcp.getConfig', async () => {
+        const mcpPort = process.env.AIOS_MCP_PORT;
+        return {
+            enabled: !!mcpServer,
+            port: mcpPort ? parseInt(mcpPort, 10) : null,
+            host: process.env.AIOS_MCP_HOST || '127.0.0.1',
+        };
+    });
+
+    // 获取 MCP 服务器运行状态
+    handler.registerMethod('mcp.getStatus', async () => {
+        return {
+            running: !!mcpServer,
+            // TODO: 获取连接的客户端数量
+            connectedClients: 0,
+            exposedTools: adapterRegistry.getAll().flatMap(a =>
+                a.capabilities.map(c => `${a.id}.${c.id}`)
+            ),
+        };
+    });
+
+    // 列出已配置的外部 MCP 服务器
+    handler.registerMethod('mcp.listServers', async () => {
+        return mcpServerRegistry.list();
+    });
+
+    // 添加外部 MCP 服务器
+    handler.registerMethod('mcp.addServer', async (params) => {
+        const { name, type, command, args, url } = params as {
+            name: string;
+            type: 'stdio' | 'websocket';
+            command?: string;
+            args?: string[];
+            url?: string;
+        };
+        return mcpServerRegistry.add({ name, type, command, args, url });
+    });
+
+    // 移除外部 MCP 服务器
+    handler.registerMethod('mcp.removeServer', async (params) => {
+        const { name } = params as { name: string };
+        return { success: await mcpServerRegistry.remove(name) };
+    });
+
+    // 测试 MCP 服务器连接
+    handler.registerMethod('mcp.testConnection', async (params) => {
+        const { name } = params as { name: string };
+        return mcpServerRegistry.test(name);
+    });
+
+    // 连接 MCP 服务器
+    handler.registerMethod('mcp.connect', async (params) => {
+        const { name } = params as { name: string };
+        try {
+            await mcpServerRegistry.connect(name);
+            return { success: true };
+        } catch (error: any) {
+            return { success: false, error: error.message };
+        }
+    });
+
+    // 断开 MCP 服务器连接
+    handler.registerMethod('mcp.disconnect', async (params) => {
+        const { name } = params as { name: string };
+        await mcpServerRegistry.disconnect(name);
+        return { success: true };
+    });
+
+    // 获取所有外部 MCP 服务器提供的工具
+    handler.registerMethod('mcp.getExternalTools', async () => {
+        return mcpServerRegistry.getAllTools();
+    });
+
+    // ============ A2A 配置 API ============
+
+    // 当前 Agent Card（可动态修改）
+    let currentAgentCard: AgentCard = {
+        id: process.env.AIOS_A2A_AGENT_ID ?? 'aios',
+        name: process.env.AIOS_A2A_AGENT_NAME ?? 'AIOS',
+        description: process.env.AIOS_A2A_AGENT_DESCRIPTION ?? 'AIOS Agent - Intelligent Operating System Assistant',
+        capabilities: adapterRegistry.getAll().map((a) => a.id),
+        endpoint: '',
+    };
+
+    // 获取 A2A 服务器配置
+    handler.registerMethod('a2a.getConfig', async () => {
+        const a2aPort = process.env.AIOS_A2A_PORT;
+        return {
+            enabled: !!a2aServer,
+            port: a2aPort ? parseInt(a2aPort, 10) : null,
+            host: process.env.AIOS_A2A_HOST || '127.0.0.1',
+        };
+    });
+
+    // 获取 A2A 服务器运行状态
+    handler.registerMethod('a2a.getStatus', async () => {
+        return {
+            running: !!a2aServer,
+            // TODO: 跟踪已处理任务数量
+            tasksProcessed: 0,
+        };
+    });
+
+    // 获取 Agent Card
+    handler.registerMethod('a2a.getAgentCard', async () => {
+        return currentAgentCard;
+    });
+
+    // 设置 Agent Card（部分更新）
+    handler.registerMethod('a2a.setAgentCard', async (params) => {
+        const { id, name, description, capabilities } = params as Partial<AgentCard>;
+        if (id) currentAgentCard.id = id;
+        if (name) currentAgentCard.name = name;
+        if (description) currentAgentCard.description = description;
+        if (capabilities) currentAgentCard.capabilities = capabilities;
+
+        // TODO: 持久化到存储
+        console.error('[AIOS Daemon] Agent Card updated:', currentAgentCard);
+
+        return { success: true, agentCard: currentAgentCard };
+    });
+
+    // 生成 A2A 访问 Token
+    handler.registerMethod('a2a.generateToken', async (params) => {
+        if (!a2aServer) {
+            return { success: false, error: 'A2A server not running' };
+        }
+        const { clientId, skills } = params as { clientId: string; skills?: string[] };
+        const token = a2aServer.generateToken(clientId, skills || currentAgentCard.capabilities);
+        return { success: true, token };
+    });
+
     // 启动 stdio 传输
     const transport = new StdioTransport(handler);
     transport.start();
 
     // 可选: 启动 WebSocket 传输
-    const wsPort = process.env.AIOS_WEBSOCKET_PORT;
     if (wsPort) {
         const wsToken = process.env.AIOS_WEBSOCKET_TOKEN;
         if (!wsToken) {
@@ -753,27 +1285,37 @@ async function main() {
     }
 
     // 可选: 启动 MCP WebSocket Server（工具暴露给 MCP 客户端）
-    const mcpPort = process.env.AIOS_MCP_PORT;
     if (mcpPort) {
         const mcpToken = process.env.AIOS_MCP_TOKEN;
         const mcpHost = process.env.AIOS_MCP_HOST ?? '127.0.0.1';
         if (!mcpToken) {
             console.error('[AIOS Daemon] Refusing to start MCP server: AIOS_MCP_TOKEN is required');
         } else {
-            mcpServer = new MCPServer(adapterRegistry);
-            await mcpServer.start({
-                port: parseInt(mcpPort, 10),
-                host: mcpHost,
-                authToken: mcpToken,
-            });
-            console.error(
-                `[AIOS Daemon] MCP server started on ws://${mcpHost}:${mcpPort} (token via ?token=... or Authorization: Bearer ...)`
-            );
+            if (useMcpV2) {
+                mcpServer = new MCPServerV2(adapterRegistry, mcpToolExecutor);
+                await mcpServer.start({
+                    port: parseInt(mcpPort, 10),
+                    host: mcpHost,
+                    authToken: mcpToken,
+                });
+                console.error(
+                    `[AIOS Daemon] MCPServerV2 started on ws://${mcpHost}:${mcpPort} (token via ?token=... or Authorization: Bearer ...)`
+                );
+            } else {
+                mcpServer = new MCPServer(adapterRegistry, mcpToolExecutor);
+                await mcpServer.start({
+                    port: parseInt(mcpPort, 10),
+                    host: mcpHost,
+                    authToken: mcpToken,
+                });
+                console.error(
+                    `[AIOS Daemon] MCP server started on ws://${mcpHost}:${mcpPort} (token via ?token=... or Authorization: Bearer ...)`
+                );
+            }
         }
     }
 
     // 可选: 启动 A2A HTTP Server（Agent Card + 任务接收）
-    const a2aPort = process.env.AIOS_A2A_PORT;
     if (a2aPort) {
         const a2aTokenSecret = process.env.AIOS_A2A_TOKEN_SECRET;
         const a2aHost = process.env.AIOS_A2A_HOST ?? '127.0.0.1';

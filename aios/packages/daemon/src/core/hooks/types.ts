@@ -138,3 +138,126 @@ export interface HookMetadata {
     /** 是否启用 */
     enabled: boolean;
 }
+
+// ============ LLM 生命周期事件类型 ============
+
+/**
+ * LLM 请求事件
+ */
+export interface LLMRequestEvent {
+    /** 请求 ID */
+    requestId: string;
+    /** 任务 ID */
+    taskId?: string;
+    /** 引擎 ID */
+    engineId: string;
+    /** 模型名称 */
+    model: string;
+    /** 请求消息 */
+    messages: Array<{
+        role: string;
+        content: string;
+    }>;
+    /** 请求选项 */
+    options?: {
+        temperature?: number;
+        maxTokens?: number;
+        stream?: boolean;
+    };
+    /** 使用的工具 */
+    tools?: Array<{
+        name: string;
+        description?: string;
+    }>;
+    /** 请求时间戳 */
+    timestamp: number;
+}
+
+/**
+ * LLM 响应事件
+ */
+export interface LLMResponseEvent {
+    /** 请求 ID */
+    requestId: string;
+    /** 任务 ID */
+    taskId?: string;
+    /** 引擎 ID */
+    engineId: string;
+    /** 模型名称 */
+    model: string;
+    /** 响应内容 */
+    content: string;
+    /** 完成原因 */
+    finishReason?: 'stop' | 'tool_calls' | 'length' | 'content_filter' | null;
+    /** 工具调用 */
+    toolCalls?: Array<{
+        id: string;
+        name: string;
+        arguments: string;
+    }>;
+    /** Token 使用情况 */
+    usage?: {
+        promptTokens: number;
+        completionTokens: number;
+        totalTokens: number;
+    };
+    /** 响应时间戳 */
+    timestamp: number;
+    /** 请求耗时 (ms) */
+    latency: number;
+}
+
+/**
+ * LLM 流式块事件
+ */
+export interface LLMStreamChunkEvent {
+    /** 请求 ID */
+    requestId: string;
+    /** 任务 ID */
+    taskId?: string;
+    /** 引擎 ID */
+    engineId: string;
+    /** 内容增量 */
+    content?: string;
+    /** 推理内容增量 */
+    reasoningContent?: string;
+    /** 工具调用增量 */
+    toolCalls?: Array<{
+        index: number;
+        id?: string;
+        name?: string;
+        arguments?: string;
+    }>;
+    /** 是否完成 */
+    finished: boolean;
+    /** 完成原因 */
+    finishReason?: 'stop' | 'tool_calls' | 'length' | 'content_filter' | null;
+    /** 块序号 */
+    chunkIndex: number;
+    /** 时间戳 */
+    timestamp: number;
+}
+
+/**
+ * 请求准备上下文（用于修改请求前的钩子）
+ */
+export interface PrepareRequestContext {
+    /** 请求 ID */
+    requestId: string;
+    /** 引擎 ID */
+    engineId: string;
+    /** 原始消息 */
+    messages: Array<{
+        role: string;
+        content: string;
+    }>;
+    /** 原始选项 */
+    options?: Record<string, unknown>;
+    /** 可修改的消息（钩子可以修改此数组） */
+    mutableMessages: Array<{
+        role: string;
+        content: string;
+    }>;
+    /** 可修改的选项 */
+    mutableOptions: Record<string, unknown>;
+}

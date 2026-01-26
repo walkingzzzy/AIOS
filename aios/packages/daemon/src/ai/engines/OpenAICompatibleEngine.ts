@@ -13,7 +13,9 @@ import type {
     ChatResponse,
     ToolDefinition,
     ToolCallResponse,
-    OPENAI_COMPATIBLE_ENDPOINTS,
+    StreamChunk,
+    StreamOptions,
+    ToolCallDelta,
 } from '@aios/shared';
 
 export interface OpenAICompatibleConfig {
@@ -128,10 +130,168 @@ export class OpenAICompatibleEngine extends BaseAIEngine {
         };
     }
 
+    /**
+     * 流式聊天
+     */
+    async *chatStream(
+        messages: Message[],
+        options?: StreamOptions
+    ): AsyncGenerator<StreamChunk, void, unknown> {
+        const stream = await this.client.chat.completions.create({
+            model: this.model,
+            messages: messages.map((m) => this.toOpenAIMessage(m)),
+            temperature: options?.temperature,
+            max_tokens: options?.maxTokens,
+            top_p: options?.topP,
+            stop: options?.stop,
+            stream: true,
+            stream_options: options?.includeUsage ? { include_usage: true } : undefined,
+        });
+
+        for await (const chunk of stream) {
+            // 检查中止信号
+            if (options?.signal?.aborted) {
+                break;
+            }
+
+            const choice = chunk.choices[0];
+            const delta = choice?.delta as {
+                content?: string | null;
+                reasoning_content?: string;
+            } | undefined;
+
+            const streamChunk: StreamChunk = {};
+
+            // 处理文本内容
+            if (delta?.content) {
+                streamChunk.content = delta.content;
+            }
+
+            // 处理推理内容 (DeepSeek 等模型)
+            if (delta?.reasoning_content) {
+                streamChunk.reasoningContent = delta.reasoning_content;
+            }
+
+            // 处理完成原因
+            if (choice?.finish_reason) {
+                streamChunk.finishReason = this.mapFinishReason(choice.finish_reason);
+            }
+
+            // 处理 usage (通常在最后一个 chunk)
+            if (chunk.usage) {
+                streamChunk.usage = {
+                    promptTokens: chunk.usage.prompt_tokens,
+                    completionTokens: chunk.usage.completion_tokens,
+                    totalTokens: chunk.usage.total_tokens,
+                };
+            }
+
+            // 只有有内容时才 yield
+            if (streamChunk.content || streamChunk.reasoningContent ||
+                streamChunk.finishReason || streamChunk.usage) {
+                yield streamChunk;
+            }
+        }
+    }
+
+    /**
+     * 流式带工具调用的聊天
+     */
+    async *chatStreamWithTools(
+        messages: Message[],
+        tools: ToolDefinition[],
+        options?: StreamOptions
+    ): AsyncGenerator<StreamChunk, void, unknown> {
+        const stream = await this.client.chat.completions.create({
+            model: this.model,
+            messages: messages.map((m) => this.toOpenAIMessage(m)),
+            tools: tools.map((t) => ({
+                type: 'function' as const,
+                function: t.function,
+            })),
+            tool_choice: 'auto',
+            temperature: options?.temperature,
+            max_tokens: options?.maxTokens,
+            stream: true,
+            stream_options: options?.includeUsage ? { include_usage: true } : undefined,
+        });
+
+        for await (const chunk of stream) {
+            // 检查中止信号
+            if (options?.signal?.aborted) {
+                break;
+            }
+
+            const choice = chunk.choices[0];
+            const delta = choice?.delta as {
+                content?: string | null;
+                reasoning_content?: string;
+                tool_calls?: Array<{
+                    index: number;
+                    id?: string;
+                    type?: 'function';
+                    function?: {
+                        name?: string;
+                        arguments?: string;
+                    };
+                }>;
+            } | undefined;
+
+            const streamChunk: StreamChunk = {};
+
+            // 处理文本内容
+            if (delta?.content) {
+                streamChunk.content = delta.content;
+            }
+
+            // 处理推理内容
+            if (delta?.reasoning_content) {
+                streamChunk.reasoningContent = delta.reasoning_content;
+            }
+
+            // 处理工具调用增量
+            if (delta?.tool_calls && delta.tool_calls.length > 0) {
+                streamChunk.toolCalls = delta.tool_calls.map((tc): ToolCallDelta => ({
+                    index: tc.index,
+                    id: tc.id,
+                    type: tc.type,
+                    function: tc.function ? {
+                        name: tc.function.name,
+                        arguments: tc.function.arguments,
+                    } : undefined,
+                }));
+            }
+
+            // 处理完成原因
+            if (choice?.finish_reason) {
+                streamChunk.finishReason = this.mapFinishReason(choice.finish_reason);
+            }
+
+            // 处理 usage
+            if (chunk.usage) {
+                streamChunk.usage = {
+                    promptTokens: chunk.usage.prompt_tokens,
+                    completionTokens: chunk.usage.completion_tokens,
+                    totalTokens: chunk.usage.total_tokens,
+                };
+            }
+
+            // 只有有内容时才 yield
+            if (streamChunk.content || streamChunk.reasoningContent ||
+                streamChunk.toolCalls || streamChunk.finishReason || streamChunk.usage) {
+                yield streamChunk;
+            }
+        }
+    }
+
     supportsVision(): boolean {
         // 视觉模型通常在名称中包含 vision 或 4o
         const visionModels = ['gpt-4o', 'gpt-4-vision', 'gpt-4-turbo'];
         return visionModels.some((v) => this.model.includes(v));
+    }
+
+    supportsStreaming(): boolean {
+        return true; // OpenAI 兼容引擎都支持流式
     }
 
     getMaxTokens(): number {
@@ -183,9 +343,16 @@ export class OpenAICompatibleEngine extends BaseAIEngine {
             };
         }
 
-        return {
+        const payload: Record<string, unknown> = {
             role: message.role as 'system' | 'user' | 'assistant' | 'tool',
             content: message.content,
         };
+        if (message.name) {
+            payload.name = message.name;
+        }
+        if (message.toolCallId) {
+            payload.tool_call_id = message.toolCallId;
+        }
+        return payload;
     }
 }

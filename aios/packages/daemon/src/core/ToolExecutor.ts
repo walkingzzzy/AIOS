@@ -9,6 +9,8 @@ import type { ToolCall } from '../types/orchestrator.js';
 import type { HookManager } from './hooks/index.js';
 import { traceContextManager } from './trace/index.js';
 import { randomUUID } from 'node:crypto';
+import { permissionManager } from './PermissionManager.js';
+import { confirmationManager } from './orchestration/confirmation/index.js';
 
 export interface ToolExecutionResult {
     success: boolean;
@@ -94,6 +96,12 @@ export class ToolExecutor {
             return this.invokeAdapter(mapping.adapterId, mapping.actionId, params, context);
         }
 
+        // 直接匹配适配器 ID（兼容包含 "_" 的适配器 ID）
+        const directAdapter = this.registry.get(tool);
+        if (directAdapter) {
+            return this.invokeAdapter(directAdapter.id, action, params, context);
+        }
+
         // 尝试解析 {adapter}_{action} 格式
         const underscoreIndex = tool.indexOf('_');
         if (underscoreIndex > 0) {
@@ -111,7 +119,7 @@ export class ToolExecutor {
             }
         }
 
-        // 回退到旧逻辑：查找适配器
+        // 回退到旧逻辑：按名称模糊匹配适配器
         const adapter = this.registry.get(tool);
         if (!adapter) {
             // 尝试按名称匹配
@@ -187,6 +195,37 @@ export class ToolExecutor {
         const adapter = this.registry.get(adapterId);
         if (!adapter) {
             return { success: false, message: `适配器不存在: ${adapterId}` };
+        }
+        const capabilityDef = adapter.capabilities.find(c => c.id === action);
+        if (!capabilityDef) {
+            return { success: false, message: `能力不存在: ${adapterId}.${action}` };
+        }
+
+        if (capabilityDef.permissionLevel !== 'public') {
+            const permCheck = await permissionManager.checkPermission(capabilityDef.permissionLevel);
+            if (!permCheck.granted) {
+                return {
+                    success: false,
+                    message: `Permission denied: ${capabilityDef.permissionLevel} level required. ${permCheck.details || ''}`.trim(),
+                };
+            }
+        }
+
+        if (capabilityDef.permissionLevel === 'high' || capabilityDef.permissionLevel === 'critical') {
+            const approved = await confirmationManager.requestConfirmation({
+                taskId: context?.taskId ?? `tool-${adapterId}-${action}`,
+                sessionId: context?.sessionId,
+                action: `${adapterId}.${action}`,
+                riskLevel: capabilityDef.permissionLevel,
+                details: {
+                    adapterId,
+                    action,
+                    params,
+                },
+            });
+            if (!approved) {
+                return { success: false, message: '用户拒绝执行此高危操作' };
+            }
         }
 
         const toolId = randomUUID();

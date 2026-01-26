@@ -20,6 +20,8 @@ export class ConfirmationManager {
 
     /** 确认处理器（发送请求到客户端） */
     private handler?: ConfirmationHandler;
+    /** 请求通知器（推送请求到外部） */
+    private notifier?: (request: ConfirmationRequest) => void;
 
     /** 等待确认的 Promise */
     private waiters: Map<string, {
@@ -45,6 +47,13 @@ export class ConfirmationManager {
      */
     setHandler(handler: ConfirmationHandler): void {
         this.handler = handler;
+    }
+
+    /**
+     * 设置确认请求通知器
+     */
+    setNotifier(notifier: (request: ConfirmationRequest) => void): void {
+        this.notifier = notifier;
     }
 
     /**
@@ -85,6 +94,7 @@ export class ConfirmationManager {
         };
 
         this.pendingRequests.set(id, request);
+        this.notifier?.(request);
 
         // 发送确认请求到客户端
         if (this.handler) {

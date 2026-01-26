@@ -2,124 +2,106 @@
  * GmailAdapter 单元测试
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { GmailAdapter } from '../../adapters/productivity/GmailAdapter';
+import type { OAuthManager } from '../../auth';
 
 describe('GmailAdapter', () => {
     let adapter: GmailAdapter;
+    let oauth: OAuthManager;
 
     beforeEach(() => {
         adapter = new GmailAdapter();
+        oauth = {
+            isAuthenticated: vi.fn(() => true),
+            getAccessToken: vi.fn(async () => 'test-token'),
+        } as unknown as OAuthManager;
+        adapter.setOAuthManager(oauth);
+
+        const fetchMock = vi.fn(async (url: RequestInfo, init?: RequestInit) => {
+            const target = typeof url === 'string' ? url : url.toString();
+            const method = init?.method ?? 'GET';
+
+            if (target.includes('/messages/send') && method === 'POST') {
+                return { ok: true, status: 200, json: async () => ({ id: 'msg-1' }) } as Response;
+            }
+
+            if (target.includes('/messages?') && method === 'GET') {
+                return {
+                    ok: true,
+                    status: 200,
+                    json: async () => ({ messages: [{ id: 'msg-1', threadId: 't1' }] }),
+                } as Response;
+            }
+
+            if (target.includes('/messages/msg-1') && method === 'GET') {
+                return {
+                    ok: true,
+                    status: 200,
+                    json: async () => ({ id: 'msg-1', threadId: 't1' }),
+                } as Response;
+            }
+
+            return { ok: false, status: 500, json: async () => ({}) } as Response;
+        });
+
+        vi.stubGlobal('fetch', fetchMock);
+    });
+
+    afterEach(() => {
+        vi.unstubAllGlobals();
     });
 
     describe('基本功能', () => {
         it('应该正确初始化', () => {
-            expect(adapter.id).toBe('gmail');
+            expect(adapter.id).toBe('com.aios.adapter.gmail');
             expect(adapter.name).toBe('Gmail');
-            expect(adapter.permissionLevel).toBe('high');
+            expect(adapter.capabilities.length).toBeGreaterThan(0);
         });
 
-        it('应该返回正确的工具列表', () => {
-            const tools = adapter.getTools();
-            expect(tools.length).toBeGreaterThan(0);
-
-            const toolNames = tools.map(t => t.name);
-            expect(toolNames).toContain('gmail_send');
-            expect(toolNames).toContain('gmail_list');
-            expect(toolNames).toContain('gmail_search');
+        it('应该返回正确的能力列表', () => {
+            const capabilityIds = adapter.capabilities.map((cap) => cap.id);
+            expect(capabilityIds).toContain('send_email');
+            expect(capabilityIds).toContain('list_messages');
+            expect(capabilityIds).toContain('get_message');
         });
     });
 
-    describe('邮件发送', () => {
+    describe('邮件操作', () => {
         it('应该能发送邮件', async () => {
-            const result = await adapter.execute('gmail_send', {
+            const result = await adapter.invoke('send_email', {
                 to: 'test@example.com',
                 subject: 'Test Email',
-                body: 'This is a test email'
+                body: 'Hello',
             });
 
-            expect(result).toBeDefined();
             expect(result.success).toBe(true);
+            expect((result.data as { id?: string }).id).toBe('msg-1');
         });
 
-        it('应该能发送带抄送的邮件', async () => {
-            const result = await adapter.execute('gmail_send', {
-                to: 'test@example.com',
-                cc: 'cc@example.com',
-                bcc: 'bcc@example.com',
-                subject: 'Test',
-                body: 'Test'
-            });
-
-            expect(result).toBeDefined();
-            expect(result.success).toBe(true);
-        });
-
-        it('应该拒绝无效的邮箱地址', async () => {
-            await expect(
-                adapter.execute('gmail_send', {
-                    to: 'invalid-email',
-                    subject: 'Test',
-                    body: 'Test'
-                })
-            ).rejects.toThrow();
-        });
-    });
-
-    describe('邮件管理', () => {
         it('应该能列出邮件', async () => {
-            const result = await adapter.execute('gmail_list', {
-                maxResults: 10
-            });
+            const result = await adapter.invoke('list_messages', { maxResults: 5 });
 
-            expect(result).toBeDefined();
-            expect(Array.isArray(result.messages)).toBe(true);
-        });
-
-        it('应该能搜索邮件', async () => {
-            const result = await adapter.execute('gmail_search', {
-                query: 'from:test@example.com'
-            });
-
-            expect(result).toBeDefined();
-            expect(Array.isArray(result.messages)).toBe(true);
+            expect(result.success).toBe(true);
+            const messages = (result.data as { messages?: unknown[] }).messages;
+            expect(Array.isArray(messages)).toBe(true);
         });
 
         it('应该能读取邮件', async () => {
-            const result = await adapter.execute('gmail_read', {
-                messageId: '123456'
-            });
+            const result = await adapter.invoke('get_message', { id: 'msg-1' });
 
-            expect(result).toBeDefined();
-            expect(result.message).toBeDefined();
-        });
-
-        it('应该能删除邮件', async () => {
-            const result = await adapter.execute('gmail_delete', {
-                messageId: '123456'
-            });
-
-            expect(result).toBeDefined();
             expect(result.success).toBe(true);
+            expect((result.data as { message?: { id?: string } }).message?.id).toBe('msg-1');
         });
     });
 
-    describe('标签管理', () => {
-        it('应该能列出标签', async () => {
-            const result = await adapter.execute('gmail_list_labels', {});
+    describe('权限检查', () => {
+        it('未配置 OAuth 时应该失败', async () => {
+            const noAuthAdapter = new GmailAdapter();
+            const result = await noAuthAdapter.invoke('list_messages', {});
 
-            expect(result).toBeDefined();
-            expect(Array.isArray(result.labels)).toBe(true);
-        });
-
-        it('应该能添加标签', async () => {
-            const result = await adapter.execute('gmail_add_label', {
-                messageId: '123456',
-                labelId: 'INBOX'
-            });
-
-            expect(result).toBeDefined();
-            expect(result.success).toBe(true);
+            expect(result.success).toBe(false);
+            expect(result.error?.code).toBe('NO_OAUTH');
         });
     });
 });

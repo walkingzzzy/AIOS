@@ -2,8 +2,14 @@
  * NetworkGuard 单元测试
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { NetworkGuard } from '../../core/security/NetworkGuard.js';
+
+vi.mock('psl', () => ({
+    default: {
+        get: (host: string) => host.split('.').slice(-2).join('.'),
+    },
+}));
 
 describe('NetworkGuard', () => {
     let guard: NetworkGuard;

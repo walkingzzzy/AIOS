@@ -1,5 +1,5 @@
-import { execSync } from 'child_process';
-import { readdirSync, existsSync } from 'fs';
+import { execFileSync } from 'child_process';
+import { readdirSync, existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 
 export interface InstalledApp {
@@ -70,16 +70,18 @@ export class SoftwareDiscovery {
         const app: InstalledApp = { name, path: appPath };
 
         try {
-            const bundleId = execSync(
-                `defaults read "${appPath}/Contents/Info" CFBundleIdentifier 2>/dev/null`,
+            const bundleId = execFileSync(
+                'defaults',
+                ['read', `${appPath}/Contents/Info`, 'CFBundleIdentifier'],
                 { encoding: 'utf-8' }
             ).trim();
             if (bundleId) app.bundleId = bundleId;
         } catch { /* ignore */ }
 
         try {
-            const version = execSync(
-                `defaults read "${appPath}/Contents/Info" CFBundleShortVersionString 2>/dev/null`,
+            const version = execFileSync(
+                'defaults',
+                ['read', `${appPath}/Contents/Info`, 'CFBundleShortVersionString'],
                 { encoding: 'utf-8' }
             ).trim();
             if (version) app.version = version;
@@ -111,7 +113,7 @@ export class SoftwareDiscovery {
 
     private parseDesktopFile(filePath: string): InstalledApp | null {
         try {
-            const content = execSync(`cat "${filePath}"`, { encoding: 'utf-8' });
+            const content = readFileSync(filePath, { encoding: 'utf-8' });
             const nameMatch = content.match(/^Name=(.+)$/m);
             const execMatch = content.match(/^Exec=(.+)$/m);
             
@@ -128,8 +130,9 @@ export class SoftwareDiscovery {
 
     private scanWindows(): InstalledApp[] {
         try {
-            const output = execSync(
-                'powershell -NoProfile -Command "Get-StartApps | Select-Object Name, AppID | ConvertTo-Json -Depth 2"',
+            const output = execFileSync(
+                'powershell',
+                ['-NoProfile', '-Command', 'Get-StartApps | Select-Object Name, AppID | ConvertTo-Json -Depth 2'],
                 { encoding: 'utf-8' }
             ).trim();
 

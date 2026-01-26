@@ -31,10 +31,12 @@ function createMockRegistry(): AdapterRegistry {
 
     // 添加默认适配器
     const defaultAdapters = [
-        { id: 'com.aios.adapter.audio', name: 'audio', capabilities: [{ id: 'set_volume', description: '设置音量' }] },
-        { id: 'com.aios.adapter.display', name: 'display', capabilities: [{ id: 'set_brightness', description: '设置亮度' }] },
-        { id: 'com.aios.adapter.apps', name: 'apps', capabilities: [{ id: 'open_app', description: '打开应用' }] },{ id: 'com.aios.adapter.power', name: 'power', capabilities: [{ id: 'lock_screen', description: '锁屏' }] },
-        { id: 'com.aios.adapter.desktop', name: 'desktop', capabilities: [{ id: 'set_appearance', description: '设置外观' }] },];
+        { id: 'com.aios.adapter.audio', name: 'audio', capabilities: [{ id: 'set_volume', description: '设置音量', permissionLevel: 'public' }] },
+        { id: 'com.aios.adapter.display', name: 'display', capabilities: [{ id: 'set_brightness', description: '设置亮度', permissionLevel: 'public' }] },
+        { id: 'com.aios.adapter.apps', name: 'apps', capabilities: [{ id: 'open_app', description: '打开应用', permissionLevel: 'public' }] },
+        { id: 'com.aios.adapter.power', name: 'power', capabilities: [{ id: 'lock_screen', description: '锁屏', permissionLevel: 'public' }] },
+        { id: 'com.aios.adapter.desktop', name: 'desktop', capabilities: [{ id: 'set_appearance', description: '设置外观', permissionLevel: 'public' }] },
+    ];
 
     for (const adapter of defaultAdapters) {
         mockAdapters.set(adapter.id, {

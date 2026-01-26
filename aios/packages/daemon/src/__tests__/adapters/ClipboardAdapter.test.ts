@@ -6,15 +6,33 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ClipboardAdapter } from '../../adapters/clipboard/ClipboardAdapter.js';
 
 // Mock child_process
-vi.mock('child_process', () => ({
-    exec: vi.fn((cmd, callback) => {
-        if (cmd.includes('pbpaste') || cmd.includes('Get-Clipboard') || cmd.includes('xclip -selection clipboard -o')) {
-            callback(null, 'test clipboard content', '');
-        } else {
-            callback(null, '', '');
-        }
-    }),
-}));
+vi.mock('child_process', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('child_process')>();
+    return {
+        ...actual,
+        execFile: vi.fn((cmd, args, options, callback) => {
+            const cb = typeof options === 'function' ? options : callback;
+            if (typeof cb === 'function') {
+                const cmdStr = String(cmd);
+                const argsStr = Array.isArray(args) ? args.join(' ') : '';
+                if (cmdStr.includes('pbpaste') || argsStr.includes('Get-Clipboard') || argsStr.includes('xclip')) {
+                    cb(null, 'test clipboard content', '');
+                } else {
+                    cb(null, '', '');
+                }
+            }
+        }),
+        spawn: vi.fn(() => ({
+            stdin: { end: vi.fn() },
+            stderr: { on: vi.fn() },
+            on: vi.fn((event: string, cb: (code?: number) => void) => {
+                if (event === 'close') {
+                    process.nextTick(() => cb(0));
+                }
+            }),
+        })),
+    };
+});
 
 vi.mock('util', () => ({
     promisify: vi.fn((fn) => {

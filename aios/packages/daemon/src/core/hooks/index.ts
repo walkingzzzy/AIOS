@@ -15,6 +15,14 @@ export { MetricsHook } from './MetricsHook.js';
 export type { AggregatedMetrics } from './MetricsHook.js';
 export { PersistenceHook, type PersistenceHookConfig } from './PersistenceHook.js';
 
+// LLM Hooks
+export { LLMMetricsHook } from './LLMMetricsHook.js';
+export { LLMLoggingHook, type LogEntry, type LogLevel, type LLMLoggingConfig } from './LLMLoggingHook.js';
+export { LLMCostTrackingHook, type CostRecord, type CostSummary, type ModelPricing, type LLMCostTrackingConfig } from './LLMCostTrackingHook.js';
+
+// Event Bridge Hook
+export { EventBridgeHook, type EventBridgeConfig } from './EventBridgeHook.js';
+
 // 类型
 export {
     HookPriority,
@@ -26,4 +34,9 @@ export {
     type TaskCompleteEvent,
     type TaskErrorEvent,
     type HookMetadata,
+    // LLM 事件类型
+    type LLMRequestEvent,
+    type LLMResponseEvent,
+    type LLMStreamChunkEvent,
+    type PrepareRequestContext,
 } from './types.js';

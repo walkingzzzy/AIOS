@@ -17,7 +17,19 @@ const DAEMON_EVENT_CHANNELS = new Set([
     'task:progress',
     'task:complete',
     'task:error',
+    'task:update',
     'confirmation:request',
+    'task:stream-chunk',
+    'task:stream-complete',
+    // Plan Confirmation Workflow events
+    'plan:approval-required',
+    'plan:approved',
+    'plan:rejected',
+    'plan:modified',
+    // Step-level progress events
+    'step:started',
+    'step:completed',
+    'step:failed',
 ]);
 
 /** 处理 daemon 响应 */
@@ -230,6 +242,16 @@ function registerIPCHandlers(): void {
         }
     });
 
+    // 获取健康检查信息
+    ipcMain.handle('daemon:getHealth', async () => {
+        try {
+            return await callDaemon('health.check');
+        } catch (error) {
+            console.error('[AIOS Client] getHealth error:', error);
+            throw error;
+        }
+    });
+
     // 调用适配器能力
     ipcMain.handle('daemon:invoke', async (_event, params: { adapterId: string; capability: string; args: Record<string, unknown> }) => {
         try {
@@ -383,6 +405,70 @@ function registerIPCHandlers(): void {
             return await callDaemon('confirmation.respond', params);
         } catch (error) {
             console.error('[AIOS Client] confirmation:respond error:', error);
+            throw error;
+        }
+    });
+
+    // ============ Streaming API ============
+
+    // 流式智能对话
+    ipcMain.handle('daemon:smartChatStream', async (_event, params: { message: string; hasScreenshot?: boolean }) => {
+        try {
+            return await callDaemon('smartChatStream', params);
+        } catch (error) {
+            console.error('[AIOS Client] smartChatStream error:', error);
+            throw error;
+        }
+    });
+
+    // 取消流式请求
+    ipcMain.handle('daemon:cancelStream', async (_event, params: { taskId: string }) => {
+        try {
+            return await callDaemon('cancelStream', params);
+        } catch (error) {
+            console.error('[AIOS Client] cancelStream error:', error);
+            throw error;
+        }
+    });
+
+    // ============ Plan Approval API ============
+
+    // 获取待审批计划
+    ipcMain.handle('plan:getPending', async (_event, params: { taskId: string }) => {
+        try {
+            return await callDaemon('plan.getPending', params);
+        } catch (error) {
+            console.error('[AIOS Client] plan:getPending error:', error);
+            throw error;
+        }
+    });
+
+    // 确认计划
+    ipcMain.handle('plan:approve', async (_event, params: { draftId: string; modifications?: unknown[] }) => {
+        try {
+            return await callDaemon('plan.approve', params);
+        } catch (error) {
+            console.error('[AIOS Client] plan:approve error:', error);
+            throw error;
+        }
+    });
+
+    // 拒绝计划
+    ipcMain.handle('plan:reject', async (_event, params: { draftId: string; feedback?: string }) => {
+        try {
+            return await callDaemon('plan.reject', params);
+        } catch (error) {
+            console.error('[AIOS Client] plan:reject error:', error);
+            throw error;
+        }
+    });
+
+    // 修改计划
+    ipcMain.handle('plan:modify', async (_event, params: { draftId: string; modifications: unknown }) => {
+        try {
+            return await callDaemon('plan.modify', params);
+        } catch (error) {
+            console.error('[AIOS Client] plan:modify error:', error);
             throw error;
         }
     });

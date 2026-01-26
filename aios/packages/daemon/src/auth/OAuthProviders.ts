@@ -19,6 +19,7 @@ export const OAuthProviders: Record<string, Omit<OAuthConfig, 'clientId' | 'clie
             'https://www.googleapis.com/auth/documents',
             'https://www.googleapis.com/auth/spreadsheets',
             'https://www.googleapis.com/auth/drive.file',
+            'https://www.googleapis.com/auth/calendar',
         ],
     },
 

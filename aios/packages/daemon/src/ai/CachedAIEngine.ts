@@ -3,7 +3,7 @@
  * 为 AI 调用添加 LRU 缓存机制以提高性能和降低成本
  */
 
-import type { IAIEngine, Message, ChatResponse, ToolDefinition } from '@aios/shared';
+import type { IAIEngine, Message, ChatResponse, ToolDefinition, StreamChunk, StreamOptions } from '@aios/shared';
 import crypto from 'crypto';
 
 /** 缓存条目 */
@@ -254,9 +254,33 @@ export class CachedAIEngine implements IAIEngine {
         return response;
     }
 
-
+    /**
+     * 流式聊天（不走缓存，直接透传到底层引擎）
+     */
+    chatStream(
+        messages: Message[],
+        options?: StreamOptions
+    ): AsyncGenerator<StreamChunk, void, unknown> {
+        return this.engine.chatStream(messages, options);
+    }
 
     /**
+     * 流式带工具调用的聊天（不走缓存，直接透传到底层引擎）
+     */
+    chatStreamWithTools(
+        messages: Message[],
+        tools: ToolDefinition[],
+        options?: StreamOptions
+    ): AsyncGenerator<StreamChunk, void, unknown> {
+        return this.engine.chatStreamWithTools(messages, tools, options);
+    }
+
+    /**
+     * 是否支持流式响应
+     */
+    supportsStreaming(): boolean {
+        return this.engine.supportsStreaming();
+    }    /**
      * 获取缓存统计信息
      */
     getCacheStats() {

@@ -2,6 +2,7 @@ import type { IncomingMessage } from 'http';
 import { createServer, Server } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { AdapterRegistry } from '../core/AdapterRegistry.js';
+import { ToolExecutor } from '../core/ToolExecutor.js';
 
 export interface MCPServerConfig {
     port?: number;
@@ -15,9 +16,11 @@ export class MCPServer {
     private wss: WebSocketServer | null = null;
     private registry: AdapterRegistry;
     private clients = new Set<WebSocket>();
+    private toolExecutor: ToolExecutor;
 
-    constructor(registry: AdapterRegistry) {
+    constructor(registry: AdapterRegistry, toolExecutor?: ToolExecutor) {
         this.registry = registry;
+        this.toolExecutor = toolExecutor ?? new ToolExecutor(registry);
     }
 
     async start(config: MCPServerConfig = {}): Promise<void> {
@@ -41,7 +44,20 @@ export class MCPServer {
             buffer = lines.pop() || '';
             for (const line of lines) {
                 if (line.trim()) {
-                    this.handleMessage(JSON.parse(line))
+                    let message: any;
+                    try {
+                        message = JSON.parse(line);
+                    } catch (error) {
+                        process.stdout.write(
+                            JSON.stringify({
+                                jsonrpc: '2.0',
+                                id: null,
+                                error: { code: -32700, message: 'Parse error' },
+                            }) + '\n'
+                        );
+                        continue;
+                    }
+                    this.handleMessage(message)
                         .then((response) => {
                             process.stdout.write(JSON.stringify(response) + '\n');
                         })
@@ -72,7 +88,18 @@ export class MCPServer {
 
                 this.clients.add(ws);
                 ws.on('message', async (data) => {
-                    const response = await this.handleMessage(JSON.parse(data.toString()));
+                    let message: any;
+                    try {
+                        message = JSON.parse(data.toString());
+                    } catch {
+                        ws.send(JSON.stringify({
+                            jsonrpc: '2.0',
+                            id: null,
+                            error: { code: -32700, message: 'Parse error' },
+                        }));
+                        return;
+                    }
+                    const response = await this.handleMessage(message);
                     ws.send(JSON.stringify(response));
                 });
                 ws.on('close', () => this.clients.delete(ws));
@@ -176,11 +203,11 @@ export class MCPServer {
 
     private async callTool(name: string, args: Record<string, unknown>): Promise<any> {
         const { adapterId, capabilityId } = this.resolveToolName(name);
-        const adapter = this.registry.get(adapterId);
-        if (!adapter) {
-            throw new Error(`Adapter not found: ${adapterId}`);
-        }
-        const result = await adapter.invoke(capabilityId, args);
+        const result = await this.toolExecutor.execute({
+            tool: adapterId,
+            action: capabilityId,
+            params: args,
+        });
         return { content: [{ type: 'text', text: JSON.stringify(result) }] };
     }
 

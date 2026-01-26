@@ -2,118 +2,83 @@
  * FileAdapter 单元测试
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { FileAdapter } from '../../adapters/system/FileAdapter';
-import * as fs from 'fs/promises';
-import * as path from 'path';
-import * as os from 'os';
+import { promises as fs } from 'fs';
+import { join } from 'path';
+
+const tmpBase = '/tmp/aios-file-test';
 
 describe('FileAdapter', () => {
     let adapter: FileAdapter;
-    let testDir: string;
+    let tempDir: string;
 
     beforeEach(async () => {
         adapter = new FileAdapter();
-        testDir = path.join(os.tmpdir(), `aios-test-${Date.now()}`);
-        await fs.mkdir(testDir, { recursive: true });
+        tempDir = await fs.mkdtemp(`${tmpBase}-`);
     });
 
     afterEach(async () => {
-        try {
-            await fs.rm(testDir, { recursive: true, force: true });
-        } catch (error) {
-            // Ignore cleanup errors
-        }
+        await fs.rm(tempDir, { recursive: true, force: true });
     });
 
     describe('基本功能', () => {
         it('应该正确初始化', () => {
-            expect(adapter.id).toBe('file');
-            expect(adapter.name).toBe('File System');
-            expect(adapter.permissionLevel).toBe('high');
+            expect(adapter.id).toBe('com.aios.adapter.file');
+            expect(adapter.name).toBe('文件管理');
+            expect(adapter.capabilities.length).toBeGreaterThan(0);
         });
 
-        it('应该返回正确的工具列表', () => {
-            const tools = adapter.getTools();
-            expect(tools.length).toBeGreaterThan(0);
-
-            const toolNames = tools.map(t => t.name);
-            expect(toolNames).toContain('file_read');
-            expect(toolNames).toContain('file_write');
-            expect(toolNames).toContain('file_delete');
-            expect(toolNames).toContain('file_list');
+        it('应该返回正确的能力列表', () => {
+            const capabilityIds = adapter.capabilities.map((cap) => cap.id);
+            expect(capabilityIds).toContain('read_file');
+            expect(capabilityIds).toContain('write_file');
+            expect(capabilityIds).toContain('list_dir');
+            expect(capabilityIds).toContain('create_dir');
         });
     });
 
     describe('文件操作', () => {
-        it('应该能写入文件', async () => {
-            const filePath = path.join(testDir, 'test.txt');
-            const result = await adapter.execute('file_write', {
+        it('应该能写入并读取文件', async () => {
+            const filePath = join(tempDir, 'test.txt');
+            const writeResult = await adapter.invoke('write_file', {
                 path: filePath,
-                content: 'Hello World'
+                content: 'hello',
             });
 
+            expect(writeResult.success).toBe(true);
+
+            const readResult = await adapter.invoke('read_file', { path: filePath });
+            expect(readResult.success).toBe(true);
+            expect((readResult.data as { content?: string }).content).toBe('hello');
+        });
+
+        it('应该能列出目录', async () => {
+            const filePath = join(tempDir, 'file.txt');
+            await fs.writeFile(filePath, 'data');
+
+            const result = await adapter.invoke('list_dir', { path: tempDir });
             expect(result.success).toBe(true);
-            const content = await fs.readFile(filePath, 'utf-8');
-            expect(content).toBe('Hello World');
+            const items = (result.data as { items?: unknown[] }).items;
+            expect(Array.isArray(items)).toBe(true);
         });
 
-        it('应该能读取文件', async () => {
-            const filePath = path.join(testDir, 'test.txt');
-            await fs.writeFile(filePath, 'Test Content');
+        it('应该能创建并删除目录', async () => {
+            const dirPath = join(tempDir, 'nested');
+            const createResult = await adapter.invoke('create_dir', { path: dirPath });
+            expect(createResult.success).toBe(true);
 
-            const result = await adapter.execute('file_read', {
-                path: filePath
-            });
-
-            expect(result.content).toBe('Test Content');
+            const deleteResult = await adapter.invoke('delete_file', { path: dirPath });
+            expect(deleteResult.success).toBe(true);
         });
 
-        it('应该能删除文件', async () => {
-            const filePath = path.join(testDir, 'test.txt');
-            await fs.writeFile(filePath, 'Test');
-
-            const result = await adapter.execute('file_delete', {
-                path: filePath
-            });
-
-            expect(result.success).toBe(true);
-            await expect(fs.access(filePath)).rejects.toThrow();
-        });
-
-        it('应该能列出目录内容', async () => {
-            await fs.writeFile(path.join(testDir, 'file1.txt'), 'Test');
-            await fs.writeFile(path.join(testDir, 'file2.txt'), 'Test');
-
-            const result = await adapter.execute('file_list', {
-                path: testDir
-            });
-
-            expect(Array.isArray(result.files)).toBe(true);
-            expect(result.files.length).toBeGreaterThanOrEqual(2);
-        });
-
-        it('应该能创建目录', async () => {
-            const dirPath = path.join(testDir, 'subdir');
-            const result = await adapter.execute('file_create_directory', {
-                path: dirPath
-            });
-
-            expect(result.success).toBe(true);
-            const stats = await fs.stat(dirPath);
-            expect(stats.isDirectory()).toBe(true);
-        });
-
-        it('应该拒绝访问敏感路径', async () => {
-            await expect(
-                adapter.execute('file_read', { path: '/etc/passwd' })
-            ).rejects.toThrow();
-        });
-
-        it('应该拒绝路径遍历攻击', async () => {
-            await expect(
-                adapter.execute('file_read', { path: '../../../etc/passwd' })
-            ).rejects.toThrow();
+        it('应该拒绝访问受限路径', async () => {
+            if (process.platform === 'win32') {
+                return;
+            }
+            const result = await adapter.invoke('read_file', { path: '/etc/passwd' });
+            expect(result.success).toBe(false);
+            expect(result.error?.code).toBe('SECURITY_DENIED');
         });
     });
 });

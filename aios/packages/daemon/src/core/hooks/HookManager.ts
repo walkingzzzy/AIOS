@@ -12,6 +12,10 @@ import type {
     TaskCompleteEvent,
     TaskErrorEvent,
     HookMetadata,
+    LLMRequestEvent,
+    LLMResponseEvent,
+    LLMStreamChunkEvent,
+    PrepareRequestContext,
 } from './types.js';
 
 /**
@@ -218,7 +222,35 @@ export class HookManager {
         await this.executeAll('onTaskError', event);
     }
 
-    // ============ 管理方法 ============
+    // ============ LLM 生命周期方法触发 ============
+
+    /**
+     * 触发 onLLMRequest - AI 请求前
+     */
+    async triggerLLMRequest(event: LLMRequestEvent): Promise<void> {
+        await this.executeAll('onLLMRequest', event);
+    }
+
+    /**
+     * 触发 onLLMResponse - AI 响应后
+     */
+    async triggerLLMResponse(event: LLMResponseEvent): Promise<void> {
+        await this.executeAll('onLLMResponse', event);
+    }
+
+    /**
+     * 触发 onLLMStreamChunk - 流式块接收
+     */
+    async triggerLLMStreamChunk(event: LLMStreamChunkEvent): Promise<void> {
+        await this.executeAll('onLLMStreamChunk', event);
+    }
+
+    /**
+     * 触发 onPrepareRequest - 请求准备（允许修改请求）
+     */
+    async triggerPrepareRequest(context: PrepareRequestContext): Promise<void> {
+        await this.executeAll('onPrepareRequest', context);
+    }
 
     /**
      * 启用 Hook 系统

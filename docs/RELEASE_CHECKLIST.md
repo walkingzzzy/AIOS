@@ -30,6 +30,7 @@
 - [ ] 构建脚本测试
 - [ ] 打包测试（Electron）
 - [ ] 安装程序测试
+- [ ] 代码签名配置与证书验证
 - [ ] 自动更新机制
 - [ ] CI/CD 配置
 
@@ -227,6 +228,21 @@ pnpm build
 # 测试安装
 pnpm install --frozen-lockfile
 ```
+
+## 🔏 代码签名配置说明
+
+### macOS 签名与公证
+- **配置位置**：`aios/packages/client/package.json` → `build.mac`
+- **关键文件**：`aios/packages/client/resources/entitlements.mac.plist`
+- **环境变量（electron-builder）**：
+  - `CSC_LINK` / `CSC_KEY_PASSWORD` 或 `CSC_NAME`
+  - `APPLE_ID` / `APPLE_APP_SPECIFIC_PASSWORD` / `APPLE_TEAM_ID`
+
+### Windows 签名
+- **配置位置**：`aios/packages/client/package.json` → `build.win`
+- **环境变量（electron-builder）**：
+  - `CSC_LINK` / `CSC_KEY_PASSWORD`（或 `WIN_CSC_LINK` / `WIN_CSC_KEY_PASSWORD`）
+- **当前签名算法**：sha256
 
 ### 3. 创建 Git 标签
 

@@ -171,6 +171,7 @@ export class TaskAPI {
             priority,
             type: params.type,
             timeout: params.timeout,
+            context: { sessionId: dbTask.sessionId },
             metadata: params.metadata,
         };
 

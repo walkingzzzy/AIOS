@@ -14,11 +14,18 @@ vi.mock('fs', () => ({
 }));
 
 // Mock child_process
-vi.mock('child_process', () => ({
-    exec: vi.fn((cmd, callback) => {
-        callback(null, '', '');
-    }),
-}));
+vi.mock('child_process', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('child_process')>();
+    return {
+        ...actual,
+        execFile: vi.fn((_cmd: string, _args: string[], cb?: (err: Error | null, stdout?: string, stderr?: string) => void) => {
+            cb?.(null, '', '');
+        }),
+        exec: vi.fn((_cmd: string, cb?: (err: Error | null, stdout?: string, stderr?: string) => void) => {
+            cb?.(null, '', '');
+        }),
+    };
+});
 
 vi.mock('util', () => ({
     promisify: vi.fn((fn) => {

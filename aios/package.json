@@ -1,11 +1,20 @@
 {
   "name": "aios",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "AIOS Protocol - 跨平台 AI 系统控制协议",
   "scripts": {
-    "dev": "pnpm --filter daemon dev",
+    "dev": "pnpm run build:daemon:quick && pnpm run dev:client",
+    "dev:daemon": "pnpm --filter @aios/daemon dev",
+    "dev:client": "pnpm --filter @aios/client dev",
+    "dev:separate": "concurrently -n daemon,client -c blue,green \"pnpm run dev:daemon\" \"pnpm run dev:client\"",
+    "dev:web": "pnpm run build:daemon:quick && concurrently -n daemon,web -c blue,magenta \"pnpm run dev:daemon:ws\" \"pnpm run dev:web:only\"",
+    "dev:daemon:ws": "AIOS_WEBSOCKET_PORT=8765 AIOS_WEBSOCKET_TOKEN=dev-token pnpm --filter @aios/daemon dev",
+    "dev:web:only": "VITE_AIOS_WEBSOCKET_TOKEN=dev-token pnpm --filter @aios/client exec vite --config electron.vite.config.ts src/renderer",
     "build": "pnpm -r build",
+    "build:daemon": "pnpm --filter @aios/daemon build",
+    "build:daemon:quick": "cd packages/daemon && npx tsup src/index.ts --format esm",
+    "build:client": "pnpm --filter @aios/client build",
     "test": "pnpm -r test",
     "lint": "pnpm -r lint",
     "clean": "pnpm -r clean"
@@ -14,7 +23,8 @@
     "typescript": "^5.3.3",
     "vitest": "^1.6.0",
     "tsup": "^8.0.2",
-    "@types/node": "^20.11.0"
+    "@types/node": "^20.11.0",
+    "concurrently": "^8.2.2"
   },
   "packageManager": "pnpm@8.15.0",
   "engines": {

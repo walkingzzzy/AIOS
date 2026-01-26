@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import { join } from 'path';
 import { homedir } from 'os';
-import { mkdirSync, existsSync } from 'fs';
+import { mkdirSync, existsSync, chmodSync } from 'fs';
 
 export interface StorageOptions {
     dbPath?: string;
@@ -13,10 +13,20 @@ export class Storage {
     constructor(options: StorageOptions = {}) {
         const dataDir = join(homedir(), '.aios');
         if (!existsSync(dataDir)) {
-            mkdirSync(dataDir, { recursive: true });
+            mkdirSync(dataDir, { recursive: true, mode: 0o700 });
         }
         const dbPath = options.dbPath || join(dataDir, 'aios.db');
         this.db = new Database(dbPath);
+        try {
+            chmodSync(dataDir, 0o700);
+        } catch {
+            // Ignore permission errors on unsupported platforms.
+        }
+        try {
+            chmodSync(dbPath, 0o600);
+        } catch {
+            // Ignore permission errors on unsupported platforms.
+        }
         this.init();
     }
     

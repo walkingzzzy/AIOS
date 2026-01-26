@@ -3,6 +3,9 @@
  * 实现域名白名单和请求拦截
  */
 
+import psl from 'psl';
+import { isIP } from 'net';
+
 export interface NetworkGuardConfig {
     /** 允许访问的域名列表 */
     allowedDomains?: string[];
@@ -16,6 +19,7 @@ export interface DomainCheckResult {
     allowed: boolean;
     domain: string;
     reason?: string;
+    blocked?: boolean;
 }
 
 /**
@@ -41,7 +45,7 @@ export class NetworkGuard {
         'github.com',
         'stackoverflow.com',
         'npmjs.com',
-        'developer.mozilla.org',
+        'mozilla.org',
         // 常用媒体
         'wikipedia.org',
         'youtube.com',
@@ -52,11 +56,11 @@ export class NetworkGuard {
 
     constructor(config: NetworkGuardConfig = {}) {
         this.enabled = config.enabled ?? true;
-        this.blockUnauthorized = config.blockUnauthorized ?? false;
+        this.blockUnauthorized = config.blockUnauthorized ?? true;
 
         this.allowedDomains = new Set([
             ...NetworkGuard.DEFAULT_ALLOWED_DOMAINS,
-            ...(config.allowedDomains ?? []),
+            ...(config.allowedDomains ?? []).map((domain) => domain.toLowerCase()),
         ]);
     }
 
@@ -65,33 +69,39 @@ export class NetworkGuard {
      */
     checkUrl(url: string): DomainCheckResult {
         if (!this.enabled) {
-            return { allowed: true, domain: '', reason: 'NetworkGuard disabled' };
+            return { allowed: true, domain: '', reason: 'NetworkGuard disabled', blocked: false };
         }
 
         try {
             const parsedUrl = new URL(url);
             const domain = this.extractRootDomain(parsedUrl.hostname);
+            const allowed = this.isAllowed(domain) || this.userApprovedDomains.has(domain);
 
             // 检查白名单
-            if (this.isAllowed(domain)) {
-                return { allowed: true, domain, reason: 'In whitelist' };
+            if (allowed) {
+                return {
+                    allowed: true,
+                    domain,
+                    reason: this.userApprovedDomains.has(domain) ? 'User approved' : 'In whitelist',
+                    blocked: false,
+                };
             }
 
-            // 检查用户已授权
-            if (this.userApprovedDomains.has(domain)) {
-                return { allowed: true, domain, reason: 'User approved' };
-            }
-
+            const blocked = this.blockUnauthorized;
             return {
                 allowed: false,
                 domain,
-                reason: `Domain not in whitelist: ${domain}`,
+                reason: blocked
+                    ? `Domain not in whitelist: ${domain}`
+                    : `Domain not in whitelist (blocking disabled): ${domain}`,
+                blocked,
             };
         } catch (error) {
             return {
                 allowed: false,
                 domain: url,
                 reason: `Invalid URL: ${error instanceof Error ? error.message : 'unknown'}`,
+                blocked: this.blockUnauthorized,
             };
         }
     }
@@ -118,10 +128,10 @@ export class NetworkGuard {
      */
     private extractRootDomain(hostname: string): string {
         // 移除端口号
-        const host = hostname.split(':')[0];
+        const host = hostname.split(':')[0].toLowerCase();
 
         // 处理 IP 地址
-        if (/^\d+\.\d+\.\d+\.\d+$/.test(host)) {
+        if (isIP(host)) {
             return host;
         }
 
@@ -130,10 +140,9 @@ export class NetworkGuard {
             return 'localhost';
         }
 
-        // 提取根域名（简化处理）
-        const parts = host.split('.');
-        if (parts.length >= 2) {
-            return parts.slice(-2).join('.');
+        const domain = psl.get(host);
+        if (domain) {
+            return domain;
         }
 
         return host;
@@ -157,8 +166,12 @@ export class NetworkGuard {
      * 用户授权域名（临时）
      */
     approveTemporarily(domain: string): void {
-        this.userApprovedDomains.add(domain.toLowerCase());
-        console.log(`[NetworkGuard] Temporarily approved domain: ${domain}`);
+        const normalized = this.normalizeDomain(domain);
+        if (!normalized) {
+            return;
+        }
+        this.userApprovedDomains.add(normalized);
+        console.log(`[NetworkGuard] Temporarily approved domain: ${normalized}`);
     }
 
     /**
@@ -194,6 +207,22 @@ export class NetworkGuard {
      */
     clearUserApprovals(): void {
         this.userApprovedDomains.clear();
+    }
+
+    private normalizeDomain(input: string): string {
+        const trimmed = input.trim().toLowerCase();
+        if (!trimmed) {
+            return '';
+        }
+        try {
+            if (trimmed.includes('://')) {
+                const parsed = new URL(trimmed);
+                return this.extractRootDomain(parsed.hostname);
+            }
+        } catch {
+            // fallback to raw input
+        }
+        return this.extractRootDomain(trimmed);
     }
 }
 

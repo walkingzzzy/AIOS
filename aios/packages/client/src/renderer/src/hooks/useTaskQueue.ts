@@ -1,8 +1,10 @@
 /**
  * useTaskQueue - 任务队列状态 Hook
+ * 支持 Electron IPC 和 Web (WebSocket) 两种模式
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import { isElectron } from '../utils/api';
 
 export interface TaskStatus {
     taskId: string;
@@ -69,6 +71,11 @@ export function useTaskQueue(): UseTaskQueueResult {
 
     // 刷新队列状态
     const refresh = useCallback(async () => {
+        if (!isElectron()) {
+            // Web 模式下暂不支持任务队列
+            setQueue({ pending: 0, running: 0, completed: 0, failed: 0, tasks: [] });
+            return;
+        }
         try {
             setLoading(true);
             setError(null);
@@ -86,6 +93,9 @@ export function useTaskQueue(): UseTaskQueueResult {
         priority?: 'critical' | 'high' | 'normal' | 'low' | 'background';
         type?: 'simple' | 'visual' | 'complex';
     }): Promise<SubmitResult> => {
+        if (!isElectron()) {
+            throw new Error('任务队列仅支持 Electron 模式');
+        }
         const result = await window.aios.submitTask(prompt, options);
         // 提交后刷新队列
         setTimeout(refresh, 100);
@@ -94,6 +104,9 @@ export function useTaskQueue(): UseTaskQueueResult {
 
     // 取消任务
     const cancel = useCallback(async (taskId: string) => {
+        if (!isElectron()) {
+            return { success: false, message: '任务队列仅支持 Electron 模式' };
+        }
         const result = await window.aios.cancelTask(taskId);
         if (result.success) {
             setTimeout(refresh, 100);
@@ -103,6 +116,9 @@ export function useTaskQueue(): UseTaskQueueResult {
 
     // 获取任务状态
     const getTaskStatus = useCallback(async (taskId: string): Promise<TaskStatus | null> => {
+        if (!isElectron()) {
+            return null;
+        }
         return await window.aios.getTaskStatus(taskId) as TaskStatus | null;
     }, []);
 
@@ -110,6 +126,10 @@ export function useTaskQueue(): UseTaskQueueResult {
     useEffect(() => {
         // 初始加载
         refresh();
+
+        if (!isElectron()) {
+            return;
+        }
 
         // 进度监听
         const unsubProgress = window.aios.onTaskProgress((event) => {
@@ -148,3 +168,4 @@ export function useTaskQueue(): UseTaskQueueResult {
         getTaskStatus,
     };
 }
+
