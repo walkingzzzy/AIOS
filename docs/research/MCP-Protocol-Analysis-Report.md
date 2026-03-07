@@ -1,8 +1,13 @@
 # MCP协议技术实现与工具集成机制深度分析报告
 
-**版本**: 2.0.0  
-**更新日期**: 2026-01-09  
-**状态**: 完成（深度搜索更新）  
+> **系统开发口径修订（2026-03-08）**
+> AIOS 统一定义为 **AI 原生操作系统 / 系统软件工程**。本文如提及桌面应用、Electron 客户端、应用适配器、App 安装等内容，除非明确标注为“原型期 / 兼容层 / 历史实现”，否则不再代表目标形态。
+> 当前最高约束：**系统镜像、系统服务、系统壳层、设备/能力抽象、权限与更新恢复**。
+
+
+**版本**: 2.0.0
+**更新日期**: 2026-01-09
+**状态**: 完成（深度搜索更新）
 **文档类型**: 📖 研究报告（参考文档，非正式规范）
 
 > [!NOTE]
@@ -152,7 +157,7 @@ server.setRequestHandler('tools/call', async (request) => {
 ```java
 @McpServer(name = "demo-server", version = "1.0.0")
 public class DemoMcpServer {
-    
+
     @McpTool(name = "add", description = "Add two numbers")
     public int add(@Param("a") int a, @Param("b") int b) {
         return a + b;
@@ -497,7 +502,7 @@ MCP缺乏标准化的服务器发现和注册机制。
 adapters:
   - id: org.aios.browser.chrome
     auto_discover: true  # 自动发现已安装软件
-    
+
   - id: mcp.filesystem    # 兼容MCP服务器
     bridge: mcp
     config:
@@ -526,7 +531,7 @@ adapters:
 |------|------|------|
 | -32768 ~ -32600 | JSON-RPC标准错误 | Parse error / Invalid Request |
 | -32001 ~ -32099 | AIOS协议错误 | Permission denied / Version mismatch |
-| -32100 ~ -32199 | AIOS业务错误 | App not running / File not found |
+| -32100 ~ -32199 | AIOS业务错误 | Compat provider not running / File not found |
 | -20000 ~ -1 | 第三方错误码保留 | Adapter自定义错误 |
 
 #### 5.2.4 增强安全模型
@@ -555,26 +560,26 @@ adapters:
   "name": "Chrome浏览器适配器",
   "version": "1.0.0",
   "protocol_version": "0.3.0",
-  
+
   "capabilities": {
     "streaming": true,
     "batch_operations": true
   },
-  
+
   "skills": [
     {
-      "id": "app.browser.open_url",
+      "id": "compat.browser.open_url",
       "name": "打开网址",
       "permission_level": "medium",
       "examples": ["打开京东首页", "访问 example.com"]
     }
   ],
-  
+
   "endpoints": {
     "rpc": "unix:///run/user/1000/aios/chrome.sock",
     "health": "/health"
   },
-  
+
   "signature": {
     "algorithm": "RS256",
     "value": "..."
@@ -717,6 +722,6 @@ AIOS 与 MCP 是**互补集成**的关系，各有侧重：
 
 ---
 
-**文档版本**: 2.0.0  
-**最后更新**: 2026-01-09  
+**文档版本**: 2.0.0
+**最后更新**: 2026-01-09
 **维护者**: AIOS Protocol Team

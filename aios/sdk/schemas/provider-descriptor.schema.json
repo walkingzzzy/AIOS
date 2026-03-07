@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aios/provider-descriptor.schema.json",
+  "title": "AIOS Provider Descriptor",
+  "type": "object",
+  "required": ["provider_id", "version", "kind", "capabilities"],
+  "properties": {
+    "provider_id": { "type": "string" },
+    "version": { "type": "string" },
+    "kind": { "type": "string" },
+    "display_name": { "type": "string" },
+    "owner": { "type": "string" },
+    "capabilities": { "type": "array", "items": { "type": "string" } },
+    "execution_location": { "enum": ["local", "sandbox", "attested_remote"] },
+    "sandbox_class": { "type": "string" },
+    "required_permissions": { "type": "array", "items": { "type": "string" } },
+    "resource_budget": { "type": "object" },
+    "timeout_policy": { "type": "string" },
+    "retry_policy": { "type": "string" },
+    "healthcheck": { "type": "object" },
+    "audit_tags": { "type": "array", "items": { "type": "string" } },
+    "taint_behavior": { "type": "string" },
+    "degradation_policy": { "type": "string" }
+  },
+  "additionalProperties": true
+}

@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aios/portal-handle.schema.json",
+  "title": "AIOS Portal Handle",
+  "type": "object",
+  "required": ["handle_id", "kind", "user_id", "session_id", "expiry"],
+  "properties": {
+    "handle_id": { "type": "string" },
+    "kind": { "enum": ["file_handle", "directory_handle", "window_handle", "screen_share_handle", "export_target_handle", "contact_ref", "remote_account_ref"] },
+    "user_id": { "type": "string" },
+    "session_id": { "type": "string" },
+    "scope": { "type": "object" },
+    "expiry": { "type": "string" },
+    "revocable": { "type": "boolean" }
+  },
+  "additionalProperties": true
+}

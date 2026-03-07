@@ -1,7 +1,12 @@
 # AIOS Protocol 依赖管理规范
 
-**版本**: 2.0.0  
-**更新日期**: 2026-01-09  
+> **系统开发口径修订（2026-03-08）**
+> AIOS 统一定义为 **AI 原生操作系统 / 系统软件工程**。本文如提及桌面应用、Electron 客户端、应用适配器、App 安装等内容，除非明确标注为“原型期 / 兼容层 / 历史实现”，否则不再代表目标形态。
+> 当前最高约束：**系统镜像、系统服务、系统壳层、设备/能力抽象、权限与更新恢复**。
+
+
+**版本**: 2.0.0
+**更新日期**: 2026-01-09
 **状态**: 战略规划阶段
 
 ---
@@ -15,15 +20,15 @@ dependency_types:
   # 协议依赖 - AIOS 协议版本要求
   protocol:
     description: "要求特定的 AIOS 协议版本"
-    
+
   # 工具依赖 - 依赖其他 AIOS 工具
   tool:
     description: "依赖其他 AIOS 工具提供的能力"
-    
+
   # 系统依赖 - 依赖系统组件
   system:
     description: "依赖操作系统组件或命令"
-    
+
   # 运行时依赖 - 依赖运行时环境
   runtime:
     description: "依赖特定的运行时环境"
@@ -46,7 +51,7 @@ dependencies:
   # 协议版本要求
   protocol:
     aios: ">=0.2.0 <1.0.0"
-    
+
   # 工具依赖
   tools:
     - id: "com.example.base-tool"
@@ -54,34 +59,34 @@ dependencies:
       optional: false
       capabilities_required:
         - "basic.operation"
-        
+
     - id: "org.community.helper"
       version: ">=2.0.0 <3.0.0"
       optional: true
       reason: "启用高级功能需要此工具"
-      
+
   # 系统依赖
   system:
     commands:
       - name: "gsettings"
         required: true
         check: "gsettings --version"
-        
+
       - name: "ffmpeg"
         required: false
         version: ">=4.0.0"
         check: "ffmpeg -version"
-        
+
     services:
       - name: "org.freedesktop.NetworkManager"
         type: "dbus"
         required: true
-        
+
     libraries:
       - name: "libgtk-4"
         version: ">=4.0.0"
         required: true
-        
+
   # 运行时依赖
   runtime:
     python:
@@ -127,7 +132,7 @@ MAJOR.MINOR.PATCH[-PRERELEASE][+BUILD]
 version_rules:
   - rule: "预发布版本仅在明确指定时匹配"
     example: ">=1.0.0-alpha 只匹配 1.0.0-alpha.x"
-    
+
   - rule: "正式版本不匹配预发布版本"
     example: ">=1.0.0 不匹配 1.0.0-beta"
 ```
@@ -289,7 +294,7 @@ tools:
   - id: "com.example.mytool"
     version: "2.0.0"
     checksum: "sha256:abc123..."
-    
+
   - id: "com.example.base-tool"
     version: "1.2.0"
     checksum: "sha256:def456..."
@@ -320,13 +325,13 @@ best_practices:
   - rule: "使用范围约束而非精确版本"
     good: ">=1.0.0 <2.0.0"
     bad: "1.2.3"
-    
+
   - rule: "标记可选依赖"
     example: "optional: true + reason 说明"
-    
+
   - rule: "检查系统依赖"
     example: "使用 check 命令验证"
-    
+
   - rule: "文档化依赖用途"
     example: "说明为什么需要此依赖"
 ```

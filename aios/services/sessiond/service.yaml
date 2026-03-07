@@ -1,0 +1,10 @@
+service_id: aios-sessiond
+plane: control
+role: session-memory-store
+inputs:
+  - session_events
+  - task_events
+outputs:
+  - session_state
+  - memory_refs
+  - recovery_refs

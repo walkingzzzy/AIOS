@@ -1,7 +1,12 @@
 # AIOS Protocol 协议生命周期规范
 
-**版本**: 2.0.0  
-**更新日期**: 2026-01-09  
+> **系统开发口径修订（2026-03-08）**
+> AIOS 统一定义为 **AI 原生操作系统 / 系统软件工程**。本文如提及桌面应用、Electron 客户端、应用适配器、App 安装等内容，除非明确标注为“原型期 / 兼容层 / 历史实现”，否则不再代表目标形态。
+> 当前最高约束：**系统镜像、系统服务、系统壳层、设备/能力抽象、权限与更新恢复**。
+
+
+**版本**: 2.0.0
+**更新日期**: 2026-01-09
 **状态**: 战略规划阶段
 
 ---
@@ -574,15 +579,15 @@ class AIOSClient:
         self.transport = transport
         self.state = "disconnected"
         self.session_id = None
-        
+
     async def connect(self):
         self.state = "connecting"
         await self.transport.connect()
         self.state = "connected"
-        
+
     async def initialize(self, capabilities=None):
         self.state = "initializing"
-        
+
         request = {
             "jsonrpc": "2.0",
             "id": "init-001",
@@ -596,43 +601,43 @@ class AIOSClient:
                 "capabilities": capabilities or {}
             }
         }
-        
+
         response = await self.transport.send(request)
-        
+
         if "error" in response:
             raise InitializationError(response["error"])
-            
+
         self.session_id = response["result"]["session"]["session_id"]
-        
+
         # 发送 initialized 通知
         await self.transport.send({
             "jsonrpc": "2.0",
             "method": "aios/initialized",
             "params": {}
         })
-        
+
         self.state = "ready"
         return response["result"]
-        
+
     async def shutdown(self, reason="client_exit"):
         self.state = "closing"
-        
+
         request = {
             "jsonrpc": "2.0",
             "id": "shutdown-001",
             "method": "aios/shutdown",
             "params": {"reason": reason}
         }
-        
+
         response = await self.transport.send(request)
         await self.transport.close()
-        
+
         self.state = "closed"
         return response.get("result")
 ```
 
 ---
 
-**文档版本**: 2.0.0  
-**最后更新**: 2026-01-09  
+**文档版本**: 2.0.0
+**最后更新**: 2026-01-09
 **维护者**: AIOS Protocol Team

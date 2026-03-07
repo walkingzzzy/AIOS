@@ -1,7 +1,12 @@
 # AIOS 项目深度分析报告
 
-**分析日期**: 2026-01-08  
-**项目版本**: AIOS Protocol v0.6.0  
+> **系统开发口径修订（2026-03-08）**
+> AIOS 统一定义为 **AI 原生操作系统 / 系统软件工程**。本文如提及桌面应用、Electron 客户端、应用适配器、App 安装等内容，除非明确标注为“原型期 / 兼容层 / 历史实现”，否则不再代表目标形态。
+> 当前最高约束：**系统镜像、系统服务、系统壳层、设备/能力抽象、权限与更新恢复**。
+
+
+**分析日期**: 2026-01-08
+**项目版本**: AIOS Protocol v0.6.0
 **分析范围**: 架构设计、代码实现、最佳实践、可借鉴之处
 
 ---
@@ -90,10 +95,10 @@ public protocol AIOSAdapter: AnyObject {
     var id: String { get }
     var name: String { get }
     var supportedActions: [String] { get }
-    
+
     func getToolDefinition() -> ToolDefinition
     func execute(action: String, params: [String: Any]) async throws -> ToolCallResult
-    
+
     // 诊断功能
     func diagnose() async -> [DiagnosticIssue]
     func requiredPermissions() -> [PermissionRequirement]
@@ -105,7 +110,7 @@ public protocol AIOSAdapter: AnyObject {
 ```swift
 public func route(input: String, hasScreenshot: Bool = false) -> RouteDecision? {
     let classification = classifier.classify(input, hasScreenshot: hasScreenshot)
-    
+
     switch classification.complexity {
     case .simple:
         return RouteDecision(tier: .fast, engine: fastEngine, ...)
@@ -215,7 +220,7 @@ project/
 
 ---
 
-**报告版本**: 1.0.0  
+**报告版本**: 1.0.0
 **分析日期**: 2026-01-08
 
 
@@ -229,14 +234,14 @@ project/
 open class BaseAdapter: AIOSAdapter {
     public let id: String
     public let name: String
-    
+
     open func execute(action: String, params: [String: Any]) async throws -> ToolCallResult {
         throw AdapterError.actionNotSupported(action)
     }
-    
+
     open func diagnose() async -> [DiagnosticIssue] {
         var issues: [DiagnosticIssue] = []
-        
+
         // 检查权限
         for permission in requiredPermissions() {
             if !permission.isSatisfied {
@@ -247,7 +252,7 @@ open class BaseAdapter: AIOSAdapter {
                 ))
             }
         }
-        
+
         return issues
     }
 }
@@ -260,12 +265,12 @@ public final class TCCManager {
     public var hasAccessibilityPermission: Bool {
         AXIsProcessTrusted()
     }
-    
+
     public func requestAccessibilityPermission() {
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary
         AXIsProcessTrustedWithOptions(options)
     }
-    
+
     public func openPrivacySettings(for service: PrivacyService) {
         let urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_\(service.rawValue)"
         if let url = URL(string: urlString) {
@@ -283,7 +288,7 @@ func execute(action: Action) async throws -> Result {
     if let result = try? await apiAdapter.execute(action) {
         return result
     }
-    
+
     // 2. 视觉控制兜底
     if visionAdapter.canAutoExecute {
         return try await visionAdapter.execute(action)  // Sprint 8+
@@ -413,7 +418,7 @@ from aios import AIOSAdapter, capability
 
 @AIOSAdapter(id="org.example.mytool", name="我的工具", version="1.0.0")
 class MyToolAdapter:
-    
+
     @capability(id="do_something", name="执行操作", risk_level="medium")
     async def do_something(self, param1: str, param2: int = 50) -> dict:
         result = await self._internal_logic(param1, param2)

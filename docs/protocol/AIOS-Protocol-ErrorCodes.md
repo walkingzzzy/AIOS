@@ -1,7 +1,12 @@
 # AIOS Protocol 错误码规范
 
-**版本**: 2.0.0  
-**更新日期**: 2026-01-09  
+> **系统开发口径修订（2026-03-08）**
+> AIOS 统一定义为 **AI 原生操作系统 / 系统软件工程**。本文如提及桌面应用、Electron 客户端、应用适配器、App 安装等内容，除非明确标注为“原型期 / 兼容层 / 历史实现”，否则不再代表目标形态。
+> 当前最高约束：**系统镜像、系统服务、系统壳层、设备/能力抽象、权限与更新恢复**。
+
+
+**版本**: 2.0.0
+**更新日期**: 2026-01-09
 **状态**: 战略规划阶段
 
 ---
@@ -89,8 +94,8 @@
 
 | 错误码 | 错误ID | 名称 | 说明 |
 |-------|--------|------|------|
-| -32100 | AIOS-APP-NOT-RUNNING | App not running | 应用未运行 |
-| -32101 | AIOS-APP-NOT-INSTALLED | App not installed | 应用未安装 |
+| -32100 | AIOS-COMPAT-NOT-RUNNING | Compat provider not running | 应用未运行 |
+| -32101 | AIOS-COMPAT-NOT-INSTALLED | Compat provider not installed | 应用未安装 |
 | -32102 | AIOS-FILE-NOT-FOUND | File not found | 文件不存在 |
 | -32103 | AIOS-INVALID-FILE-TYPE | Invalid file type | 文件类型错误 |
 | -32104 | AIOS-SESSION-EXPIRED | Session expired | 会话已过期 |
@@ -165,7 +170,7 @@ errors:
       name: "Custom error"
       description: "自定义错误说明"
       retryable: false
-      
+
     - code: -20002
       id: "MYTOOL-002"
       name: "Another error"
@@ -216,7 +221,7 @@ error_templates:
   AIOS-PERM-DENIED:
     en: "Permission denied: {permission_id}. Reason: {reason}"
     zh-CN: "权限被拒绝: {permission_id}。原因: {reason}"
-    
+
   AIOS-TIMEOUT:
     en: "Execution timeout after {timeout_ms}ms"
     zh-CN: "执行超时，已等待 {timeout_ms} 毫秒"
@@ -224,6 +229,6 @@ error_templates:
 
 ---
 
-**文档版本**: 2.0.0  
-**最后更新**: 2026-01-09  
+**文档版本**: 2.0.0
+**最后更新**: 2026-01-09
 **维护者**: AIOS Protocol Team

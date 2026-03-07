@@ -1,0 +1,14 @@
+id: qemu-x86_64-dev
+arch: x86_64
+boot: uefi
+runtime_profile: default-local
+route_profile: default-route
+services:
+  - aios-agentd
+  - aios-runtimed
+  - aios-sessiond
+  - aios-policyd
+  - aios-deviced
+  - aios-updated
+recovery_enabled: true
+trusted_offload_default: disabled

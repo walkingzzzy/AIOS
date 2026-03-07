@@ -1,0 +1,9 @@
+profile_id: default-policy
+require_approval:
+  - compat.ui.input.inject
+  - system.file.bulk_delete
+  - device.capture.microphone.record
+deny:
+  - system.security.disable_policy
+remote_offload_default: disabled
+taint_mode: strict

@@ -1,8 +1,13 @@
 # AIOS 协议开放化与完善方案
 
-**版本**: 1.0.0  
-**更新日期**: 2026-01-07  
-**状态**: 深度研究提案  
+> **系统开发口径修订（2026-03-08）**
+> AIOS 统一定义为 **AI 原生操作系统 / 系统软件工程**。本文如提及桌面应用、Electron 客户端、应用适配器、App 安装等内容，除非明确标注为“原型期 / 兼容层 / 历史实现”，否则不再代表目标形态。
+> 当前最高约束：**系统镜像、系统服务、系统壳层、设备/能力抽象、权限与更新恢复**。
+
+
+**版本**: 1.0.0
+**更新日期**: 2026-01-07
+**状态**: 深度研究提案
 **文档类型**: 💡 改进提案（已部分采纳）
 
 > [!IMPORTANT]
@@ -225,9 +230,9 @@ AIOS协议基于JSON-RPC 2.0，与MCP兼容，但增加AIOS特有扩展：
   "id": "req-001",
   "method": "aios/capability.invoke",
   "params": {
-    "capability_id": "app.browser.open_url",
+    "capability_id": "compat.browser.open_url",
     "arguments": { "url": "https://example.com" },
-    
+
     // AIOS扩展字段
     "aios": {
       "preferred_adapter_id": "org.aios.browser.chrome",
@@ -253,7 +258,7 @@ from aios import AIOSAdapter, capability
     version="1.0.0"
 )
 class MyAppAdapter:
-    
+
     @capability(
         id="do_something",
         name="执行操作",
@@ -431,7 +436,7 @@ bridges:
           read_file: low
           write_file: high
           delete_file: critical
-          
+
       - id: mcp.github
         url: "https://mcp.github.example.com"
         auth:
@@ -675,6 +680,6 @@ AIOS独有的系统控制能力：
 
 ---
 
-**文档版本**: 1.0.0  
-**最后更新**: 2026-01-07  
+**文档版本**: 1.0.0
+**最后更新**: 2026-01-07
 **维护者**: AIOS Protocol Team

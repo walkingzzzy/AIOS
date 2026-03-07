@@ -1,0 +1,11 @@
+service_id: aios-policyd
+plane: trust
+role: policy-engine
+inputs:
+  - task_plan
+  - capability_request
+  - provider_resolution
+outputs:
+  - approval_decision
+  - execution_token
+  - policy_events

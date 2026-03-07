@@ -1,0 +1,11 @@
+service_id: aios-runtimed
+plane: runtime
+role: inference-runtime
+inputs:
+  - runtime_request
+  - runtime_profile
+  - route_profile
+outputs:
+  - inference_result
+  - route_decision
+  - budget_events

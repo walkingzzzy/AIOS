@@ -1,0 +1,22 @@
+profile_id: default-local
+scope: system
+default_backend: local-cpu
+allowed_backends:
+  - local-cpu
+  - local-gpu
+  - attested-remote
+local_model_pool:
+  - qwen-local-14b
+remote_model_pool:
+  - gpt-4.1
+embedding_backend: local-embedding
+rerank_backend: local-reranker
+cpu_fallback: true
+memory_budget_mb: 6144
+kv_cache_budget_mb: 2048
+timeout_ms: 30000
+max_concurrency: 4
+max_parallel_models: 2
+offload_policy: manual-only
+degradation_policy: fallback-local-cpu
+observability_level: standard

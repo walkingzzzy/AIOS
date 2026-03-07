@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aios/runtime-profile.schema.json",
+  "title": "AIOS Runtime Profile",
+  "type": "object",
+  "required": ["profile_id", "scope", "default_backend", "allowed_backends", "cpu_fallback"],
+  "properties": {
+    "profile_id": { "type": "string" },
+    "scope": { "enum": ["system", "organization", "user", "workspace", "session", "task"] },
+    "default_backend": { "type": "string" },
+    "allowed_backends": { "type": "array", "items": { "type": "string" } },
+    "local_model_pool": { "type": "array", "items": { "type": "string" } },
+    "remote_model_pool": { "type": "array", "items": { "type": "string" } },
+    "cpu_fallback": { "type": "boolean" },
+    "memory_budget_mb": { "type": "integer", "minimum": 0 },
+    "kv_cache_budget_mb": { "type": "integer", "minimum": 0 },
+    "timeout_ms": { "type": "integer", "minimum": 1 },
+    "offload_policy": { "enum": ["disabled", "manual-only", "allowed-low-sensitivity", "allowed-by-policy"] }
+  },
+  "additionalProperties": true
+}

@@ -1,0 +1,10 @@
+[Unit]
+Description=AIOS Session Service
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/aios/sessiond
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

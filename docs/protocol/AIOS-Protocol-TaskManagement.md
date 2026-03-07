@@ -1,7 +1,12 @@
 # AIOS Protocol 任务管理规范
 
-**版本**: 2.0.0  
-**更新日期**: 2026-01-09  
+> **系统开发口径修订（2026-03-08）**
+> AIOS 统一定义为 **AI 原生操作系统 / 系统软件工程**。本文如提及桌面应用、Electron 客户端、应用适配器、App 安装等内容，除非明确标注为“原型期 / 兼容层 / 历史实现”，否则不再代表目标形态。
+> 当前最高约束：**系统镜像、系统服务、系统壳层、设备/能力抽象、权限与更新恢复**。
+
+
+**版本**: 2.0.0
+**更新日期**: 2026-01-09
 **状态**: 战略规划阶段
 
 ---
@@ -112,7 +117,7 @@
   "id": "1",
   "method": "aios/task.create",
   "params": {
-    "capability_id": "app.browser.search_and_compare",
+    "capability_id": "compat.browser.search_and_compare",
     "arguments": {
       "query": "无线耳机",
       "sites": ["jd.com", "taobao.com"]
@@ -183,7 +188,7 @@
   "id": "2",
   "result": {
     "task_id": "task-001",
-    "capability_id": "app.browser.search_and_compare",
+    "capability_id": "compat.browser.search_and_compare",
     "status": "working",
     "progress": {
       "percent": 45,
@@ -211,7 +216,7 @@
   "params": {
     "filter": {
       "status": ["pending", "working"],
-      "capability_id": "app.browser.*"
+      "capability_id": "compat.browser.*"
     },
     "pagination": {
       "limit": 10,
@@ -605,7 +610,7 @@ data: {"task_id": "task-001", "result": {...}, "artifacts": [...]}
     "code": -32005,
     "message": "Timeout",
     "data": {
-      "capability_id": "app.browser.search_and_compare",
+      "capability_id": "compat.browser.search_and_compare",
       "timeout_ms": 30000,
       "elapsed_ms": 30500
     }

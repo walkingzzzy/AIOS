@@ -1,7 +1,12 @@
 # AIOS Protocol 工具描述规范
 
-**版本**: 2.0.0  
-**更新日期**: 2026-01-09  
+> **系统开发口径修订（2026-03-08）**
+> AIOS 统一定义为 **AI 原生操作系统 / 系统软件工程**。本文如提及桌面应用、Electron 客户端、应用适配器、App 安装等内容，除非明确标注为“原型期 / 兼容层 / 历史实现”，否则不再代表目标形态。
+> 当前最高约束：**系统镜像、系统服务、系统壳层、设备/能力抽象、权限与更新恢复**。
+
+
+**版本**: 2.0.0
+**更新日期**: 2026-01-09
 **状态**: 战略规划阶段
 
 ---
@@ -48,15 +53,15 @@ tool:
   description: "工具的详细描述"
   license: "MIT"
   homepage: "https://example.org/mytool"
-  
+
   # 工具类型
-  type: "application"  # system | application | browser | professional | custom
-  
+  type: "compat"  # system | application | browser | professional | custom
+
   # 分类标签
   categories:
     - "Productivity"
     - "Office"
-  
+
   # 图标
   icon: "mytool"  # 图标名称或路径
 
@@ -64,7 +69,7 @@ tool:
   system_prompt: |
     你是一个专业的办公助手。在处理文档时，请优先使用 Markdown 格式。
     如果遇到不确定的操作，请先询问用户。
-  
+
   # 支持的平台
   platforms:
     - os: "linux"
@@ -78,7 +83,7 @@ capabilities:
   - id: "system.example.action_name"
     name: "操作名称"
     description: "操作的详细描述"
-    
+
     # 输入参数 (JSON Schema)
     input:
       type: object
@@ -92,7 +97,7 @@ capabilities:
           maximum: 100
           default: 50
       required: ["param1"]
-    
+
     # 输出格式 (JSON Schema)
     output:
       type: object
@@ -103,11 +108,11 @@ capabilities:
           type: string
         data:
           type: object
-    
+
     # 所需权限
     permissions:
       - "aios.permission.category.resource.action"
-    
+
     # AI 学习示例
     examples:
       - user_intent: "用户可能说的话"
@@ -115,7 +120,7 @@ capabilities:
           capability_id: "system.example.action_name"
           arguments:
             param1: "示例值"
-    
+
     # 能力选项
     options:
       async: false           # 是否异步执行
@@ -138,12 +143,12 @@ dependencies:
       required: true
     - name: "dconf"
       required: false
-  
+
   # 运行时依赖
   runtime:
     - name: "python3"
       version: ">=3.9"
-  
+
   # 其他工具依赖
   tools:
     - id: "org.aios.system.dbus"
@@ -153,17 +158,17 @@ dependencies:
 adapter:
   # 适配器类型
   type: "dbus"  # dbus | cli | api | python | native | wasm
-  
+
   # 类型特定配置
   config:
     # D-Bus 配置
     service: "org.freedesktop.portal.Desktop"
     interface: "org.freedesktop.portal.Settings"
-    
+
     # CLI 配置
     # command: "/usr/bin/mytool"
     # args_template: "--action {action} --param {param}"
-    
+
     # Python 配置
     # module: "mytool.adapter"
     # class: "MyToolAdapter"
@@ -175,7 +180,7 @@ visualization:
       supported: true
     - type: "step_panel"
       supported: true
-  
+
   pre_action_notify:
     enabled: true
     delay_ms: 500
@@ -225,7 +230,7 @@ tool:
 | 类型 | 说明 | 典型沙箱 |
 |------|------|---------|
 | `system` | 系统功能 | L0 或 L1 |
-| `application` | 桌面应用 | L1 或 L2 |
+| `compat` | 兼容层 | L1 或 L2 |
 | `browser` | 浏览器 | L2 |
 | `professional` | 专业软件 | L1 或 L2 |
 | `custom` | 自定义 | L2 |
@@ -333,7 +338,7 @@ examples:
       arguments:
         path: "/usr/share/backgrounds/blue.jpg"
         mode: "fill"
-  
+
   - user_intent: "把这张图片设为桌面背景"
     call:
       capability_id: "system.desktop.set_wallpaper"
@@ -358,7 +363,7 @@ permissions:
     name: "读取主目录"
     description: "读取您的主目录中的文件以查找壁纸图片"
     risk_level: "low"
-  
+
   - id: "aios.permission.desktop.wallpaper.write"
     name: "修改壁纸"
     description: "更改您的桌面壁纸设置"
@@ -390,11 +395,11 @@ dependencies:
     - name: "python3"
       required: true
       version: ">=3.9"
-  
+
   runtime:
     - name: "gi"
       package: "python3-gi"
-  
+
   tools:
     - id: "org.aios.system.dbus"
       version: ">=1.0"
@@ -473,7 +478,7 @@ from aios import AIOSAdapter, capability
     version="1.0.0"
 )
 class MyToolAdapter:
-    
+
     @capability(
         id="do_something",
         name="执行操作",
@@ -484,7 +489,7 @@ class MyToolAdapter:
         """执行操作的具体实现"""
         result = await self._internal_logic(param1, param2)
         return {"success": True, "data": result}
-    
+
     async def _internal_logic(self, param1, param2):
         # 实际业务逻辑
         return f"处理了 {param1}，参数为 {param2}"
@@ -636,7 +641,7 @@ tool:
   description: "管理 GNOME 桌面壁纸"
   type: "system"
   categories: ["System", "Desktop"]
-  
+
   platforms:
     - os: "linux"
       distributions: ["ubuntu", "debian"]
@@ -646,7 +651,7 @@ capabilities:
   - id: "system.desktop.set_wallpaper"
     name: "设置壁纸"
     description: "将指定图片设置为桌面壁纸"
-    
+
     input:
       type: object
       properties:
@@ -659,7 +664,7 @@ capabilities:
           default: "zoom"
           description: "壁纸显示模式"
       required: ["path"]
-    
+
     output:
       type: object
       properties:
@@ -674,30 +679,30 @@ capabilities:
               type: string
             current_path:
               type: string
-    
+
     permissions:
       - "aios.permission.filesystem.read"
       - "aios.permission.desktop.wallpaper.write"
-    
+
     examples:
       - user_intent: "帮我把壁纸换成蓝色的"
         call:
           capability_id: "system.desktop.set_wallpaper"
           arguments:
             path: "/usr/share/backgrounds/blue.jpg"
-      
+
       - user_intent: "把这张图片设为桌面背景"
         call:
           capability_id: "system.desktop.set_wallpaper"
           arguments:
             path: "${context.mentioned_file}"
-  
+
   - id: "system.desktop.get_wallpaper"
     name: "获取当前壁纸"
     description: "获取当前桌面壁纸的路径"
-    
+
     input: {}
-    
+
     output:
       type: object
       properties:
@@ -705,7 +710,7 @@ capabilities:
           type: string
         mode:
           type: string
-    
+
     permissions:
       - "aios.permission.desktop.wallpaper.read"
 
@@ -714,12 +719,12 @@ permissions:
     name: "文件读取"
     description: "读取壁纸图片文件"
     risk_level: "low"
-  
+
   - id: "aios.permission.desktop.wallpaper.read"
     name: "读取壁纸设置"
     description: "读取当前壁纸设置"
     risk_level: "public"
-  
+
   - id: "aios.permission.desktop.wallpaper.write"
     name: "修改壁纸"
     description: "更改桌面壁纸"

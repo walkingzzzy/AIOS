@@ -1,6 +1,11 @@
 # 竞品技术借鉴分析报告
 
-**分析日期**: 2026-01-08  
+> **系统开发口径修订（2026-03-08）**
+> AIOS 统一定义为 **AI 原生操作系统 / 系统软件工程**。本文如提及桌面应用、Electron 客户端、应用适配器、App 安装等内容，除非明确标注为“原型期 / 兼容层 / 历史实现”，否则不再代表目标形态。
+> 当前最高约束：**系统镜像、系统服务、系统壳层、设备/能力抽象、权限与更新恢复**。
+
+
+**分析日期**: 2026-01-08
 **目标**: 从竞品中提取值得 AIOS 项目借鉴的技术和架构
 
 ---
@@ -201,7 +206,7 @@ struct Crew {
     let agents: [AgentRole]
     let tasks: [Task]
     let executionMode: ExecutionMode
-    
+
     func execute() async throws -> CrewResult {
         switch executionMode {
         case .sequential:
@@ -235,11 +240,11 @@ struct PromptInjectionGuard {
         "you are now",
         "new system prompt"
     ]
-    
+
     static func check(screenshot: NSImage) async -> [InjectionRisk] {
         var risks: [InjectionRisk] = []
         let text = await OCR.extractText(from: screenshot)
-        
+
         for pattern in suspiciousPatterns {
             if text.lowercased().contains(pattern) {
                 risks.append(.suspiciousText(pattern))

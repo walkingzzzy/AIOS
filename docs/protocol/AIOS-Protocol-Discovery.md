@@ -1,7 +1,12 @@
 # AIOS Protocol 发现机制规范
 
-**版本**: 2.0.0  
-**更新日期**: 2026-01-09  
+> **系统开发口径修订（2026-03-08）**
+> AIOS 统一定义为 **AI 原生操作系统 / 系统软件工程**。本文如提及桌面应用、Electron 客户端、应用适配器、App 安装等内容，除非明确标注为“原型期 / 兼容层 / 历史实现”，否则不再代表目标形态。
+> 当前最高约束：**系统镜像、系统服务、系统壳层、设备/能力抽象、权限与更新恢复**。
+
+
+**版本**: 2.0.0
+**更新日期**: 2026-01-09
 **状态**: 战略规划阶段
 
 ---
@@ -53,7 +58,7 @@
     "homepage": "https://aios.example.com/adapters/chrome",
     "license": "MIT"
   },
-  
+
   "capabilities": {
     "streaming": true,
     "batch_operations": true,
@@ -61,10 +66,10 @@
     "push_notifications": false,
     "state_transition_history": true
   },
-  
+
   "skills": [
     {
-      "id": "app.browser.open_url",
+      "id": "compat.browser.open_url",
       "name": "打开网址",
       "description": "在浏览器中打开指定的 URL",
       "permission_level": "medium",
@@ -81,7 +86,7 @@
       }
     },
     {
-      "id": "app.browser.search",
+      "id": "compat.browser.search",
       "name": "搜索",
       "description": "在搜索引擎中搜索关键词",
       "permission_level": "medium",
@@ -91,25 +96,25 @@
       ]
     },
     {
-      "id": "app.browser.extract_content",
+      "id": "compat.browser.extract_content",
       "name": "提取页面内容",
       "description": "提取当前页面的文本内容",
       "permission_level": "low"
     }
   ],
-  
+
   "authentication": {
     "required": false,
     "schemes": []
   },
-  
+
   "endpoints": {
     "rpc": "unix:///run/user/1000/aios/chrome.sock",
     "http": "http://localhost:9527/adapters/chrome",
     "health": "/health",
     "metrics": "/metrics"
   },
-  
+
   "requirements": {
     "software": {
       "name": "Google Chrome",
@@ -124,11 +129,11 @@
       {"name": "chrome-devtools-protocol", "version": ">=1.0"}
     ]
   },
-  
+
   "extensions": [
     "urn:aios:ext:priority:1.0"
   ],
-  
+
   "signature": {
     "algorithm": "RS256",
     "key_id": "aios-adapter-key-001",
@@ -276,7 +281,7 @@ JWS 签名，用于验证 Adapter Card 的真实性：
   "method": "aios/registry.search",
   "params": {
     "query": "browser",
-    "type": "application",
+    "type": "compat",
     "capabilities": ["streaming"],
     "limit": 10
   }
@@ -383,17 +388,17 @@ from cryptography.hazmat.primitives.asymmetric import padding
 def sign_adapter_card(adapter_card: dict, private_key) -> str:
     # 移除现有签名
     card_copy = {k: v for k, v in adapter_card.items() if k != 'signature'}
-    
+
     # 规范化 JSON
     payload = json.dumps(card_copy, sort_keys=True, separators=(',', ':'))
-    
+
     # 签名
     signature = private_key.sign(
         payload.encode(),
         padding.PKCS1v15(),
         hashes.SHA256()
     )
-    
+
     return base64.urlsafe_b64encode(signature).decode()
 ```
 
@@ -404,13 +409,13 @@ def verify_adapter_card(adapter_card: dict, public_key) -> bool:
     signature = adapter_card.get('signature', {})
     if not signature:
         return False
-    
+
     # 移除签名字段
     card_copy = {k: v for k, v in adapter_card.items() if k != 'signature'}
-    
+
     # 规范化 JSON
     payload = json.dumps(card_copy, sort_keys=True, separators=(',', ':'))
-    
+
     # 验证
     try:
         public_key.verify(

@@ -1,7 +1,12 @@
 # AIOS Protocol 传输层规范
 
-**版本**: 2.0.0  
-**更新日期**: 2026-01-09  
+> **系统开发口径修订（2026-03-08）**
+> AIOS 统一定义为 **AI 原生操作系统 / 系统软件工程**。本文如提及桌面应用、Electron 客户端、应用适配器、App 安装等内容，除非明确标注为“原型期 / 兼容层 / 历史实现”，否则不再代表目标形态。
+> 当前最高约束：**系统镜像、系统服务、系统壳层、设备/能力抽象、权限与更新恢复**。
+
+
+**版本**: 2.0.0
+**更新日期**: 2026-01-09
 **状态**: 战略规划阶段
 
 ---
@@ -257,7 +262,7 @@ mcp_bridges:
       read_file: low
       write_file: high
       delete_file: critical
-      
+
   - id: mcp.github
     url: "https://mcp.github.example.com"
     transport: http
@@ -434,7 +439,7 @@ aios/<namespace>.<action>
 | `-32008` | Platform not supported | 平台不支持 |
 | `-32009` | Version mismatch | 版本不兼容 |
 | `-32010` | Sandbox violation | 沙箱违规 |
-| `-32100` | App not running | 应用未运行 |
+| `-32100` | Compat provider not running | 应用未运行 |
 | `-32102` | File not found | 文件不存在 |
 | `-32104` | Session expired | 会话过期 |
 | `-32106` | Task not found | 任务不存在 |
@@ -553,6 +558,6 @@ data: {"task_id": "task-001", "result": {...}}
 
 ---
 
-**文档版本**: 2.0.0  
-**最后更新**: 2026-01-09  
+**文档版本**: 2.0.0
+**最后更新**: 2026-01-09
 **维护者**: AIOS Protocol Team

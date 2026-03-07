@@ -1,8 +1,13 @@
 # AIOS 便捷AI工具调用机制设计方案
 
-**版本**: 2.0.0  
-**更新日期**: 2026-01-09  
-**状态**: 提案  
+> **系统开发口径修订（2026-03-08）**
+> AIOS 统一定义为 **AI 原生操作系统 / 系统软件工程**。本文如提及桌面应用、Electron 客户端、应用适配器、App 安装等内容，除非明确标注为“原型期 / 兼容层 / 历史实现”，否则不再代表目标形态。
+> 当前最高约束：**系统镜像、系统服务、系统壳层、设备/能力抽象、权限与更新恢复**。
+
+
+**版本**: 2.0.0
+**更新日期**: 2026-01-09
+**状态**: 提案
 **文档类型**: 💡 改进提案（设计参考）
 
 > [!NOTE]
@@ -171,7 +176,7 @@ AIOS Daemon自动发现系统中已安装的软件：
         "id": "org.aios.office.libreoffice",
         "score": 0.95,
         "reason": "LibreOffice Draw 支持 PDF 编辑",
-        "capability_ids": ["app.office.open_pdf", "app.office.edit_pdf", "app.office.export_pdf"]
+        "capability_ids": ["compat.office.open_pdf", "compat.office.edit_pdf", "compat.office.export_pdf"]
       },
       {
         "id": "mcp.pdf_tools",
@@ -282,7 +287,7 @@ AIOS Daemon自动发现系统中已安装的软件：
         "grants": [
           "system.audio.*",
           "system.display.*",
-          "app.browser.open_url"
+          "compat.browser.open_url"
         ],
         "duration": "session"  // 会话期间有效
       },
@@ -399,7 +404,7 @@ mcp_servers:
     idle_timeout: 300     # 5分钟无调用则停止
     restart_on_failure: true
     max_restarts: 3
-    
+
   github:
     command: "uvx"
     args: ["mcp-server-github"]
@@ -447,7 +452,7 @@ adapter:
 auto_discover:
   dbus: true          # 自动发现D-Bus接口
   cli: true           # 自动发现CLI命令
-  
+
 # 手动定义的能力
 capabilities:
   - id: org.aios.myapp.do_something
@@ -482,16 +487,16 @@ async with AIOSClient() as client:
         capability_id="system.audio.set_volume",
         arguments={"level": 50}
     )
-    
+
     # 自然语言调用
     result = await client.natural("把音量调到50%")
-    
+
     # 批量调用
     results = await client.batch([
         {"capability_id": "system.audio.set_volume", "arguments": {"level": 50}},
         {"capability_id": "system.display.set_brightness", "arguments": {"level": 70}},
     ])
-    
+
     # 订阅事件
     async for event in client.subscribe("system.power.*"):
         print(f"电源事件: {event}")
@@ -557,7 +562,7 @@ async with AIOSClient() as client:
   "tool_id": "org.aios.browser.chrome",
   "summary": "Chrome浏览器控制",           // 始终加载 (~50 tokens)
   "capabilities_count": 15,
-  
+
   // 按需加载
   "capabilities": "lazy",                   // 调用时才加载
   "examples": "lazy",                       // 调用时才加载
@@ -643,6 +648,6 @@ AIOS 通过桥接层与 MCP 互补集成：
 
 ---
 
-**文档版本**: 2.0.0  
-**最后更新**: 2026-01-09  
+**文档版本**: 2.0.0
+**最后更新**: 2026-01-09
 **维护者**: AIOS Protocol Team

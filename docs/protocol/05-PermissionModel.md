@@ -1,7 +1,12 @@
 # AIOS Protocol 权限模型
 
-**版本**: 2.0.0  
-**更新日期**: 2026-01-09  
+> **系统开发口径修订（2026-03-08）**
+> AIOS 统一定义为 **AI 原生操作系统 / 系统软件工程**。本文如提及桌面应用、Electron 客户端、应用适配器、App 安装等内容，除非明确标注为“原型期 / 兼容层 / 历史实现”，否则不再代表目标形态。
+> 当前最高约束：**系统镜像、系统服务、系统壳层、设备/能力抽象、权限与更新恢复**。
+
+
+**版本**: 2.0.0
+**更新日期**: 2026-01-09
 **状态**: 战略规划阶段
 
 ---
@@ -10,7 +15,7 @@
 
 本文档定义 AIOS Protocol 的权限模型，包括权限体系、能力令牌、授权流程。
 
-> **相关文档**: 
+> **相关文档**:
 > - [任务管理规范](AIOS-Protocol-TaskManagement.md) - `auth_required` 状态处理
 > - [协议互操作性](AIOS-Protocol-Interoperability.md) - 跨协议权限增强
 
@@ -92,14 +97,14 @@ aios.permission.<category>.<resource>.<action>
 | `aios.permission.network.internet.connect` | medium | 连接互联网 |
 | `aios.permission.network.internet.listen` | high | 监听网络端口 |
 
-#### application (应用)
+#### compat（兼容层）
 
 | 权限 | 级别 | 说明 |
 |------|------|------|
-| `aios.permission.application.launch` | medium | 启动应用 |
-| `aios.permission.application.control` | high | 控制应用 |
-| `aios.permission.application.data.read` | high | 读取应用数据 |
-| `aios.permission.application.data.write` | critical | 修改应用数据 |
+| `aios.permission.compat.launch` | medium | 启动应用 |
+| `aios.permission.compat.control` | high | 控制应用 |
+| `aios.permission.compat.data.read` | high | 读取应用数据 |
+| `aios.permission.compat.data.write` | critical | 修改应用数据 |
 
 #### desktop (桌面)
 
@@ -212,7 +217,7 @@ aios.permission.<category>.<resource>.<action>
 {
   "method": "aios/permission.request",
   "params": {
-    "capability_id": "app.browser.open_url",
+    "capability_id": "compat.browser.open_url",
     "permissions": [{
       "level": "low",
       "scope": "https://jd.com/*",
@@ -313,7 +318,7 @@ aios.permission.<category>.<resource>.<action>
 {
   "method": "aios/permission.revoke",
   "params": {
-    "capability_id": "app.browser.open_url"  // 撤销该能力所有权限
+    "capability_id": "compat.browser.open_url"  // 撤销该能力所有权限
   }
 }
 ```
@@ -341,7 +346,7 @@ aios.permission.<category>.<resource>.<action>
   "event": "permission.granted",
   "session_id": "sess-001",
   "user_id": "user-001",
-  "capability_id": "app.browser.open_url",
+  "capability_id": "compat.browser.open_url",
   "tool_id": "org.aios.browser.chrome",
   "permission_id": "aios.permission.network.internet.connect",
   "scope": "https://jd.com/*",

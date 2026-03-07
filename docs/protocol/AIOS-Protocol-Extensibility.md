@@ -1,7 +1,12 @@
 # AIOS Protocol 可扩展性框架
 
-**版本**: 2.0.0  
-**更新日期**: 2026-01-09  
+> **系统开发口径修订（2026-03-08）**
+> AIOS 统一定义为 **AI 原生操作系统 / 系统软件工程**。本文如提及桌面应用、Electron 客户端、应用适配器、App 安装等内容，除非明确标注为“原型期 / 兼容层 / 历史实现”，否则不再代表目标形态。
+> 当前最高约束：**系统镜像、系统服务、系统壳层、设备/能力抽象、权限与更新恢复**。
+
+
+**版本**: 2.0.0
+**更新日期**: 2026-01-09
 **状态**: 战略规划阶段
 
 ---
@@ -71,7 +76,7 @@ capabilities:
       version: "1.0"
     - id: "aios.permission.request" # 权限请求
       version: "1.0"
-      
+
   # 可选能力 (工具自行决定是否支持)
   optional:
     - id: "aios.visual.overlay"     # 可视化覆盖层
@@ -80,7 +85,7 @@ capabilities:
     - id: "aios.visual.recording"   # 操作录制
       version: "1.0"
       supported: false
-      
+
   # 扩展能力 (第三方定义，使用反向域名)
   extensions:
     - id: "com.blender.scripting"   # Blender 脚本能力
@@ -156,17 +161,17 @@ capabilities:
 {
   "$schema": "https://aios-protocol.org/schemas/tool/v1",
   "$id": "https://aios-protocol.org/schemas/tool/v1/tool.schema.json",
-  
+
   "type": "object",
   "required": ["aios_version", "tool", "capabilities"],
-  
+
   "properties": {
     "aios_version": {
       "type": "string",
       "pattern": "^\\d+\\.\\d+$",
       "description": "协议版本 (MAJOR.MINOR)"
     },
-    
+
     "tool": {
       "type": "object",
       "required": ["id", "name", "version"],
@@ -186,18 +191,18 @@ capabilities:
       },
       "additionalProperties": true
     },
-    
+
     "capabilities": {
       "type": "array",
       "items": { "$ref": "#/$defs/capability" }
     },
-    
+
     "permissions": {
       "type": "array",
       "items": { "$ref": "#/$defs/permission" }
     }
   },
-  
+
   "$defs": {
     "capability": {
       "type": "object",
@@ -213,7 +218,7 @@ capabilities:
       },
       "additionalProperties": true
     },
-    
+
     "permission": {
       "type": "object",
       "required": ["id", "risk_level"],
@@ -229,7 +234,7 @@ capabilities:
       "additionalProperties": true
     }
   },
-  
+
   "additionalProperties": true
 }
 ```
@@ -257,11 +262,11 @@ capabilities:
   "params": {
     "capability_id": "com.example.tool.do_something",
     "arguments": { ... },
-    
+
     // 标准扩展点
     "context": { ... },
     "options": { ... },
-    
+
     // 任意第三方扩展 (must-ignore)
     "x-custom-field": { ... }
   }
@@ -323,18 +328,18 @@ capabilities:
   # 标准能力 (AIOS 核心理解)
   - id: "aios.capability.invoke"
     ...
-    
+
   # 自定义能力 (仅兼容的客户端理解)
   - id: "com.mycompany.mytool.advanced_feature"
     name: "高级功能"
     description: "我的专有能力"
-    
+
     # 自定义输入/输出
     input:
       type: object
       properties:
         my_param: { type: string }
-        
+
     # 自定义扩展字段
     x-requires-license: true
     x-min-version: "2.0"
@@ -423,4 +428,3 @@ capabilities:
 - [核心协议](AIOS-Protocol-Spec.md)
 - [开发规范](../guides/AIOS-Protocol-DevSpec.md)
 - [最佳实践](../guides/AIOS-Developer-BestPractices.md)
-

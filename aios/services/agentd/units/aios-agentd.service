@@ -1,0 +1,11 @@
+[Unit]
+Description=AIOS Agent Orchestrator
+After=network-online.target aios-sessiond.service aios-policyd.service
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/aios/agentd
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

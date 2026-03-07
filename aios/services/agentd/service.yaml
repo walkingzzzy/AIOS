@@ -1,0 +1,10 @@
+service_id: aios-agentd
+plane: control
+role: planner-orchestrator
+inputs:
+  - intent
+  - multimodal_context
+outputs:
+  - task_plan
+  - candidate_capabilities
+  - route_request

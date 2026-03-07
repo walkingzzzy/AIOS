@@ -1,0 +1,11 @@
+[Unit]
+Description=AIOS Runtime Scheduler
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/aios/runtimed
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

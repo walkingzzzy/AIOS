@@ -1,7 +1,12 @@
 # AIOS Protocol 协议差距分析报告
 
-**版本**: 2.0.0  
-**更新日期**: 2026-01-09  
+> **系统开发口径修订（2026-03-08）**
+> AIOS 统一定义为 **AI 原生操作系统 / 系统软件工程**。本文如提及桌面应用、Electron 客户端、应用适配器、App 安装等内容，除非明确标注为“原型期 / 兼容层 / 历史实现”，否则不再代表目标形态。
+> 当前最高约束：**系统镜像、系统服务、系统壳层、设备/能力抽象、权限与更新恢复**。
+
+
+**版本**: 2.0.0
+**更新日期**: 2026-01-09
 **状态**: 深度分析报告（开放化更新）
 
 ---
@@ -187,13 +192,13 @@ data: {"jsonrpc":"2.0","id":1,"result":{...}}
   "url": "https://agent.example.com",
   "version": "1.0.0",
   "protocolVersion": "1.0",
-  
+
   "capabilities": {
     "streaming": true,
     "pushNotifications": true,
     "stateTransitionHistory": true
   },
-  
+
   "skills": [
     {
       "id": "web_research",
@@ -202,16 +207,16 @@ data: {"jsonrpc":"2.0","id":1,"result":{...}}
       "examples": ["研究AI发展趋势", "查找竞品分析"]
     }
   ],
-  
+
   "authentication": {
     "schemes": ["oauth2", "apiKey"],
     "credentials": "..."
   },
-  
+
   "extensions": [
     "urn:example:custom-extension:1.0"
   ],
-  
+
   "signature": {
     "algorithm": "RS256",
     "keyId": "key-001",
@@ -331,38 +336,38 @@ adapter:
   name: "Chrome 浏览器适配器"
   version: "1.0.0"
   protocol_version: "0.3.0"
-  
+
   # 能力声明 (对齐MCP/A2A)
   capabilities:
     streaming: true
     batch_operations: true
     async_tasks: true
     push_notifications: false
-    
+
   # 技能/能力列表 (对齐A2A skills)
   skills:
-    - id: "app.browser.open_url"
+    - id: "compat.browser.open_url"
       name: "打开网址"
       description: "在浏览器中打开指定URL"
       permission_level: "medium"
       examples:
         - "打开京东首页"
         - "访问 https://example.com"
-    - id: "app.browser.extract_content"
+    - id: "compat.browser.extract_content"
       name: "提取页面内容"
       permission_level: "low"
-      
+
   # 认证要求 (对齐A2A authentication)
   authentication:
     required: false
     schemes: []
-    
+
   # 端点信息
   endpoints:
     rpc: "unix:///run/user/1000/aios/chrome.sock"
     http: "http://localhost:9527/adapters/chrome"
     health: "/health"
-    
+
   # 签名 (对齐A2A JWS)
   signature:
     algorithm: "RS256"
@@ -633,16 +638,16 @@ authentication:
             "aios.write": "写入权限"
             "aios.admin": "管理权限"
       pkce_required: true  # 对齐MCP OAuth 2.1
-      
+
     - type: "oidc"
       issuer: "https://auth.example.com"
-      
+
     - type: "api_key"
       header: "X-AIOS-API-Key"
-      
+
     - type: "bearer"
       header: "Authorization"
-      
+
     - type: "mtls"
       client_cert_required: true
 ```
@@ -764,23 +769,23 @@ class AIOSClient:
     async def connect(self, endpoint: str) -> None
     async def initialize(self, capabilities: dict) -> Session
     async def shutdown(self) -> None
-    
+
     # 工具操作
     async def list_tools(self, filter: ToolFilter = None) -> List[Tool]
     async def get_tool(self, tool_id: str) -> Tool
     async def invoke(self, tool_id: str, capability: str, arguments: dict) -> Result
-    
+
     # 任务管理
     async def create_task(self, ...) -> Task
     async def get_task(self, task_id: str) -> Task
     async def cancel_task(self, task_id: str) -> None
     async def subscribe_task(self, task_id: str) -> AsyncIterator[TaskEvent]
-    
+
     # 权限管理
     async def request_permission(self, permissions: List[Permission]) -> PermissionGrant
     async def list_permissions(self) -> List[PermissionGrant]
     async def revoke_permission(self, token_id: str) -> None
-    
+
     # 资源操作
     async def list_resources(self, tool_id: str) -> List[Resource]
     async def read_resource(self, uri: str) -> ResourceContent

@@ -1,0 +1,10 @@
+[Unit]
+Description=AIOS Policy Engine
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/aios/policyd
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

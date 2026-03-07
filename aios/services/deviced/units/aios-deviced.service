@@ -1,0 +1,10 @@
+[Unit]
+Description=AIOS Device and Multimodal Service
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/aios/deviced
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

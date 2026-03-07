@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aios/trace-event.schema.json",
+  "title": "AIOS Trace Event",
+  "type": "object",
+  "required": ["event_id", "timestamp", "source", "kind"],
+  "properties": {
+    "event_id": { "type": "string" },
+    "timestamp": { "type": "string" },
+    "source": { "type": "string" },
+    "kind": { "type": "string" },
+    "task_id": { "type": "string" },
+    "session_id": { "type": "string" },
+    "payload": { "type": "object" }
+  },
+  "additionalProperties": true
+}

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aios/audit-event.schema.json",
+  "title": "AIOS Audit Event",
+  "type": "object",
+  "required": ["audit_id", "timestamp", "user_id", "session_id", "task_id", "capability_id", "decision"],
+  "properties": {
+    "audit_id": { "type": "string" },
+    "timestamp": { "type": "string" },
+    "user_id": { "type": "string" },
+    "session_id": { "type": "string" },
+    "task_id": { "type": "string" },
+    "capability_id": { "type": "string" },
+    "decision": { "type": "string" },
+    "execution_location": { "enum": ["local", "sandbox", "attested_remote"] },
+    "route_state": { "type": "string" },
+    "taint_summary": { "type": "string" },
+    "result": { "type": ["object", "string", "null"] }
+  },
+  "additionalProperties": true
+}

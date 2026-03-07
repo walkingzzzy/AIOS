@@ -1,5 +1,10 @@
 # UI-TARS-desktop vs AIOS 项目深度对比分析报告
 
+> **系统开发口径修订（2026-03-08）**
+> AIOS 统一定义为 **AI 原生操作系统 / 系统软件工程**。本文如提及桌面应用、Electron 客户端、应用适配器、App 安装等内容，除非明确标注为“原型期 / 兼容层 / 历史实现”，否则不再代表目标形态。
+> 当前最高约束：**系统镜像、系统服务、系统壳层、设备/能力抽象、权限与更新恢复**。
+
+
 > 生成日期: 2026-01-17
 > 更新日期: 2026-01-17 (深度代码审查版)
 > 分析范围: 技术架构、功能特性、代码实现、可借鉴方案
@@ -61,13 +66,13 @@ import { Tool } from '@modelcontextprotocol/sdk/types.js';
 
 export class MCPClientV2 implements IMCPClient {
   private v2Client: V2Client;
-  
+
   async initialize(): Promise<Tool[]> {
     await this.v2Client.init();
     this.tools = await this.v2Client.listTools(this.serverName);
     return this.tools;
   }
-  
+
   async callTool(toolName: string, args: unknown): Promise<unknown> {
     const result = await this.v2Client.callTool({
       client: this.serverName,
@@ -86,7 +91,7 @@ export class MCPClientV2 implements IMCPClient {
 export class MCPClient extends EventEmitter {
   private process: ChildProcess | null = null;
   private ws: WebSocket | null = null;
-  
+
   async connect(config: MCPClientConfig): Promise<void> {
     if (config.command) {
       await this.connectStdio(config.command, config.args || []);
@@ -95,7 +100,7 @@ export class MCPClient extends EventEmitter {
     }
     await this.initialize();
   }
-  
+
   private async request(method: string, params: object): Promise<any> {
     const id = ++this.requestId;
     const msg = JSON.stringify({ jsonrpc: '2.0', id, method, params });
@@ -117,11 +122,11 @@ export class MCPClient extends EventEmitter {
 // UI-TARS-desktop/multimodal/tarko/agent/src/agent/tool-manager.ts
 export class ToolManager {
   private tools: Map<string, Tool> = new Map();
-  
+
   registerTool(tool: Tool): void {
     this.tools.set(tool.name, tool);
   }
-  
+
   async executeTool(toolName: string, toolCallId: string, args: unknown): Promise<{
     result: unknown;
     executionTime: number;
@@ -143,7 +148,7 @@ export class ToolExecutor {
   private registry: AdapterRegistry;
   private toolNameMap: Map<string, { adapterId: string; actionId: string }> = new Map();
   private hookManager?: HookManager;
-  
+
   getAvailableTools(): InternalToolDefinition[] {
     // 从适配器生成工具定义
     for (const adapter of adapters) {
@@ -155,7 +160,7 @@ export class ToolExecutor {
     }
     return tools;
   }
-  
+
   async execute(toolCall: ToolCall, context?: ExecutionContext): Promise<ToolExecutionResult> {
     // 支持 Hook 触发
     await this.hookManager?.triggerToolCall({ toolId, adapterId, ... });
@@ -185,11 +190,11 @@ export class Agent<T extends AgentOptions = AgentOptions> extends BaseAgent<T> {
   private eventStream: AgentEventStreamProcessor;
   private toolManager: ToolManager;
   public readonly runner: AgentRunner;
-  
+
   async run(runOptions: AgentRunOptions): Promise<...> {
     // 事件流驱动
     this.eventStream.sendEvent(runStartEvent);
-    
+
     if (isStreamingOptions(normalizedOptions)) {
       return this.runner.executeStreaming(normalizedOptions, this.currentModel, sessionId);
     } else {
@@ -209,11 +214,11 @@ export class TaskOrchestrator {
   private smartEngine: IAIEngine;
   private reActOrchestrator?: ReActOrchestrator;
   private workerPool?: WorkerPool;
-  
+
   async process(input: string, context: TaskContext = {}): Promise<TaskResult> {
     // 1. 分析任务类型
     const analysis = await this.analyzeWithCache(input, context);
-    
+
     // 2. 根据类型路由到不同层
     switch (analysis.taskType) {
       case TaskType.Simple:
@@ -224,7 +229,7 @@ export class TaskOrchestrator {
         return this.executeComplex(input, analysis, execCtx); // Smart 层 + ReAct
     }
   }
-  
+
   private async executeComplex(...): Promise<TaskResult> {
     // O-W 模式: 并行任务分解
     if (this.enableOW && this.taskDecomposer && this.workerPool) {
@@ -232,7 +237,7 @@ export class TaskOrchestrator {
       const results = await this.workerPool.executeParallel(decomposition.subTasks);
       return this.taskPlanner.summarize(input, results);
     }
-    
+
     // ReAct 循环
     if (this.enableReAct && this.reActOrchestrator) {
       return this.reActOrchestrator.execute(taskId, input, executor);
@@ -262,20 +267,20 @@ export abstract class BaseAgent<T extends AgentOptions = AgentOptions> {
   public onLLMRequest(id: string, payload: LLMRequestHookPayload): void | Promise<void> {}
   public onLLMResponse(id: string, payload: LLMResponseHookPayload): void | Promise<void> {}
   public onLLMStreamingResponse(id: string, payload: LLMStreamingResponseHookPayload): void {}
-  
+
   // Agent 循环钩子
   public onEachAgentLoopStart(sessionId: string): void | Promise<void> {}
   public onEachAgentLoopEnd(context: EachAgentLoopEndContext): void | Promise<void> {}
   public onAgentLoopEnd(id: string): void | Promise<void> {}
-  
+
   // 工具调用钩子
   public onBeforeToolCall(id: string, toolCall: ToolCallInfo, args: any): Promise<any> | any {}
   public onAfterToolCall(id: string, toolCall: ToolCallInfo, result: any): Promise<any> | any {}
   public onToolCallError(id: string, toolCall: ToolCallInfo, error: any): Promise<any> | any {}
-  
+
   // 请求准备钩子 (动态修改 prompt 和 tools)
   public onPrepareRequest(context: PrepareRequestContext): PrepareRequestResult {}
-  
+
   // 终止控制
   public onBeforeLoopTermination(id: string, finalEvent: AssistantMessageEvent): LoopTerminationCheckResult {}
   public requestLoopTermination(): boolean {}
@@ -288,18 +293,18 @@ export abstract class BaseAgent<T extends AgentOptions = AgentOptions> {
 // aios/packages/daemon/src/core/hooks/HookManager.ts
 export class HookManager {
   private hooks: Map<string, BaseHook> = new Map();
-  
+
   register(hook: BaseHook): void { ... }
-  
+
   // 任务生命周期
   async triggerTaskStart(event: TaskStartEvent): Promise<void> {}
   async triggerTaskComplete(event: TaskCompleteEvent): Promise<void> {}
   async triggerTaskError(event: TaskErrorEvent): Promise<void> {}
-  
+
   // 工具调用
   async triggerToolCall(info: ToolCallInfo): Promise<void> {}
   async triggerToolResult(info: ToolResultInfo): Promise<void> {}
-  
+
   // 进度
   async triggerProgress(progress: TaskProgress): Promise<void> {}
 }
@@ -372,19 +377,19 @@ async execute(taskId: string, input: string, executor: ActionExecutor): Promise<
   while (context.state.iteration < this.config.maxIterations) {
     // 1. 感知 (Perceive)
     const perception = await this.perceive(context);
-    
+
     // 2. 规划 (Plan)
     await this.checkAndAdjustPlan(context);
-    
+
     // 3. 决策 (Decide)
     const decision = await this.decide(context);
-    
+
     // 4. 执行 (Execute)
     const actionResult = await executor(decision.action, decision.params);
-    
+
     // 5. 观察 (Observe)
     context.observations.push(actionResult);
-    
+
     // 6. 反思 (Reflect)
     const reflection = await this.reflect(context, actionResult);
   }
@@ -423,17 +428,17 @@ UI-TARS 的事件流是其核心创新：
 export class AgentEventStreamProcessor implements AgentEventStream.Processor {
   private events: AgentEventStream.Event[] = [];
   private subscribers: ((event: AgentEventStream.Event) => void)[] = [];
-  
+
   sendEvent(event: AgentEventStream.Event): void {
     this.events.push(event);
     this.subscribers.forEach((callback) => callback(event));
-    
+
     // 自动裁剪
     if (this.options.autoTrim && this.events.length > this.options.maxEvents) {
       this.events = this.events.slice(overflow);
     }
   }
-  
+
   subscribe(callback: (event: AgentEventStream.Event) => void): () => void {
     this.subscribers.add(callback);
     return () => this.subscribers.delete(callback);
@@ -449,22 +454,22 @@ UI-TARS 原生支持流式响应：
 // UI-TARS-desktop/multimodal/tarko/agent/src/tool-call-engine/NativeToolCallEngine.ts
 processStreamingChunk(chunk: ChatCompletionChunk, state: StreamProcessingState): StreamChunkResult {
   const delta = chunk.choices[0]?.delta;
-  
+
   // 处理推理内容
   if (delta?.reasoning_content) {
     state.reasoningBuffer += delta.reasoning_content;
   }
-  
+
   // 处理常规内容
   if (delta?.content) {
     state.contentBuffer += delta.content;
   }
-  
+
   // 处理工具调用
   if (delta?.tool_calls) {
     this.processToolCallsInChunk(delta.tool_calls, state.toolCalls, streamingToolCallUpdates);
   }
-  
+
   return { content, reasoningContent, hasToolCallUpdate, toolCalls, streamingToolCallUpdates };
 }
 ```
@@ -477,7 +482,7 @@ UI-TARS 的插件化设计：
 // UI-TARS-desktop/multimodal/omni-tars/core/src/ComposableAgent.ts
 export class ComposableAgent extends Agent {
   private composer: AgentComposer;
-  
+
   constructor(options: AgentOptions & { plugins?: AgentPlugin[] }) {
     super(options);
     this.composer = new AgentComposer(options.plugins || []);
@@ -488,7 +493,7 @@ export class ComposableAgent extends Agent {
 export class GuiAgentPlugin extends AgentPlugin {
   readonly name = 'gui-agent';
   readonly environmentSection = COMPUTER_USE_ENVIRONMENT;
-  
+
   onRetrieveTools?(tools: Tool[]): Tool[] { ... }
   onPrepareRequest?(context: PrepareRequestContext): PrepareRequestResult { ... }
 }
@@ -505,13 +510,13 @@ export class GUIAgent<T extends Operator> extends BaseGUIAgent {
     while (loopCnt < maxLoopCount) {
       // 1. 截图
       const snapshot = await operator.screenshot();
-      
+
       // 2. 视觉模型预测
       const prediction = await model.predict(snapshot, instruction);
-      
+
       // 3. 解析动作
       const parsedPrediction = actionParser.parse(prediction);
-      
+
       // 4. 执行动作
       await operator.execute({ prediction, parsedPrediction, ... });
     }
@@ -536,35 +541,35 @@ async executeStreaming(
 ): Promise<AsyncIterable<AgentEventStream.Event>> {
   // 创建事件流
   const stream = this.streamAdapter.createStreamFromEvents(abortSignal);
-  
+
   // 后台执行 agent loop
   this.loopExecutor.executeLoop(currentModel, sessionId, toolCallEngine, true, abortSignal)
     .then((finalEvent) => {
       this.streamAdapter.completeStream(finalEvent);
     });
-  
+
   return stream;  // 返回 AsyncIterable
 }
 
 // UI-TARS-desktop/multimodal/tarko/agent/src/tool-call-engine/NativeToolCallEngine.ts
 processStreamingChunk(chunk: ChatCompletionChunk, state: StreamProcessingState): StreamChunkResult {
   const delta = chunk.choices[0]?.delta;
-  
+
   // 处理推理内容 (DeepSeek 等模型)
   if (delta?.reasoning_content) {
     state.reasoningBuffer += delta.reasoning_content;
   }
-  
+
   // 处理常规内容
   if (delta?.content) {
     state.contentBuffer += delta.content;
   }
-  
+
   // 处理工具调用增量
   if (delta?.tool_calls) {
     this.processToolCallsInChunk(delta.tool_calls, state.toolCalls, streamingToolCallUpdates);
   }
-  
+
   return { content, reasoningContent, hasToolCallUpdate, toolCalls, streamingToolCallUpdates };
 }
 ```
@@ -576,7 +581,7 @@ processStreamingChunk(chunk: ChatCompletionChunk, state: StreamProcessingState):
 export abstract class BaseAIEngine implements IAIEngine {
   abstract chat(messages: Message[], options?: ChatOptions): Promise<ChatResponse>;
   abstract chatWithTools(messages: Message[], tools: ToolDefinition[], options?: ChatOptions): Promise<ToolCallResponse>;
-  
+
   // ✅ 已提供流式接口（默认实现为非流式降级）
   async *chatStream(messages: Message[], options?: StreamOptions): AsyncGenerator<StreamChunk> { ... }
   async *chatStreamWithTools(messages: Message[], tools: ToolDefinition[], options?: StreamOptions): AsyncGenerator<StreamChunk> { ... }
@@ -604,17 +609,17 @@ export abstract class BaseAgent<T extends AgentOptions = AgentOptions> {
   public onLLMRequest(id: string, payload: LLMRequestHookPayload): void | Promise<void> {}
   public onLLMResponse(id: string, payload: LLMResponseHookPayload): void | Promise<void> {}
   public onLLMStreamingResponse(id: string, payload: LLMStreamingResponseHookPayload): void {}
-  
+
   // 请求准备钩子 - 动态修改 prompt 和 tools
   public onPrepareRequest(context: PrepareRequestContext): PrepareRequestResult {
     return { systemPrompt: context.systemPrompt, tools: context.tools };
   }
-  
+
   // 循环控制钩子
   public onEachAgentLoopStart(sessionId: string): void | Promise<void> {}
   public onEachAgentLoopEnd(context: EachAgentLoopEndContext): void | Promise<void> {}
   public onBeforeLoopTermination(id: string, finalEvent: AssistantMessageEvent): LoopTerminationCheckResult {}
-  
+
   // 工具调用钩子
   public onBeforeToolCall(id: string, toolCall: ToolCallInfo, args: any): Promise<any> | any {}
   public onAfterToolCall(id: string, toolCall: ToolCallInfo, result: any): Promise<any> | any {}
@@ -631,19 +636,19 @@ export class HookManager {
   async triggerTaskStart(event: TaskStartEvent): Promise<void> {}
   async triggerTaskComplete(event: TaskCompleteEvent): Promise<void> {}
   async triggerTaskError(event: TaskErrorEvent): Promise<void> {}
-  
+
   // ✅ 工具级钩子
   async triggerToolCall(info: ToolCallInfo): Promise<void> {}
   async triggerToolResult(info: ToolResultInfo): Promise<void> {}
-  
+
   // ✅ 进度钩子
   async triggerProgress(progress: TaskProgress): Promise<void> {}
-  
+
   // ❌ 缺少 LLM 级钩子:
   // triggerLLMRequest(event: LLMRequestEvent)
   // triggerLLMResponse(event: LLMResponseEvent)
   // triggerLLMStreamChunk(event: LLMStreamChunkEvent)
-  
+
   // ❌ 缺少请求准备钩子:
   // triggerPrepareRequest(context: PrepareRequestContext)
 }
@@ -676,7 +681,7 @@ export class HookManager {
       await hook.onLLMRequest?.(event);
     }
   }
-  
+
   async triggerLLMResponse(event: LLMResponseEvent): Promise<void> {
     for (const hook of this.hooks.values()) {
       await hook.onLLMResponse?.(event);
@@ -694,22 +699,22 @@ export class HookManager {
 export class AgentEventStreamProcessor implements AgentEventStream.Processor {
   private events: AgentEventStream.Event[] = [];
   private subscribers: Set<(event: AgentEventStream.Event) => void> = new Set();
-  
+
   sendEvent(event: AgentEventStream.Event): void {
     this.events.push(event);
     this.subscribers.forEach((callback) => callback(event));
-    
+
     // 自动裁剪
     if (this.options.autoTrim && this.events.length > this.options.maxEvents) {
       this.events = this.events.slice(overflow);
     }
   }
-  
+
   subscribe(callback: (event: AgentEventStream.Event) => void): () => void {
     this.subscribers.add(callback);
     return () => this.subscribers.delete(callback);
   }
-  
+
   createEvent<T extends AgentEventStream.EventType>(type: T, data: ...): AgentEventStream.Event {
     return { id: crypto.randomUUID(), type, timestamp: Date.now(), ...data };
   }
@@ -731,7 +736,7 @@ await this.hookManager?.triggerTaskComplete({ ... });
 
 ```typescript
 // aios/packages/daemon/src/core/events/EventStream.ts - 新建
-export type EventType = 
+export type EventType =
   | 'task_start' | 'task_complete' | 'task_error'
   | 'llm_request' | 'llm_response' | 'llm_stream_chunk'
   | 'tool_call' | 'tool_result'
@@ -748,11 +753,11 @@ export class EventStreamProcessor {
   private events: AgentEvent[] = [];
   private subscribers: Set<(event: AgentEvent) => void> = new Set();
   private maxEvents: number;
-  
+
   constructor(options: { maxEvents?: number } = {}) {
     this.maxEvents = options.maxEvents ?? 1000;
   }
-  
+
   emit(type: EventType, data: unknown): AgentEvent {
     const event: AgentEvent = {
       id: crypto.randomUUID(),
@@ -760,23 +765,23 @@ export class EventStreamProcessor {
       timestamp: Date.now(),
       data,
     };
-    
+
     this.events.push(event);
     this.subscribers.forEach(cb => cb(event));
-    
+
     // 自动裁剪
     if (this.events.length > this.maxEvents) {
       this.events = this.events.slice(-this.maxEvents);
     }
-    
+
     return event;
   }
-  
+
   subscribe(callback: (event: AgentEvent) => void): () => void {
     this.subscribers.add(callback);
     return () => this.subscribers.delete(callback);
   }
-  
+
   getEvents(filter?: { type?: EventType; since?: number }): AgentEvent[] {
     let result = this.events;
     if (filter?.type) result = result.filter(e => e.type === filter.type);
@@ -874,7 +879,7 @@ async triggerLLMResponse(event: LLMResponseEvent): Promise<void> {
 // Step 3: TaskOrchestrator 集成
 private async callAI(messages: Message[], tools?: ToolDefinition[]): Promise<ChatResponse> {
   const startTime = Date.now();
-  
+
   await this.hookManager?.triggerLLMRequest({
     taskId: this.currentTaskId,
     messages,
@@ -883,9 +888,9 @@ private async callAI(messages: Message[], tools?: ToolDefinition[]): Promise<Cha
     provider: this.fastEngine.provider,
     timestamp: startTime,
   });
-  
+
   const response = await this.fastEngine.chat(messages);
-  
+
   await this.hookManager?.triggerLLMResponse({
     taskId: this.currentTaskId,
     response,
@@ -893,7 +898,7 @@ private async callAI(messages: Message[], tools?: ToolDefinition[]): Promise<Cha
     tokenUsage: response.usage,
     timestamp: Date.now(),
   });
-  
+
   return response;
 }
 ```
@@ -906,19 +911,19 @@ private async callAI(messages: Message[], tools?: ToolDefinition[]): Promise<Cha
 export class EventStreamProcessor {
   private events: AgentEvent[] = [];
   private subscribers: Set<(event: AgentEvent) => void> = new Set();
-  
+
   emit(type: EventType, data: unknown): AgentEvent {
     const event = { id: crypto.randomUUID(), type, timestamp: Date.now(), data };
     this.events.push(event);
     this.subscribers.forEach(cb => cb(event));
     return event;
   }
-  
+
   subscribe(callback: (event: AgentEvent) => void): () => void {
     this.subscribers.add(callback);
     return () => this.subscribers.delete(callback);
   }
-  
+
   // 用于调试和回放
   getEvents(filter?: EventFilter): AgentEvent[] { ... }
   exportToJSON(): string { ... }
@@ -939,7 +944,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 
 export class MCPClientV2 {
   private client: Client;
-  
+
   async connect(command: string, args: string[]): Promise<void> {
     const transport = new StdioClientTransport({ command, args });
     this.client = new Client({ name: 'aios', version: '0.1.0' });

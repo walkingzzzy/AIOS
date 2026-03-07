@@ -1,0 +1,9 @@
+/dist
+/out
+/node_modules
+/.cache
+/.tmp
+*.log
+*.qcow2
+*.raw
+*.img

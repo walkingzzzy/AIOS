@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aios/execution-token.schema.json",
+  "title": "AIOS Execution Token",
+  "type": "object",
+  "required": ["user_id", "session_id", "task_id", "capability_id", "expiry", "execution_location"],
+  "properties": {
+    "user_id": { "type": "string" },
+    "session_id": { "type": "string" },
+    "task_id": { "type": "string" },
+    "capability_id": { "type": "string" },
+    "target_hash": { "type": "string" },
+    "expiry": { "type": "string" },
+    "approval_ref": { "type": "string" },
+    "constraints": { "type": "object" },
+    "execution_location": { "enum": ["local", "sandbox", "attested_remote"] },
+    "taint_summary": { "type": "string" }
+  },
+  "additionalProperties": true
+}

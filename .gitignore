@@ -1,48 +1,10 @@
-# Dependencies
+.DS_Store
 node_modules/
-.pnpm-store/
-
-# Build outputs
 dist/
 out/
-build/
-*.tsbuildinfo
-
-# IDE and editors
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# OS files
-.DS_Store
-Thumbs.db
-
-# Logs
+.cache/
+.tmp/
 *.log
-npm-debug.log*
-pnpm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# Environment files
-.env
-.env.local
-.env.*.local
-
-# Test coverage
-coverage/
-
-# Temporary files
-tmp/
-temp/
-*.tmp
-
-# Electron specific
-aios/packages/client/out/
-aios/packages/client/dist/
-
-# Lock files (keep pnpm-lock.yaml)
-package-lock.json
-yarn.lock
+*.qcow2
+*.raw
+*.img

@@ -1,0 +1,7 @@
+id: qemu-x86_64
+platform_tier: tier0
+boot: uefi
+virtio_disk: true
+virtio_net: true
+virtio_display: true
+cpu_only_runtime_required: true

@@ -1,0 +1,9 @@
+id: tier1-template
+platform_tier: tier1
+arch: x86_64
+gpu: optional
+npu: optional
+wifi: required
+bluetooth: required
+audio: required
+camera: required

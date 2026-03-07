@@ -1,0 +1,9 @@
+service_id: aios-deviced
+plane: device
+role: device-multimodal-broker
+inputs:
+  - device_events
+  - capture_requests
+outputs:
+  - normalized_multimodal_objects
+  - device_state

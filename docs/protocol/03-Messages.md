@@ -1,7 +1,12 @@
 # AIOS Protocol 消息类型
 
-**版本**: 2.0.0  
-**更新日期**: 2026-01-09  
+> **系统开发口径修订（2026-03-08）**
+> AIOS 统一定义为 **AI 原生操作系统 / 系统软件工程**。本文如提及桌面应用、Electron 客户端、应用适配器、App 安装等内容，除非明确标注为“原型期 / 兼容层 / 历史实现”，否则不再代表目标形态。
+> 当前最高约束：**系统镜像、系统服务、系统壳层、设备/能力抽象、权限与更新恢复**。
+
+
+**版本**: 2.0.0
+**更新日期**: 2026-01-09
 **状态**: 战略规划阶段
 
 ---
@@ -378,7 +383,7 @@
   "id": "10",
   "method": "aios/permission.request",
   "params": {
-    "capability_id": "app.browser.open_url",
+    "capability_id": "compat.browser.open_url",
     "permissions": [
       {
         "level": "low",
@@ -709,7 +714,7 @@
         "id": "op-1",
         "method": "aios/capability.invoke",
         "params": {
-          "capability_id": "app.browser.launch"
+          "capability_id": "compat.browser.launch"
         }
       },
       {
@@ -717,7 +722,7 @@
         "depends_on": ["op-1"],
         "method": "aios/capability.invoke",
         "params": {
-          "capability_id": "app.browser.open_url",
+          "capability_id": "compat.browser.open_url",
           "arguments": {"url": "https://jd.com"}
         }
       }
@@ -759,7 +764,7 @@
   "id": "1",
   "method": "aios/task.create",
   "params": {
-    "capability_id": "app.browser.search_and_compare",
+    "capability_id": "compat.browser.search_and_compare",
     "arguments": {
       "query": "无线耳机",
       "sites": ["jd.com", "taobao.com"]
@@ -993,7 +998,7 @@
   "method": "aios/registry.search",
   "params": {
     "query": "browser",
-    "type": "application",
+    "type": "compat",
     "limit": 10
   }
 }
@@ -1130,7 +1135,7 @@
   "params": {
     "tool_id": "com.example.newtool",
     "name": "新工具",
-    "type": "application"
+    "type": "compat"
   }
 }
 ```
@@ -1257,6 +1262,6 @@
 
 ---
 
-**文档版本**: 2.0.0  
-**最后更新**: 2026-01-09  
+**文档版本**: 2.0.0
+**最后更新**: 2026-01-09
 **维护者**: AIOS Protocol Team

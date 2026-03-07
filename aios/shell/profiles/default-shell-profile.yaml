@@ -1,0 +1,9 @@
+profile_id: default-shell
+voice_input: true
+screen_context: true
+show_approval_panel: true
+show_recovery_actions: true
+multimodal_capture:
+  screen: true
+  audio: true
+  input_focus: true
