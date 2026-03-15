@@ -1,0 +1,32 @@
+{
+  "schema_version": "2026-03-13",
+  "event_id": "health-0001",
+  "generated_at": "2026-03-13T12:15:00Z",
+  "service_id": "aios-updated",
+  "component_id": "updated-health-probe",
+  "component_kind": "update",
+  "source": "probe",
+  "overall_status": "ready",
+  "readiness": true,
+  "last_check_at": "2026-03-13T12:14:30Z",
+  "summary": "probe completed successfully",
+  "update_id": "update-01",
+  "boot_id": "boot-01",
+  "image_id": "image-qemu-x86_64-2026-03-13",
+  "artifact_path": "state/health-probe.json",
+  "recovery_points": [
+    "recovery-001.json"
+  ],
+  "diagnostic_bundles": [
+    "diag-1741867200000.json"
+  ],
+  "probe": {
+    "status": "healthy",
+    "checked_at": "2026-03-13T12:14:30Z",
+    "command": "/bin/sh -lc health_probe",
+    "summary": "probe ok"
+  },
+  "notes": [
+    "health probe snapshot persisted"
+  ]
+}

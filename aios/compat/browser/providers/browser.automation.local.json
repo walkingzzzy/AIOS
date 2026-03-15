@@ -1,0 +1,96 @@
+{
+  "provider_id": "compat.browser.automation.local",
+  "version": "0.1.0",
+  "kind": "compat-provider",
+  "display_name": "Browser Automation Compat Provider",
+  "owner": "aios-compat",
+  "worker_contract": "compat-browser-fetch-v1",
+  "result_protocol_schema_ref": "aios/compat-browser-result.schema.json",
+  "trust_policy_modes": ["registered-remote", "none", "bearer", "header", "execution-token"],
+  "capabilities": [
+    {
+      "capability_id": "compat.browser.navigate",
+      "read_only": true,
+      "recoverable": true,
+      "approval_required": false,
+      "external_side_effect": false,
+      "dynamic_code": false,
+      "user_interaction_required": false,
+      "supported_targets": ["url", "tab"],
+      "input_schema_refs": ["aios/browser.navigate.request"],
+      "output_schema_refs": ["aios/browser.navigate.response", "aios/compat-browser-result.schema.json"],
+      "audit_tags": ["browser", "compat"]
+    },
+    {
+      "capability_id": "compat.browser.extract",
+      "read_only": true,
+      "recoverable": true,
+      "approval_required": false,
+      "external_side_effect": false,
+      "dynamic_code": false,
+      "user_interaction_required": false,
+      "supported_targets": ["tab", "page"],
+      "input_schema_refs": ["aios/browser.extract.request"],
+      "output_schema_refs": ["aios/browser.extract.response", "aios/compat-browser-result.schema.json"],
+      "audit_tags": ["browser", "extract"]
+    }
+  ],
+  "execution_location": "sandbox",
+  "sandbox_class": "browser-automation",
+  "required_permissions": ["browser.compat"],
+  "resource_budget": {
+    "max_memory_mb": 1024,
+    "max_concurrency": 2
+  },
+  "compat_permission_manifest": {
+    "schema_version": "1.0.0",
+    "provider_id": "compat.browser.automation.local",
+    "execution_location": "sandbox",
+    "sandbox_class": "browser-automation",
+    "required_permissions": ["browser.compat"],
+    "resource_budget": {
+      "max_timeout_seconds": 30,
+      "max_memory_mb": 1024,
+      "max_concurrency": 2
+    },
+    "capabilities": [
+      {
+        "capability_id": "compat.browser.navigate",
+        "permission_scopes": ["browser.compat.navigate"],
+        "approval_required": false,
+        "dynamic_code": false,
+        "user_interaction_required": false,
+        "network_access": "remote-fetch",
+        "subprocess_access": "none",
+        "filesystem_access": "none",
+        "target_binding": "url-or-tab",
+        "audit_tags": ["browser", "compat"]
+      },
+      {
+        "capability_id": "compat.browser.extract",
+        "permission_scopes": ["browser.compat.extract"],
+        "approval_required": false,
+        "dynamic_code": false,
+        "user_interaction_required": false,
+        "network_access": "remote-fetch",
+        "subprocess_access": "none",
+        "filesystem_access": "none",
+        "target_binding": "page-or-tab",
+        "audit_tags": ["browser", "extract"]
+      }
+    ],
+    "audit_tags": ["browser", "compat", "sandbox"],
+    "taint_behavior": "input-propagates"
+  },
+  "supported_targets": ["url", "tab", "page", "registered-remote"],
+  "timeout_policy": "bounded-30s",
+  "retry_policy": "retry-once",
+  "healthcheck": {
+    "kind": "process",
+    "endpoint": "browser-provider",
+    "interval_seconds": 15
+  },
+  "audit_tags": ["browser", "compat", "sandbox"],
+  "taint_behavior": "input-propagates",
+  "degradation_policy": "fallback-to-manual-open"
+}

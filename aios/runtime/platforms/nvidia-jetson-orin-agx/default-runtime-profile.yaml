@@ -1,0 +1,32 @@
+profile_id: nvidia-jetson-orin-agx-default
+scope: system
+default_backend: local-gpu
+allowed_backends:
+  - local-cpu
+  - local-gpu
+  - local-npu
+  - attested-remote
+backend_worker_contract: runtime-worker-v1
+managed_worker_commands: {}
+hardware_profile_managed_worker_commands:
+  nvidia-jetson-orin-agx:
+    local-gpu: /usr/share/aios/runtime/platforms/nvidia-jetson-orin-agx/bin/launch-managed-worker.sh
+    local-npu: /usr/share/aios/runtime/platforms/nvidia-jetson-orin-agx/bin/launch-managed-worker.sh
+local_model_pool:
+  - qwen-local-14b
+remote_model_pool:
+  - gpt-4.1
+embedding_backend: local-embedding
+rerank_backend: local-reranker
+cpu_fallback: true
+memory_budget_mb: 12288
+kv_cache_budget_mb: 4096
+timeout_ms: 45000
+max_concurrency: 2
+max_parallel_models: 1
+offload_policy: manual-only
+degradation_policy: fallback-local-cpu
+observability_level: standard
+notes:
+  - Jetson-oriented runtime baseline prefers the local GPU when available.
+  - Platform runtime profile routes managed worker launch through the Jetson worker bridge.

@@ -1,0 +1,14 @@
+component_id: launcher
+status: done
+role: shell-launcher
+integrates:
+  - aios-sessiond
+features:
+  - session.create
+  - session.list
+  - session.evidence.get
+  - session.resume
+  - task.create
+entrypoint: client.py
+prototype_entrypoint: prototype.py
+panel_entrypoint: panel.py

@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aios/compat-sandbox-result.schema.json",
+  "title": "AIOS Compat Sandbox Result Protocol",
+  "type": "object",
+  "required": [
+    "protocol_version",
+    "worker_contract",
+    "provider_id",
+    "status",
+    "execution_location",
+    "sandbox_class",
+    "request",
+    "policy",
+    "resources",
+    "streams",
+    "artifacts",
+    "audit",
+    "timestamps"
+  ],
+  "properties": {
+    "protocol_version": { "const": "1.0.0" },
+    "worker_contract": { "const": "compat-sandbox-executor-v1" },
+    "provider_id": { "type": "string", "minLength": 1 },
+    "status": { "enum": ["ok", "timed-out", "error"] },
+    "execution_location": { "enum": ["local", "sandbox", "attested_remote"] },
+    "sandbox_class": { "type": "string", "minLength": 1 },
+    "request": {
+      "type": "object",
+      "required": ["language", "code_file", "timeout_seconds", "memory_mb", "cpu_seconds"],
+      "properties": {
+        "language": { "type": "string", "minLength": 1 },
+        "code_file": { "type": "string", "minLength": 1 },
+        "input_dir": { "type": ["string", "null"] },
+        "output_dir": { "type": ["string", "null"] },
+        "timeout_seconds": { "type": "number", "minimum": 0 },
+        "memory_mb": { "type": "integer", "minimum": 1 },
+        "cpu_seconds": { "type": "integer", "minimum": 1 },
+        "allow_network": { "type": "boolean" },
+        "allow_subprocess": { "type": "boolean" },
+        "allow_env": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      },
+      "additionalProperties": true
+    },
+    "policy": {
+      "type": "object",
+      "required": [
+        "network_access",
+        "subprocess_access",
+        "filesystem_access",
+        "approval_required",
+        "compat_permission_manifest"
+      ],
+      "properties": {
+        "network_access": { "type": "string", "minLength": 1 },
+        "subprocess_access": { "type": "string", "minLength": 1 },
+        "filesystem_access": { "type": ["string", "null"] },
+        "approval_required": { "type": ["boolean", "null"] },
+        "compat_permission_manifest": { "$ref": "aios/compat-permission-manifest.schema.json" }
+      },
+      "additionalProperties": true
+    },
+    "resources": {
+      "type": "object",
+      "required": ["timed_out", "exit_code", "duration_ms"],
+      "properties": {
+        "timed_out": { "type": "boolean" },
+        "exit_code": { "type": "integer" },
+        "duration_ms": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": true
+    },
+    "streams": {
+      "type": "object",
+      "required": ["stdout", "stderr"],
+      "properties": {
+        "stdout": { "type": "string" },
+        "stderr": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["relative_path", "size_bytes"],
+        "properties": {
+          "relative_path": { "type": "string", "minLength": 1 },
+          "size_bytes": { "type": "integer", "minimum": 0 },
+          "output_path": { "type": "string" }
+        },
+        "additionalProperties": true
+      }
+    },
+    "audit": {
+      "type": "object",
+      "required": ["audit_id", "audit_log", "capability_id", "audit_tags", "taint_behavior"],
+      "properties": {
+        "audit_id": { "type": ["string", "null"] },
+        "audit_log": { "type": ["string", "null"] },
+        "capability_id": { "type": ["string", "null"] },
+        "audit_tags": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "taint_behavior": { "type": ["string", "null"] }
+      },
+      "additionalProperties": true
+    },
+    "timestamps": {
+      "type": "object",
+      "required": ["started_at", "finished_at"],
+      "properties": {
+        "started_at": { "type": "string", "minLength": 1 },
+        "finished_at": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": true
+    },
+    "error": {
+      "type": ["object", "null"],
+      "required": ["category", "error_code", "message", "retryable"],
+      "properties": {
+        "category": { "type": "string", "minLength": 1 },
+        "error_code": { "type": "string", "minLength": 1 },
+        "message": { "type": "string", "minLength": 1 },
+        "retryable": { "type": "boolean" }
+      },
+      "additionalProperties": true
+    },
+    "sandbox_root": { "type": "string" }
+  },
+  "additionalProperties": true
+}

@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aios/compat-office-result.schema.json",
+  "title": "AIOS Compat Office Result Protocol",
+  "type": "object",
+  "required": [
+    "protocol_version",
+    "worker_contract",
+    "provider_id",
+    "status",
+    "operation",
+    "execution_location",
+    "request",
+    "document",
+    "export",
+    "policy",
+    "audit",
+    "timestamps"
+  ],
+  "properties": {
+    "protocol_version": { "const": "1.0.0" },
+    "worker_contract": { "const": "compat-office-document-v1" },
+    "provider_id": { "const": "compat.office.document.local" },
+    "status": { "enum": ["ok", "error"] },
+    "operation": { "enum": ["compat.document.open", "compat.office.export_pdf", null] },
+    "execution_location": { "const": "sandbox" },
+    "request": {
+      "type": "object",
+      "required": ["capability_id", "path", "output_path", "preview_chars"],
+      "properties": {
+        "capability_id": { "type": ["string", "null"] },
+        "path": { "type": ["string", "null"] },
+        "output_path": { "type": ["string", "null"] },
+        "preview_chars": { "type": ["integer", "null"], "minimum": 0 }
+      },
+      "additionalProperties": true
+    },
+    "document": {
+      "type": "object",
+      "required": [
+        "source_path",
+        "mime_type",
+        "title",
+        "size_bytes",
+        "line_count",
+        "char_count",
+        "loaded_at",
+        "preview",
+        "supported_export_formats"
+      ],
+      "properties": {
+        "source_path": { "type": ["string", "null"] },
+        "mime_type": { "type": ["string", "null"] },
+        "title": { "type": ["string", "null"] },
+        "size_bytes": { "type": ["integer", "null"] },
+        "line_count": { "type": ["integer", "null"] },
+        "char_count": { "type": ["integer", "null"] },
+        "loaded_at": { "type": ["string", "null"] },
+        "preview": { "type": ["string", "null"] },
+        "supported_export_formats": {
+          "type": ["array", "null"],
+          "items": { "type": "string", "minLength": 1 }
+        }
+      },
+      "additionalProperties": true
+    },
+    "export": {
+      "type": "object",
+      "required": ["output_path", "mime_type", "page_count", "bytes_written", "exported_at"],
+      "properties": {
+        "output_path": { "type": ["string", "null"] },
+        "mime_type": { "type": ["string", "null"] },
+        "page_count": { "type": ["integer", "null"] },
+        "bytes_written": { "type": ["integer", "null"] },
+        "exported_at": { "type": ["string", "null"] }
+      },
+      "additionalProperties": true
+    },
+    "policy": {
+      "type": "object",
+      "required": ["compat_permission_manifest", "filesystem_access", "approval_required"],
+      "properties": {
+        "compat_permission_manifest": { "$ref": "aios/compat-permission-manifest.schema.json" },
+        "filesystem_access": { "type": ["string", "null"] },
+        "approval_required": { "type": ["boolean", "null"] }
+      },
+      "additionalProperties": true
+    },
+    "audit": {
+      "type": "object",
+      "required": ["audit_id", "audit_log", "capability_id", "audit_tags", "taint_behavior"],
+      "properties": {
+        "audit_id": { "type": ["string", "null"] },
+        "audit_log": { "type": ["string", "null"] },
+        "capability_id": { "type": ["string", "null"] },
+        "audit_tags": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "taint_behavior": { "type": ["string", "null"] }
+      },
+      "additionalProperties": true
+    },
+    "timestamps": {
+      "type": "object",
+      "required": ["started_at", "finished_at"],
+      "properties": {
+        "started_at": { "type": "string", "minLength": 1 },
+        "finished_at": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": true
+    },
+    "error": {
+      "type": ["object", "null"],
+      "required": ["category", "error_code", "message", "retryable"],
+      "properties": {
+        "category": { "type": "string", "minLength": 1 },
+        "error_code": { "type": "string", "minLength": 1 },
+        "message": { "type": "string", "minLength": 1 },
+        "retryable": { "type": "boolean" }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

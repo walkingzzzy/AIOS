@@ -1,0 +1,27 @@
+service_id: aios-device-metadata-provider
+plane: provider
+role: device-metadata-provider
+implementation_status: in_progress
+maturity: partial_impl
+current_phase: phase3
+primary_language: rust
+async_runtime: tokio
+transport:
+  primary: uds-jsonrpc
+storage:
+  primary: none
+inputs:
+  - deviced_state
+outputs:
+  - device_metadata_snapshot
+dependencies:
+  requires:
+    - aios-agentd
+    - aios-deviced
+blockers:
+  - capability-not-yet-wired-into-agentd-execution-loop
+  - metadata-schemas-remain-minimal
+next_milestones:
+  - route-device-status-intents-through-provider
+  - add-streaming-backend-events
+  - expand-hardware-evidence-surface

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aios/runtime-infer.response.schema.json",
+  "title": "AIOS Runtime Infer Response",
+  "type": "object",
+  "required": ["backend_id", "route_state", "content", "degraded", "rejected"],
+  "properties": {
+    "backend_id": { "type": "string" },
+    "route_state": { "type": "string" },
+    "content": { "type": "string" },
+    "degraded": { "type": "boolean" },
+    "rejected": { "type": "boolean" },
+    "reason": { "type": "string" },
+    "estimated_latency_ms": { "type": "integer", "minimum": 0 },
+    "provider_id": { "type": "string" },
+    "runtime_service_id": { "type": "string" },
+    "provider_status": { "type": "string" },
+    "queue_saturated": { "type": "boolean" },
+    "runtime_budget": { "type": "object" },
+    "notes": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "additionalProperties": true
+}

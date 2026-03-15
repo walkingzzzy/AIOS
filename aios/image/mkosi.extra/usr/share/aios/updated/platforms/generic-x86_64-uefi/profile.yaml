@@ -1,0 +1,13 @@
+profile_id: generic-x86_64-uefi
+update_stack: systemd-sysupdate
+sysupdate_binary: /usr/libexec/aios-platform/generic-x86_64-uefi/systemd-sysupdate-bridge.sh
+sysupdate_definitions_dir: /usr/share/aios/updated/platforms/generic-x86_64-uefi/sysupdate.d
+boot_backend: firmware
+bootctl_binary: /usr/bin/bootctl
+firmwarectl_binary: /usr/libexec/aios-platform/generic-x86_64-uefi/firmwarectl-bridge.sh
+health_probe_command: /usr/libexec/aios-platform/generic-x86_64-uefi/health-probe.sh
+boot_cmdline_path: /proc/cmdline
+boot_entry_state_dir: /var/lib/aios/updated/boot
+boot_success_marker_path: /var/lib/aios/updated/boot-success
+current_channel: stable
+current_slot: a

@@ -1,0 +1,41 @@
+{
+  "schema_version": "2026-03-13",
+  "recovery_id": "recovery-001",
+  "generated_at": "2026-03-13T12:20:00Z",
+  "service_id": "aios-updated",
+  "update_id": "update-01",
+  "boot_id": "boot-01",
+  "image_id": "image-qemu-x86_64-2026-03-13",
+  "artifact_path": "state/recovery/recovery-001.json",
+  "trigger": {
+    "kind": "update-rollback",
+    "reason": "smoke-rollback"
+  },
+  "deployment_status": "rollback-staged",
+  "overall_status": "degraded",
+  "rollback_ready": true,
+  "current_slot": "b",
+  "last_good_slot": "a",
+  "staged_slot": "a",
+  "recovery_points": [
+    "recovery-001.json"
+  ],
+  "diagnostic_bundles": [
+    "diag-1741867200000.json"
+  ],
+  "artifacts": [
+    {
+      "kind": "boot-log",
+      "path": "out/boot-qemu-recovery.log",
+      "status": "collected"
+    },
+    {
+      "kind": "recovery-surface",
+      "path": "state/recovery-surface.json",
+      "status": "collected"
+    }
+  ],
+  "notes": [
+    "rollback staged and waiting for reboot verification"
+  ]
+}

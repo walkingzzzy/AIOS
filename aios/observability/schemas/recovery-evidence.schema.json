@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aios/recovery-evidence.schema.json",
+  "title": "AIOS Recovery Evidence",
+  "type": "object",
+  "required": ["recovery_id", "generated_at", "service_id", "deployment_status", "overall_status", "rollback_ready"],
+  "properties": {
+    "schema_version": { "type": "string" },
+    "recovery_id": { "type": "string", "minLength": 1 },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "service_id": { "type": "string", "minLength": 1 },
+    "session_id": { "type": "string" },
+    "task_id": { "type": "string" },
+    "provider_id": { "type": "string" },
+    "approval_id": { "type": "string" },
+    "update_id": { "type": "string" },
+    "boot_id": { "type": "string" },
+    "image_id": { "type": "string" },
+    "artifact_path": { "type": "string" },
+    "trigger": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["manual-export", "update-rollback", "boot-failure", "recovery-surface", "operator"]
+        },
+        "reason": { "type": ["string", "null"] }
+      },
+      "additionalProperties": true
+    },
+    "deployment_status": { "type": "string" },
+    "overall_status": {
+      "type": "string",
+      "enum": ["ready", "idle", "degraded", "blocked", "failed"]
+    },
+    "rollback_ready": { "type": "boolean" },
+    "current_slot": { "type": ["string", "null"] },
+    "last_good_slot": { "type": ["string", "null"] },
+    "staged_slot": { "type": ["string", "null"] },
+    "recovery_points": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "diagnostic_bundles": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["kind", "path"],
+        "properties": {
+          "kind": { "type": "string" },
+          "path": { "type": "string" },
+          "status": { "type": "string" }
+        },
+        "additionalProperties": true
+      }
+    },
+    "notes": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "additionalProperties": true
+}

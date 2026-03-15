@@ -1,0 +1,16 @@
+component_id: portal-chooser
+display_name: Portal Chooser
+status: in_progress
+role: shell-portal-surface
+integrates:
+  - aios-sessiond
+features:
+  - portal.handle.list
+  - requested-kind-ranking
+  - approval-aware-routing
+  - standalone-chooser-gui
+entrypoints:
+  prototype: prototype.py
+  client: client.py
+  panel: panel.py
+  standalone: standalone.py

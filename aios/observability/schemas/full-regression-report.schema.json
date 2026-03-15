@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aios/full-regression-report.schema.json",
+  "title": "AIOS Full Regression Report",
+  "type": "object",
+  "required": [
+    "generated_at",
+    "workspace",
+    "stage",
+    "execution_mode",
+    "overall_status",
+    "host_target",
+    "bin_dir",
+    "json_report",
+    "markdown_report",
+    "duration_seconds",
+    "step_counts",
+    "steps"
+  ],
+  "properties": {
+    "generated_at": { "type": "string", "format": "date-time" },
+    "workspace": { "type": "string" },
+    "stage": {
+      "type": "string",
+      "enum": ["validate", "system-validation", "full"]
+    },
+    "execution_mode": {
+      "type": "string",
+      "enum": ["dry-run", "execute"]
+    },
+    "overall_status": {
+      "type": "string",
+      "enum": ["planned", "passed", "failed"]
+    },
+    "host_target": { "type": "string" },
+    "bin_dir": { "type": "string" },
+    "keep_going": { "type": "boolean" },
+    "json_report": { "type": "string" },
+    "markdown_report": { "type": "string" },
+    "step_logs_dir": { "type": ["string", "null"] },
+    "duration_seconds": { "type": "number", "minimum": 0 },
+    "step_counts": {
+      "type": "object",
+      "required": ["planned", "passed", "failed", "skipped"],
+      "properties": {
+        "planned": { "type": "integer", "minimum": 0 },
+        "passed": { "type": "integer", "minimum": 0 },
+        "failed": { "type": "integer", "minimum": 0 },
+        "skipped": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "command", "cwd", "status", "duration_seconds", "detail"],
+        "properties": {
+          "name": { "type": "string" },
+          "command": { "type": "string" },
+          "cwd": { "type": "string" },
+          "env_overrides": {
+            "type": "object",
+            "additionalProperties": { "type": "string" }
+          },
+          "status": {
+            "type": "string",
+            "enum": ["planned", "passed", "failed", "skipped"]
+          },
+          "returncode": { "type": ["integer", "null"] },
+          "duration_seconds": { "type": "number", "minimum": 0 },
+          "stdout_log": { "type": ["string", "null"] },
+          "stderr_log": { "type": ["string", "null"] },
+          "detail": { "type": "string" }
+        },
+        "additionalProperties": true
+      }
+    },
+    "declared_steps": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "additionalProperties": true
+}

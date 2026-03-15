@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aios/compat-permission-manifest.schema.json",
+  "title": "AIOS Compat Permission Manifest",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "provider_id",
+    "execution_location",
+    "required_permissions",
+    "resource_budget",
+    "capabilities"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "provider_id": { "type": "string", "minLength": 1 },
+    "execution_location": { "enum": ["local", "sandbox", "attested_remote"] },
+    "sandbox_class": { "type": "string" },
+    "required_permissions": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "resource_budget": {
+      "type": "object",
+      "properties": {
+        "max_timeout_seconds": { "type": "integer", "minimum": 1 },
+        "max_memory_mb": { "type": "integer", "minimum": 1 },
+        "max_cpu_seconds": { "type": "integer", "minimum": 1 },
+        "max_concurrency": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": true
+    },
+    "capabilities": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "capability_id",
+          "permission_scopes",
+          "network_access",
+          "subprocess_access",
+          "filesystem_access",
+          "target_binding"
+        ],
+        "properties": {
+          "capability_id": { "type": "string", "minLength": 1 },
+          "permission_scopes": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "approval_required": { "type": "boolean" },
+          "dynamic_code": { "type": "boolean" },
+          "user_interaction_required": { "type": "boolean" },
+          "network_access": { "type": "string", "minLength": 1 },
+          "subprocess_access": { "type": "string", "minLength": 1 },
+          "filesystem_access": { "type": "string", "minLength": 1 },
+          "target_binding": { "type": "string", "minLength": 1 },
+          "audit_tags": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 }
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "audit_tags": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "taint_behavior": { "type": "string" }
+  },
+  "additionalProperties": true
+}

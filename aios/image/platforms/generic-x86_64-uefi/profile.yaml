@@ -1,0 +1,38 @@
+platform_id: generic-x86_64-uefi
+arch: x86_64
+boot_mode: uefi
+installer:
+  platform_label: Generic x86_64 UEFI
+  media_mode: embedded-system-image
+  default_target: aios-installer.target
+  source_payload_path: /usr/share/aios/installer/payload/aios-system.raw
+  target_overlay_dir: /usr/share/aios/installer/target-overlay
+  updated_platform_env_path: /etc/aios/updated/platform.env
+  runtime_platform_env_path: /etc/aios/runtime/platform.env
+  runtime_profile_path: /etc/aios/runtime/default-runtime-profile.yaml
+  updated_platform_profile: /usr/share/aios/updated/platforms/generic-x86_64-uefi/profile.yaml
+  vendor_id: generic
+  hardware_profile_id: generic-x86_64-uefi
+  guided_ui:
+    mode: auto
+    auto_confirm_seconds: 0
+  partition_strategy:
+    esp_partlabel: AIOS-ESP
+    root_partlabel: AIOS-root
+    var_partlabel: AIOS-var
+    esp_partition_index: 1
+    root_partition_index: 2
+    var_partition_index: 3
+  firmware_hooks:
+    pre_install: /usr/share/aios/installer/hooks/pre-install.sh
+    post_install: /usr/share/aios/installer/hooks/post-install.sh
+recovery:
+  default_target: aios-recovery.target
+  updated_platform_env_path: /etc/aios/updated/platform.env
+  runtime_platform_env_path: /etc/aios/runtime/platform.env
+  runtime_profile_path: /etc/aios/runtime/default-runtime-profile.yaml
+  updated_platform_profile: /usr/share/aios/updated/platforms/generic-x86_64-uefi/profile.yaml
+artifacts:
+  system_image: aios-qemu-x86_64.raw
+  installer_image: aios-qemu-x86_64-installer.raw
+  recovery_image: aios-qemu-x86_64-recovery.raw

@@ -1,0 +1,25 @@
+{
+  "generated_at": "2026-03-13T12:25:00Z",
+  "workspace": "/Users/mac/Desktop/AIOS",
+  "overall_status": "passed",
+  "json_report": "/Users/mac/Desktop/AIOS/out/validation/system-delivery-validation-report.json",
+  "markdown_report": "/Users/mac/Desktop/AIOS/out/validation/system-delivery-validation-report.md",
+  "checks": [
+    {
+      "check_id": "delivery-rootfs-hygiene",
+      "summary": "Validate delivery bundle layout, enabled units, compat descriptors, and machine-id hygiene",
+      "command": "python3 scripts/test-image-delivery-smoke.py --bundle-dir out/aios-system-delivery",
+      "status": "passed",
+      "returncode": 0,
+      "duration_seconds": 0.123,
+      "stdout": "{\"components\": 10}",
+      "stderr": "",
+      "parsed_output": {
+        "components": 10
+      },
+      "evidence_paths": [
+        "out/aios-system-delivery/manifest.json"
+      ]
+    }
+  ]
+}

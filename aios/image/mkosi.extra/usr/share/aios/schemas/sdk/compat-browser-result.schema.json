@@ -1,0 +1,145 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aios/compat-browser-result.schema.json",
+  "title": "AIOS Compat Browser Result Protocol",
+  "type": "object",
+  "required": [
+    "protocol_version",
+    "worker_contract",
+    "provider_id",
+    "status",
+    "operation",
+    "execution_location",
+    "request",
+    "fetch",
+    "document",
+    "policy",
+    "audit",
+    "timestamps"
+  ],
+  "properties": {
+    "protocol_version": { "const": "1.0.0" },
+    "worker_contract": { "const": "compat-browser-fetch-v1" },
+    "provider_id": { "const": "compat.browser.automation.local" },
+    "status": { "enum": ["ok", "not-found", "error"] },
+    "operation": { "enum": ["compat.browser.navigate", "compat.browser.extract", null] },
+    "execution_location": { "const": "sandbox" },
+    "request": {
+      "type": "object",
+      "required": ["capability_id", "url", "timeout_seconds"],
+      "properties": {
+        "capability_id": { "type": ["string", "null"] },
+        "url": { "type": ["string", "null"] },
+        "selector": { "type": ["string", "null"] },
+        "timeout_seconds": { "type": ["number", "null"], "minimum": 0 },
+        "max_links": { "type": ["integer", "null"], "minimum": 0 },
+        "max_text_chars": { "type": ["integer", "null"], "minimum": 0 },
+        "max_chars": { "type": ["integer", "null"], "minimum": 0 }
+      },
+      "additionalProperties": true
+    },
+    "fetch": {
+      "type": "object",
+      "required": [
+        "requested_url",
+        "resolved_url",
+        "final_url",
+        "status_code",
+        "content_type",
+        "charset",
+        "truncated",
+        "fetched_at"
+      ],
+      "properties": {
+        "requested_url": { "type": ["string", "null"] },
+        "resolved_url": { "type": ["string", "null"] },
+        "final_url": { "type": ["string", "null"] },
+        "status_code": { "type": ["integer", "null"] },
+        "content_type": { "type": ["string", "null"] },
+        "charset": { "type": ["string", "null"] },
+        "truncated": { "type": "boolean" },
+        "fetched_at": { "type": ["string", "null"] }
+      },
+      "additionalProperties": true
+    },
+    "document": {
+      "type": "object",
+      "required": [
+        "title",
+        "text_length",
+        "link_count",
+        "matched_count",
+        "text_preview",
+        "text",
+        "links"
+      ],
+      "properties": {
+        "title": { "type": ["string", "null"] },
+        "text_length": { "type": ["integer", "null"] },
+        "link_count": { "type": ["integer", "null"] },
+        "matched_count": { "type": ["integer", "null"] },
+        "text_preview": { "type": ["string", "null"] },
+        "text": { "type": ["string", "null"] },
+        "links": {
+          "type": ["array", "null"],
+          "items": {
+            "type": "object",
+            "required": ["href", "text"],
+            "properties": {
+              "href": { "type": "string" },
+              "text": { "type": "string" }
+            },
+            "additionalProperties": true
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "policy": {
+      "type": "object",
+      "required": ["compat_permission_manifest", "network_access", "filesystem_access"],
+      "properties": {
+        "compat_permission_manifest": { "$ref": "aios/compat-permission-manifest.schema.json" },
+        "network_access": { "type": ["string", "null"] },
+        "filesystem_access": { "type": ["string", "null"] }
+      },
+      "additionalProperties": true
+    },
+    "audit": {
+      "type": "object",
+      "required": ["audit_id", "audit_log", "capability_id", "audit_tags", "taint_behavior"],
+      "properties": {
+        "audit_id": { "type": ["string", "null"] },
+        "audit_log": { "type": ["string", "null"] },
+        "capability_id": { "type": ["string", "null"] },
+        "audit_tags": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "taint_behavior": { "type": ["string", "null"] }
+      },
+      "additionalProperties": true
+    },
+    "timestamps": {
+      "type": "object",
+      "required": ["started_at", "finished_at"],
+      "properties": {
+        "started_at": { "type": "string", "minLength": 1 },
+        "finished_at": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": true
+    },
+    "error": {
+      "type": ["object", "null"],
+      "required": ["category", "error_code", "message", "retryable"],
+      "properties": {
+        "category": { "type": "string", "minLength": 1 },
+        "error_code": { "type": "string", "minLength": 1 },
+        "message": { "type": "string", "minLength": 1 },
+        "retryable": { "type": "boolean" }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

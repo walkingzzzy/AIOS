@@ -1,6 +1,6 @@
 # AIOS Route B 快速开始
 
-**更新日期**: 2026-03-08
+**更新日期**: 2026-03-10
 
 ---
 
@@ -10,31 +10,43 @@
 
 ## 1. 先建立正确认知
 
-你现在拿到的是一个 **系统开发路线中的过渡仓库**。
-它包含可运行的兼容层原型，但 AIOS 的目标是操作系统，不是 Electron 应用。
+你现在拿到的不是一个“待启动的 Electron 原型”，而是一个**已具备系统工程基线、但远未完成发行闭环**的 AIOS 仓库。
+
+当前最短入口不是 `pnpm dev`，而是：
+
+- 运行本地 CI 对齐验证
+- 构建 delivery bundle
+- 检查镜像 / QEMU preflight
 
 ## 2. 30 分钟快速上手
 
 1. 阅读 [项目架构](../AIOS-Project-Architecture.md)
-2. 阅读 [协议总览](../protocol/00-Overview.md)
-3. 阅读 [实现进展](../IMPLEMENTATION_PROGRESS.md)
-4. 运行当前兼容层原型，理解哪些能力已经存在
+2. 阅读 [实现进展](../IMPLEMENTATION_PROGRESS.md)
+3. 安装 Python / Rust 基础依赖并补齐 `PyYAML`
+4. 在仓库根目录执行本地 `validate`
+5. 查看生成的 bundle / validation 产物
 
-## 3. 运行当前兼容层原型
+推荐命令：
 
 ```bash
-git clone https://github.com/aios-protocol/aios.git
-cd aios
-pnpm install
-pnpm build
-pnpm dev
+python3 -m pip install --upgrade pip PyYAML
+python3 scripts/run-aios-ci-local.py --stage validate
 ```
 
-这一步的目的只是：
+## 3. 这 30 分钟里你会得到什么
 
-- 理解现有编排逻辑
-- 理解 compat provider 的形态
-- 评估哪些能力可上移为系统服务
+- 六个核心服务的编译与单测结果
+- provider registry / shell / compat / delivery smoke 结果
+- `out/aios-system-delivery/` 交付产物
+- boot preflight 结果
+
+如果宿主环境已经具备镜像与 QEMU 依赖，可继续：
+
+```bash
+bash scripts/build-aios-image.sh --preflight
+python3 scripts/run-aios-ci-local.py --stage system-validation --dry-run
+python3 scripts/run-aios-ci-local.py --stage full --dry-run --output-prefix out/validation/full-regression-report
+```
 
 ## 4. 新贡献者的第一条纪律
 
@@ -49,3 +61,4 @@ pnpm dev
 - 做系统服务：看 [开发规范](AIOS-Protocol-DevSpec.md)
 - 做壳层：看 [系统开发指南](AIOS-System-DevGuide.md)
 - 做 provider：看 [Provider 开发指南](../adapters/01-Development.md)
+- 做镜像 / 安装 / 恢复：看 [安装指南](../INSTALL.md) 与 `aios/image/README.md`

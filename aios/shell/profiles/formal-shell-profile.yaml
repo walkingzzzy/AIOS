@@ -1,0 +1,42 @@
+profile_id: formal-shell
+desktop_host: gtk
+session_backend: compositor
+session:
+  entrypoint: formal
+  nested_fallback: standalone-gtk
+  compositor_required: false
+voice_input: true
+screen_context: true
+show_approval_panel: true
+show_recovery_actions: true
+multimodal_capture:
+  screen: true
+  audio: true
+  input_focus: true
+
+components:
+  launcher: true
+  notification_center: true
+  operator_audit: true
+  remote_governance: true
+  task_surface: true
+  approval_panel: true
+  recovery_surface: true
+  capture_indicators: true
+  portal_chooser: true
+  device_backend_status: true
+paths:
+  agentd_socket: /run/aios/agentd/agentd.sock
+  sessiond_socket: /run/aios/sessiond/sessiond.sock
+  policyd_socket: /run/aios/policyd/policyd.sock
+  shell_control_provider_socket: /run/aios/shell-provider/shell-control-provider.sock
+  screen_capture_provider_socket: /run/aios/screen-provider/screen-capture-provider.sock
+  updated_socket: /run/aios/updated/updated.sock
+  recovery_surface_model: /var/lib/aios/updated/recovery-surface.json
+  capture_indicator_state: /var/lib/aios/deviced/indicator-state.json
+  device_backend_state: /var/lib/aios/deviced/backend-state.json
+  deviced_socket: /run/aios/deviced/deviced.sock
+compositor:
+  manifest_path: ../compositor/Cargo.toml
+  config_path: ../compositor/default-compositor.conf
+  panel_action_log_path: /var/lib/aios/shell/panel-action-events.jsonl

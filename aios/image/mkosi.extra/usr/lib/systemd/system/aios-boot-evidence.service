@@ -1,0 +1,11 @@
+[Unit]
+Description=AIOS Hardware Boot Evidence Collector
+After=multi-user.target aios-updated.service
+Wants=aios-updated.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/bash /usr/libexec/aios/aios-boot-evidence.sh
+
+[Install]
+WantedBy=multi-user.target

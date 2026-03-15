@@ -1,0 +1,13 @@
+profile_id: qemu-x86_64
+update_stack: systemd-sysupdate
+sysupdate_binary: /usr/bin/systemd-sysupdate
+sysupdate_definitions_dir: /etc/systemd/sysupdate.d
+boot_backend: state-file
+bootctl_binary: /usr/bin/bootctl
+firmwarectl_binary: /usr/libexec/aios-platform/generic-x86_64-uefi/firmwarectl-bridge.sh
+health_probe_command: /usr/libexec/aios-platform/qemu-x86_64/health-probe.sh
+boot_cmdline_path: /proc/cmdline
+boot_entry_state_dir: /var/lib/aios/updated/boot
+boot_success_marker_path: /var/lib/aios/updated/boot-success
+current_channel: stable
+current_slot: a

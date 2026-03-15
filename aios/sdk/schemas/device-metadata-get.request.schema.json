@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aios/device-metadata-get.request.schema.json",
+  "title": "AIOS Device Metadata Get Request",
+  "type": "object",
+  "properties": {
+    "modalities": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "only_available": { "type": "boolean" },
+    "include_state_notes": { "type": "boolean" }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aios/device-metadata-get.response.schema.json",
+  "title": "AIOS Device Metadata Get Response",
+  "type": "object",
+  "required": ["provider_id", "device_service_id", "generated_at", "entries"],
+  "properties": {
+    "provider_id": { "type": "string" },
+    "device_service_id": { "type": "string" },
+    "generated_at": { "type": "string" },
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["modality", "source_backend", "available", "conditional", "readiness"],
+        "properties": {
+          "modality": { "type": "string" },
+          "source_backend": { "type": "string" },
+          "available": { "type": "boolean" },
+          "conditional": { "type": "boolean" },
+          "readiness": { "type": "string" },
+          "backend_details": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "adapter_id": { "type": "string" },
+          "adapter_execution_path": { "type": "string" },
+          "notes": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "available_modalities": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "active_capture_count": { "type": "integer", "minimum": 0 },
+    "summary": {
+      "type": "object",
+      "properties": {
+        "overall_status": { "type": "string" },
+        "requested_modalities": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "available_modalities": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "unavailable_modalities": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "conditional_modalities": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "unknown_modalities": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "active_capture_count": { "type": "integer", "minimum": 0 },
+        "continuous_collector_count": { "type": "integer", "minimum": 0 },
+        "ui_tree_available": { "type": "boolean" },
+        "ui_tree_snapshot_attached": { "type": "boolean" }
+      },
+      "additionalProperties": true
+    },
+    "ui_tree_support_matrix": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["environment_id", "available", "readiness"],
+        "properties": {
+          "environment_id": { "type": "string" },
+          "available": { "type": "boolean" },
+          "readiness": { "type": "string" },
+          "current": { "type": "boolean" },
+          "details": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "notes": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "additionalProperties": true
+}

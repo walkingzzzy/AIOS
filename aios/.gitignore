@@ -7,3 +7,7 @@
 *.qcow2
 *.raw
 *.img
+/target
+/image/mkosi.output
+/image/mkosi.cache
+/image/mkosi.builddir

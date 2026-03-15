@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aios/shell-panel-events-list.response.schema.json",
+  "title": "AIOS Shell Panel Events List Response",
+  "type": "object",
+  "properties": {
+    "provider_id": { "type": "string" },
+    "status": { "type": "string" },
+    "panel_action_log_path": {
+      "type": ["string", "null"]
+    },
+    "entry_count": { "type": "integer", "minimum": 0 },
+    "matched_entry_count": { "type": "integer", "minimum": 0 },
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "sequence": { "type": "integer", "minimum": 0 },
+          "event_id": { "type": "string" },
+          "kind": { "type": "string" },
+          "recorded_at_ms": { "type": "integer", "minimum": 0 },
+          "tick": { "type": "integer", "minimum": 0 },
+          "slot_id": { "type": ["string", "null"] },
+          "component": { "type": ["string", "null"] },
+          "panel_id": { "type": ["string", "null"] },
+          "action_id": { "type": ["string", "null"] },
+          "input_kind": { "type": ["string", "null"] },
+          "focus_policy": { "type": ["string", "null"] },
+          "status": { "type": "string" },
+          "summary": { "type": ["string", "null"] },
+          "error": { "type": ["string", "null"] },
+          "payload": {}
+        },
+        "additionalProperties": true
+      }
+    },
+    "applied_filters": { "type": "object" },
+    "notes": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "required": ["provider_id", "status", "entry_count", "matched_entry_count", "entries"],
+  "additionalProperties": true
+}

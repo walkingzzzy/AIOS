@@ -1,0 +1,44 @@
+{
+  "index_id": "system-delivery-validation",
+  "generated_at": "2026-03-13T12:26:00Z",
+  "validation_kind": "system-delivery",
+  "validation_status": "passed",
+  "workspace": "/Users/mac/Desktop/AIOS",
+  "report_paths": {
+    "json_report": "/Users/mac/Desktop/AIOS/out/validation/system-delivery-validation-report.json",
+    "markdown_report": "/Users/mac/Desktop/AIOS/out/validation/system-delivery-validation-report.md"
+  },
+  "status_counts": {
+    "passed": 2,
+    "failed": 0
+  },
+  "artifacts": {
+    "logs": [
+      "out/boot-qemu-bringup.log"
+    ],
+    "images": [
+      "aios/image/mkosi.output/aios-qemu-x86_64.raw"
+    ],
+    "scripts": [
+      "scripts/test-boot-qemu-bringup.py"
+    ],
+    "configs": [
+      "aios/image/mkosi.conf"
+    ],
+    "other": [
+      "out/aios-system-delivery/manifest.json"
+    ]
+  },
+  "checks": [
+    {
+      "check_id": "qemu-bringup-firstboot",
+      "summary": "Boot the QEMU raw image and require AIOS firstboot evidence in the serial log",
+      "status": "passed",
+      "evidence_paths": [
+        "out/boot-qemu-bringup.log",
+        "aios/image/mkosi.output/aios-qemu-x86_64.raw"
+      ]
+    }
+  ],
+  "failing_checks": []
+}

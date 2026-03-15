@@ -1,0 +1,33 @@
+service_id: aios-runtime-local-inference-provider
+plane: provider
+role: runtime-local-inference-provider
+implementation_status: in_progress
+maturity: partial_impl
+current_phase: phase3
+primary_language: rust
+async_runtime: tokio
+transport:
+  primary: uds-jsonrpc
+storage:
+  primary: none
+inputs:
+  - execution_token
+  - runtime_infer_request
+  - runtime_embed_request
+  - runtime_rerank_request
+outputs:
+  - runtime_infer_response
+  - runtime_embed_response
+  - runtime_rerank_response
+  - runtime_budget_snapshot
+dependencies:
+  requires:
+    - aios-agentd
+    - aios-policyd
+    - aios-runtimed
+blockers:
+  - no-streaming-provider-envelope-yet
+  - provider-budget-remains-process-local
+next_milestones:
+  - add-runtime-route-observability
+  - support-streaming-token-verified-infer

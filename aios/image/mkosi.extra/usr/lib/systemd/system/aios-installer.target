@@ -1,0 +1,5 @@
+[Unit]
+Description=AIOS Installer Target
+Wants=aios-installer.service
+After=basic.target local-fs.target
+AllowIsolate=yes

@@ -1,0 +1,10 @@
+[Source]
+Type=url-file
+Path=https://updates.aios.invalid/qemu-x86_64/
+MatchPattern=aios-@v.raw.xz
+
+[Target]
+Type=partition
+Path=/dev/disk/by-partlabel/AIOS-root
+MatchPattern=aios-@v.raw.xz
+Version=

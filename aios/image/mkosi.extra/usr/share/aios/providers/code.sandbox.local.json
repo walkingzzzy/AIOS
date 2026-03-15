@@ -1,0 +1,75 @@
+{
+  "provider_id": "compat.code.sandbox.local",
+  "version": "0.1.0",
+  "kind": "compat-provider",
+  "display_name": "Code Sandbox Compat Provider",
+  "owner": "aios-compat",
+  "worker_contract": "compat-sandbox-executor-v1",
+  "result_protocol_schema_ref": "aios/compat-sandbox-result.schema.json",
+  "capabilities": [
+    {
+      "capability_id": "compat.code.execute",
+      "read_only": false,
+      "recoverable": true,
+      "approval_required": true,
+      "external_side_effect": false,
+      "dynamic_code": true,
+      "user_interaction_required": false,
+      "supported_targets": ["python-script"],
+      "input_schema_refs": ["aios/code.execute.request"],
+      "output_schema_refs": [
+        "aios/code.execute.response",
+        "aios/compat-sandbox-result.schema.json"
+      ],
+      "audit_tags": ["sandbox", "code"]
+    }
+  ],
+  "execution_location": "sandbox",
+  "sandbox_class": "code-executor",
+  "required_permissions": ["sandbox.local"],
+  "resource_budget": {
+    "max_memory_mb": 256,
+    "max_cpu_percent": 50,
+    "max_concurrency": 2
+  },
+  "compat_permission_manifest": {
+    "schema_version": "1.0.0",
+    "provider_id": "compat.code.sandbox.local",
+    "execution_location": "sandbox",
+    "sandbox_class": "code-executor",
+    "required_permissions": ["sandbox.local"],
+    "resource_budget": {
+      "max_timeout_seconds": 10,
+      "max_memory_mb": 256,
+      "max_cpu_seconds": 2,
+      "max_concurrency": 2
+    },
+    "capabilities": [
+      {
+        "capability_id": "compat.code.execute",
+        "permission_scopes": ["sandbox.local.execute"],
+        "approval_required": true,
+        "dynamic_code": true,
+        "user_interaction_required": false,
+        "network_access": "optional-flag",
+        "subprocess_access": "optional-flag",
+        "filesystem_access": "sandbox-workspace",
+        "target_binding": "sandbox-input-root",
+        "audit_tags": ["sandbox", "code"]
+      }
+    ],
+    "audit_tags": ["sandbox", "compat"],
+    "taint_behavior": "dynamic-code-tainted"
+  },
+  "supported_targets": ["python-script"],
+  "timeout_policy": "bounded-10s",
+  "retry_policy": "no-retry",
+  "healthcheck": {
+    "kind": "process",
+    "endpoint": "code-sandbox-provider",
+    "interval_seconds": 10
+  },
+  "audit_tags": ["sandbox", "compat"],
+  "taint_behavior": "dynamic-code-tainted",
+  "degradation_policy": "deny-on-unavailable"
+}

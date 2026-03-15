@@ -1,6 +1,6 @@
 # AIOS 系统开发环境安装指南
 
-**更新日期**: 2026-03-08
+**更新日期**: 2026-03-10
 
 ---
 
@@ -10,55 +10,73 @@
 
 ## 1. 重要说明
 
-当前仓库**尚不能生成可启动的 AIOS 系统镜像**。
-因此本安装文档分为两部分：
+当前仓库**已经具备 AIOS 系统工程基线**，包括：
 
-1. **运行现有兼容层原型**（用于验证编排与接口）
-2. **准备 Route B 系统开发环境**（用于后续镜像、服务、壳层开发）
+- 本地 CI 对齐入口：`scripts/run-aios-ci-local.py`
+- full regression suite 报告入口：`scripts/run-aios-ci-local.py --stage full --output-prefix out/validation/full-regression-report`
+- system delivery bundle 构建：`scripts/build-aios-delivery.py`
+- 系统镜像 / recovery / installer 构建入口：`scripts/build-aios-image.sh`、`scripts/build-aios-recovery-image.sh`、`scripts/build-aios-installer-image.sh`
+- QEMU / 交付验证聚合：`scripts/test-system-delivery-validation.py`
 
-## 2. 运行现有兼容层原型
+但它**仍不是发行级完成态**：正式 shell/compositor、真实硬件验证、release-grade update/recovery 闭环仍未完成。
 
-### 前置条件
-- Node.js 20+
-- pnpm 8+
+## 2. 推荐开发环境
 
-### 步骤
-```bash
-git clone https://github.com/aios-protocol/aios.git
-cd aios
-pnpm install
-pnpm build
-pnpm dev
-```
+### 必需工具
+- Python 3.12（与 CI 保持一致，至少应使用能运行当前脚本的解释器）
+- `PyYAML`
+- Rust stable（当前最小工具链按 1.85.0 对齐）
+- `cargo`
+- `bash`
 
-### 说明
-- 这一步运行的是 **原型期兼容层**
-- 它可以验证 AI 编排、任务流、兼容控制与桥接能力
-- 它不是 AIOS 的最终安装形态
-
-## 3. Route B 系统开发环境
+### 镜像 / 系统验证附加工具
+- `qemu-system-x86_64`
+- `qemu-img`
+- `ovmf` / 对应 UEFI firmware
+- `mkosi`，或可用的 `docker + git`（`scripts/build-aios-image.sh` 支持容器化回退）
 
 ### 推荐宿主环境
-- Linux 主机，或
-- Linux 虚拟机（QEMU / UTM / VMware / VirtualBox）
+- Linux-first
+- macOS / 其他宿主可先运行本地 `validate`、bundle 构建和 preflight；完整 image-level 验证需要镜像与 QEMU 依赖齐备
 
-### 推荐工具链
-- Rust stable
-- cargo / rustfmt / clippy
-- QEMU
-- systemd 开发工具
-- Wayland / wlroots / smithay 相关依赖
-- 镜像构建工具（如 mkosi）
+## 3. 最短可用验证路径
 
-### 推荐目录职责
-- `image/`：镜像与启动链
-- `services/`：系统服务
-- `shell/`：壳层与 compositor
-- `policy/`：权限、审计、恢复
-- `compat/`：兼容层
-- `legacy/`：原型控制台
+在**仓库根目录**执行：
 
-## 4. 当前不再推荐的理解方式
+```bash
+python3 -m pip install --upgrade pip PyYAML
+python3 scripts/run-aios-ci-local.py --stage validate
+```
+
+这条路径会按 CI 顺序执行：
+
+- task metadata 校验
+- Python 语法检查
+- Rust workspace 单测
+- provider / shell / compat / delivery smoke
+- boot preflight
+
+## 4. 镜像与系统级验证路径
+
+建议先做 preflight，再执行重型步骤：
+
+```bash
+bash scripts/build-aios-image.sh --preflight
+python3 scripts/run-aios-ci-local.py --stage system-validation --dry-run
+python3 scripts/run-aios-ci-local.py --stage full --dry-run --output-prefix out/validation/full-regression-report
+```
+
+宿主环境满足条件后，再执行：
+
+```bash
+bash scripts/build-aios-image.sh
+bash scripts/build-aios-recovery-image.sh
+bash scripts/build-aios-installer-image.sh
+python3 scripts/test-system-delivery-validation.py
+python3 scripts/run-aios-ci-local.py --stage full --output-prefix out/validation/full-regression-report
+```
+
+## 5. 当前不再推荐的理解方式
 
 以下理解方式已废弃：
 
@@ -66,8 +84,9 @@ pnpm dev
 - “打一个 DMG / EXE 就代表 AIOS 发布”
 - “Electron 客户端就是 AIOS”
 
-## 5. 现阶段团队协作建议
+## 6. 现阶段团队协作建议
 
-- 想验证 AI 功能与协议：运行兼容层原型
-- 想推进操作系统主线：优先准备 Linux-first 开发环境
+- 想验证仓库当前是否健康：优先运行 `scripts/run-aios-ci-local.py --stage validate`
+- 想推进镜像 / 安装 / 恢复主线：优先准备 Linux-first + QEMU 环境
+- `compat/` 与 `legacy/` 仅作为迁移与桥接资产，不应再充当主入口说明
 - 所有新文档与新模块，必须显式说明自己属于系统主线还是 compat layer

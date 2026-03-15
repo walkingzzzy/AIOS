@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aios/runtime-rerank.response.schema.json",
+  "title": "AIOS Runtime Rerank Response",
+  "type": "object",
+  "required": ["backend_id", "route_state", "results", "degraded", "rejected"],
+  "properties": {
+    "backend_id": { "type": "string" },
+    "route_state": { "type": "string" },
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["document_index", "score", "document"],
+        "properties": {
+          "document_index": { "type": "integer", "minimum": 0 },
+          "score": { "type": "number" },
+          "document": { "type": "string" }
+        },
+        "additionalProperties": true
+      }
+    },
+    "degraded": { "type": "boolean" },
+    "rejected": { "type": "boolean" },
+    "reason": { "type": "string" },
+    "provider_id": { "type": "string" },
+    "runtime_service_id": { "type": "string" },
+    "provider_status": { "type": "string" },
+    "queue_saturated": { "type": "boolean" },
+    "runtime_budget": { "type": "object" },
+    "notes": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "additionalProperties": true
+}

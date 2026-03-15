@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aios/evidence-index.schema.json",
+  "title": "AIOS Validation Evidence Index",
+  "type": "object",
+  "required": ["index_id", "generated_at", "validation_kind", "validation_status", "workspace", "report_paths", "checks"],
+  "properties": {
+    "index_id": { "type": "string", "minLength": 1 },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "validation_kind": { "type": "string", "minLength": 1 },
+    "validation_status": {
+      "type": "string",
+      "enum": ["passed", "failed"]
+    },
+    "workspace": { "type": "string" },
+    "report_paths": {
+      "type": "object",
+      "required": ["json_report", "markdown_report"],
+      "properties": {
+        "json_report": { "type": "string" },
+        "markdown_report": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "status_counts": {
+      "type": "object",
+      "properties": {
+        "passed": { "type": "integer", "minimum": 0 },
+        "failed": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "artifacts": {
+      "type": "object",
+      "properties": {
+        "logs": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "images": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "scripts": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "configs": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "other": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["check_id", "summary", "status", "evidence_paths"],
+        "properties": {
+          "check_id": { "type": "string" },
+          "summary": { "type": "string" },
+          "status": {
+            "type": "string",
+            "enum": ["passed", "failed"]
+          },
+          "evidence_paths": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "failing_checks": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "additionalProperties": true
+}

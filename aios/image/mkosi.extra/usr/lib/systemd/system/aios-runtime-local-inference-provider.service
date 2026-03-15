@@ -1,0 +1,14 @@
+[Unit]
+Description=AIOS Runtime Local Inference Provider
+After=aios-agentd.service aios-policyd.service aios-runtimed.service
+Wants=aios-agentd.service
+Requires=aios-policyd.service aios-runtimed.service
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/aios/runtime-local-inference-provider
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

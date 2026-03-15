@@ -1,0 +1,55 @@
+{
+  "provider_id": "system.files.local",
+  "version": "0.1.0",
+  "kind": "system-provider",
+  "display_name": "Local File Provider",
+  "owner": "aios-system",
+  "capabilities": [
+    {
+      "capability_id": "provider.fs.open",
+      "read_only": true,
+      "recoverable": true,
+      "approval_required": false,
+      "external_side_effect": false,
+      "dynamic_code": false,
+      "user_interaction_required": true,
+      "supported_targets": ["file", "directory"],
+      "input_schema_refs": ["aios/portal-handle.schema.json"],
+      "output_schema_refs": ["aios/portal-handle.schema.json"],
+      "audit_tags": ["filesystem", "portal"]
+    },
+    {
+      "capability_id": "system.file.bulk_delete",
+      "read_only": false,
+      "recoverable": false,
+      "approval_required": true,
+      "external_side_effect": true,
+      "dynamic_code": false,
+      "user_interaction_required": true,
+      "supported_targets": ["file", "directory"],
+      "input_schema_refs": ["aios/portal-handle.schema.json"],
+      "output_schema_refs": [],
+      "audit_tags": ["filesystem", "destructive"]
+    }
+  ],
+  "execution_location": "local",
+  "sandbox_class": "system-files",
+  "required_permissions": ["fs.user-selected"],
+  "resource_budget": {
+    "max_memory_mb": 512,
+    "max_concurrency": 2
+  },
+  "supported_targets": ["file", "directory"],
+  "input_schema_refs": ["aios/portal-handle.schema.json"],
+  "output_schema_refs": ["aios/portal-handle.schema.json"],
+  "timeout_policy": "bounded-30s",
+  "retry_policy": "no-retry",
+  "healthcheck": {
+    "kind": "process",
+    "endpoint": "portal",
+    "interval_seconds": 30
+  },
+  "audit_tags": ["filesystem", "local"],
+  "taint_behavior": "input-propagates",
+  "degradation_policy": "deny-on-unavailable"
+}

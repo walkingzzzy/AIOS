@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aios/cross-service-health-report.schema.json",
+  "title": "AIOS Cross-Service Health Report",
+  "type": "object",
+  "required": [
+    "report_id",
+    "generated_at",
+    "workspace",
+    "overall_status",
+    "json_report",
+    "markdown_report",
+    "events_jsonl",
+    "summary",
+    "checks",
+    "events"
+  ],
+  "properties": {
+    "report_id": { "type": "string", "minLength": 1 },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "workspace": { "type": "string" },
+    "overall_status": {
+      "type": "string",
+      "enum": ["passed", "failed"]
+    },
+    "json_report": { "type": "string" },
+    "markdown_report": { "type": "string" },
+    "events_jsonl": { "type": "string" },
+    "summary": {
+      "type": "object",
+      "required": [
+        "source_count",
+        "passed_count",
+        "failed_count",
+        "event_count",
+        "component_kinds",
+        "service_ids",
+        "overall_statuses",
+        "failed_checks"
+      ],
+      "properties": {
+        "source_count": { "type": "integer", "minimum": 0 },
+        "passed_count": { "type": "integer", "minimum": 0 },
+        "failed_count": { "type": "integer", "minimum": 0 },
+        "event_count": { "type": "integer", "minimum": 0 },
+        "component_kinds": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "service_ids": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "overall_statuses": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "failed_checks": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "artifact_paths": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": true
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "check_id",
+          "summary",
+          "status",
+          "source_kind",
+          "target",
+          "component_kind",
+          "event_count",
+          "health_statuses",
+          "artifact_paths",
+          "detail"
+        ],
+        "properties": {
+          "check_id": { "type": "string" },
+          "summary": { "type": "string" },
+          "status": {
+            "type": "string",
+            "enum": ["passed", "failed"]
+          },
+          "source_kind": {
+            "type": "string",
+            "enum": [
+              "rpc-service",
+              "rpc-update",
+              "provider-registry",
+              "command-health",
+              "delivery-artifact",
+              "evidence-index"
+            ]
+          },
+          "target": { "type": "string" },
+          "component_kind": {
+            "type": "string",
+            "enum": ["service", "provider", "runtime", "shell", "device", "update", "platform", "hardware"]
+          },
+          "event_count": { "type": "integer", "minimum": 0 },
+          "health_statuses": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "service_ids": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "artifact_paths": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "detail": { "type": "string" },
+          "notes": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "additionalProperties": true
+}

@@ -1,0 +1,19 @@
+id: nvidia-jetson-orin-agx
+platform_tier: tier1
+vendor_id: nvidia
+model: jetson-agx-orin-devkit
+arch: aarch64
+boot: uefi
+gpu: integrated
+npu: integrated
+wifi: optional
+bluetooth: optional
+audio: optional
+camera: optional
+updated_platform_profile: /usr/share/aios/updated/platforms/nvidia-jetson-orin-agx/profile.yaml
+bringup_status: bringup-kit-only
+hardware_evidence_required: true
+notes:
+  - Platform profile and nvbootctrl adapter landed in-repo.
+  - Managed runtime worker assets and platform-specific runtime profile are bundled with platform media export.
+  - Real hardware install and rollback evidence is still pending.

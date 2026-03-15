@@ -1,0 +1,17 @@
+[Unit]
+Description=AIOS Installer Provisioning
+After=local-fs.target systemd-udev-settle.service
+Wants=systemd-udev-settle.service
+PartOf=aios-installer.target
+ConditionPathExists=!/run/aios-installer/completed
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/aios/installer/aios-installer.env
+ExecStart=/usr/bin/bash /usr/libexec/aios/aios-installer-guided.sh
+StandardOutput=journal+console
+StandardError=journal+console
+RemainAfterExit=yes
+
+[Install]
+WantedBy=aios-installer.target

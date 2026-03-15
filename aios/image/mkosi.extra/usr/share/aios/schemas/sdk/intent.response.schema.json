@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aios/intent.response.schema.json",
+  "title": "AIOS System Intent Response",
+  "type": "object",
+  "required": [
+    "provider_id",
+    "session_id",
+    "task_id",
+    "task_state",
+    "status",
+    "intent",
+    "summary",
+    "route_preference",
+    "next_action",
+    "plan_source"
+  ],
+  "properties": {
+    "provider_id": { "type": "string" },
+    "session_id": { "type": "string" },
+    "task_id": { "type": "string" },
+    "task_state": { "type": "string" },
+    "status": { "type": "string" },
+    "intent": { "type": "string" },
+    "summary": { "type": "string" },
+    "route_preference": { "type": "string" },
+    "next_action": { "type": "string" },
+    "plan_source": { "type": "string" },
+    "candidate_capabilities": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "actions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["action_id", "kind", "description", "requires_approval"],
+        "properties": {
+          "action_id": { "type": "string" },
+          "kind": { "type": "string" },
+          "capability_id": { "type": "string" },
+          "description": { "type": "string" },
+          "requires_approval": { "type": "boolean" }
+        },
+        "additionalProperties": true
+      }
+    },
+    "requires_handoff": { "type": "boolean" },
+    "notes": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "additionalProperties": true
+}

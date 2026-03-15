@@ -1,0 +1,97 @@
+{
+  "provider_id": "compat.mcp.bridge.local",
+  "version": "0.1.0",
+  "kind": "compat-provider",
+  "display_name": "MCP Bridge Compat Provider",
+  "owner": "aios-compat",
+  "worker_contract": "compat-mcp-bridge-v1",
+  "result_protocol_schema_ref": "aios/compat-mcp-bridge-result.schema.json",
+  "trust_policy_modes": ["permissive", "allowlist", "deny"],
+  "capabilities": [
+    {
+      "capability_id": "compat.mcp.call",
+      "read_only": true,
+      "recoverable": true,
+      "approval_required": false,
+      "external_side_effect": true,
+      "dynamic_code": false,
+      "user_interaction_required": false,
+      "supported_targets": ["mcp-server"],
+      "input_schema_refs": ["aios/mcp.call.request"],
+      "output_schema_refs": ["aios/mcp.call.response", "aios/compat-mcp-bridge-result.schema.json"],
+      "audit_tags": ["mcp", "bridge"]
+    },
+    {
+      "capability_id": "compat.a2a.forward",
+      "read_only": true,
+      "recoverable": true,
+      "approval_required": true,
+      "external_side_effect": true,
+      "dynamic_code": false,
+      "user_interaction_required": false,
+      "supported_targets": ["remote-agent"],
+      "input_schema_refs": ["aios/a2a.forward.request"],
+      "output_schema_refs": ["aios/a2a.forward.response", "aios/compat-mcp-bridge-result.schema.json"],
+      "audit_tags": ["a2a", "bridge"]
+    }
+  ],
+  "execution_location": "sandbox",
+  "sandbox_class": "mcp-bridge",
+  "required_permissions": ["bridge.remote"],
+  "resource_budget": {
+    "max_memory_mb": 768,
+    "max_concurrency": 4,
+    "max_requests_per_minute": 60
+  },
+  "compat_permission_manifest": {
+    "schema_version": "1.0.0",
+    "provider_id": "compat.mcp.bridge.local",
+    "execution_location": "sandbox",
+    "sandbox_class": "mcp-bridge",
+    "required_permissions": ["bridge.remote"],
+    "resource_budget": {
+      "max_timeout_seconds": 20,
+      "max_memory_mb": 768,
+      "max_concurrency": 4
+    },
+    "capabilities": [
+      {
+        "capability_id": "compat.mcp.call",
+        "permission_scopes": ["bridge.remote.mcp-call"],
+        "approval_required": false,
+        "dynamic_code": false,
+        "user_interaction_required": false,
+        "network_access": "allowlisted-http",
+        "subprocess_access": "none",
+        "filesystem_access": "none",
+        "target_binding": "remote-endpoint",
+        "audit_tags": ["mcp", "bridge"]
+      },
+      {
+        "capability_id": "compat.a2a.forward",
+        "permission_scopes": ["bridge.remote.a2a-forward"],
+        "approval_required": true,
+        "dynamic_code": false,
+        "user_interaction_required": false,
+        "network_access": "allowlisted-http",
+        "subprocess_access": "none",
+        "filesystem_access": "none",
+        "target_binding": "remote-endpoint",
+        "audit_tags": ["a2a", "bridge"]
+      }
+    ],
+    "audit_tags": ["bridge", "compat", "remote"],
+    "taint_behavior": "remote-tainted"
+  },
+  "supported_targets": ["mcp-server", "remote-agent"],
+  "timeout_policy": "bounded-20s",
+  "retry_policy": "retry-once",
+  "healthcheck": {
+    "kind": "process",
+    "endpoint": "mcp-bridge-provider",
+    "interval_seconds": 15
+  },
+  "audit_tags": ["bridge", "compat", "remote"],
+  "taint_behavior": "remote-tainted",
+  "degradation_policy": "deny-on-unavailable"
+}

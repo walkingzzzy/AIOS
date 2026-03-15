@@ -1,0 +1,15 @@
+[Unit]
+Description=AIOS First Boot Initialization
+ConditionPathExists=!/var/lib/aios/firstboot/initialized
+After=local-fs.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/aios/firstboot/aios-firstboot.env
+ExecStart=/usr/bin/bash /usr/libexec/aios/aios-firstboot.sh
+StandardOutput=journal+console
+StandardError=journal+console
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

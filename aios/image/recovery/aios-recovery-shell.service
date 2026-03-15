@@ -1,0 +1,13 @@
+[Unit]
+Description=AIOS Recovery Summary
+After=local-fs.target
+PartOf=aios-recovery.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/aios/aios-recovery-report.sh
+StandardOutput=journal+console
+RemainAfterExit=yes
+
+[Install]
+WantedBy=aios-recovery.target

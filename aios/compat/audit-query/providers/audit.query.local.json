@@ -1,0 +1,92 @@
+{
+  "provider_id": "compat.audit.query.local",
+  "version": "0.1.0",
+  "kind": "compat-provider",
+  "display_name": "Compat Audit Query Provider",
+  "owner": "aios-compat",
+  "worker_contract": "compat-audit-query-v1",
+  "result_protocol_schema_ref": "aios/compat-audit-query-result.schema.json",
+  "capabilities": [
+    {
+      "capability_id": "compat.audit.query",
+      "read_only": true,
+      "recoverable": true,
+      "approval_required": false,
+      "external_side_effect": false,
+      "dynamic_code": false,
+      "user_interaction_required": false,
+      "supported_targets": ["compat-audit-log"],
+      "output_schema_refs": ["aios/compat-audit-query-result.schema.json"],
+      "audit_tags": ["audit", "compat", "query"]
+    },
+    {
+      "capability_id": "compat.audit.saved_query.run",
+      "read_only": true,
+      "recoverable": true,
+      "approval_required": false,
+      "external_side_effect": false,
+      "dynamic_code": false,
+      "user_interaction_required": false,
+      "supported_targets": ["saved-query-store", "compat-audit-log"],
+      "output_schema_refs": ["aios/compat-audit-query-result.schema.json"],
+      "audit_tags": ["audit", "compat", "saved-query"]
+    }
+  ],
+  "execution_location": "local",
+  "required_permissions": ["audit.read"],
+  "resource_budget": {
+    "max_memory_mb": 256,
+    "max_concurrency": 2,
+    "max_requests_per_minute": 60
+  },
+  "compat_permission_manifest": {
+    "schema_version": "1.0.0",
+    "provider_id": "compat.audit.query.local",
+    "execution_location": "local",
+    "required_permissions": ["audit.read"],
+    "resource_budget": {
+      "max_timeout_seconds": 30,
+      "max_memory_mb": 256,
+      "max_concurrency": 2
+    },
+    "capabilities": [
+      {
+        "capability_id": "compat.audit.query",
+        "permission_scopes": ["audit.read.query"],
+        "approval_required": false,
+        "dynamic_code": false,
+        "user_interaction_required": false,
+        "network_access": "none",
+        "subprocess_access": "none",
+        "filesystem_access": "read-local-audit-log-and-write-query-store",
+        "target_binding": "audit-log",
+        "audit_tags": ["audit", "compat", "query"]
+      },
+      {
+        "capability_id": "compat.audit.saved_query.run",
+        "permission_scopes": ["audit.read.saved-query"],
+        "approval_required": false,
+        "dynamic_code": false,
+        "user_interaction_required": false,
+        "network_access": "none",
+        "subprocess_access": "none",
+        "filesystem_access": "read-local-audit-log-and-write-query-store",
+        "target_binding": "saved-query",
+        "audit_tags": ["audit", "compat", "saved-query"]
+      }
+    ],
+    "audit_tags": ["audit", "compat", "query"],
+    "taint_behavior": "audit-observer"
+  },
+  "supported_targets": ["compat-audit-log", "saved-query-store"],
+  "timeout_policy": "bounded-30s",
+  "retry_policy": "retry-safe",
+  "healthcheck": {
+    "kind": "process",
+    "endpoint": "compat-audit-query-provider",
+    "interval_seconds": 15
+  },
+  "audit_tags": ["audit", "compat", "query"],
+  "taint_behavior": "audit-observer",
+  "degradation_policy": "query-local-store-only"
+}

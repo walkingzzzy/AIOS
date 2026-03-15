@@ -1,0 +1,13 @@
+[Unit]
+Description=AIOS System Files Provider
+After=aios-sessiond.service aios-policyd.service
+Requires=aios-sessiond.service aios-policyd.service
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/aios/system-files-provider
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

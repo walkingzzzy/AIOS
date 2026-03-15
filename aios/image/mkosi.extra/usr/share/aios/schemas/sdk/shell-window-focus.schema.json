@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aios/shell-window-focus.schema.json",
+  "title": "AIOS Shell Window Focus",
+  "type": "object",
+  "properties": {
+    "execution_token": { "type": "object" },
+    "target": { "type": "string" },
+    "reason": { "type": "string" }
+  },
+  "required": ["target"],
+  "additionalProperties": true
+}

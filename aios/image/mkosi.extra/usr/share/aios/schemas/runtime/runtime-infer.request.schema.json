@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aios/runtime-infer.request.schema.json",
+  "title": "AIOS Runtime Infer Request",
+  "type": "object",
+  "required": ["session_id", "task_id", "prompt"],
+  "properties": {
+    "session_id": { "type": "string" },
+    "task_id": { "type": "string" },
+    "prompt": { "type": "string" },
+    "model": { "type": "string" },
+    "preferred_backend": { "type": "string" },
+    "execution_token": { "type": "object" }
+  },
+  "additionalProperties": true
+}

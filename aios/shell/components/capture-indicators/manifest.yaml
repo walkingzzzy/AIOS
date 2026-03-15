@@ -1,0 +1,13 @@
+component_id: capture-indicators
+status: in_progress
+kind: shell-overlay
+owner: aios-shell
+consumes:
+  - aios-deviced.indicator-state.json
+  - device.state.get
+capabilities:
+  - show_mic_camera_screen_indicators
+  - show_approval_metadata
+entrypoint: client.py
+prototype_entrypoint: prototype.py
+panel_entrypoint: panel.py

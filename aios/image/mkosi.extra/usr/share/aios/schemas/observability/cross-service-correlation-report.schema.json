@@ -1,0 +1,198 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aios/cross-service-correlation-report.schema.json",
+  "title": "AIOS Cross-Service Correlation Report",
+  "type": "object",
+  "required": ["report_id", "generated_at", "session", "summary", "tasks", "correlations"],
+  "properties": {
+    "report_id": { "type": "string", "minLength": 1 },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "session": {
+      "type": "object",
+      "required": ["session_id", "user_id", "status", "created_at"],
+      "properties": {
+        "session_id": { "type": "string" },
+        "user_id": { "type": "string" },
+        "status": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "last_resumed_at": { "type": ["string", "null"], "format": "date-time" },
+        "metadata": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": true
+    },
+    "summary": {
+      "type": "object",
+      "required": [
+        "task_count",
+        "audit_entry_count",
+        "runtime_event_count",
+        "remote_audit_count",
+        "observability_record_count",
+        "working_memory_count",
+        "episodic_entry_count"
+      ],
+      "properties": {
+        "task_count": { "type": "integer", "minimum": 0 },
+        "audit_entry_count": { "type": "integer", "minimum": 0 },
+        "runtime_event_count": { "type": "integer", "minimum": 0 },
+        "remote_audit_count": { "type": "integer", "minimum": 0 },
+        "observability_record_count": { "type": "integer", "minimum": 0 },
+        "working_memory_count": { "type": "integer", "minimum": 0 },
+        "episodic_entry_count": { "type": "integer", "minimum": 0 },
+        "task_states": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "audit_decisions": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "runtime_event_kinds": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": true
+    },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["task_id", "session_id", "state", "created_at"],
+        "properties": {
+          "task_id": { "type": "string" },
+          "session_id": { "type": "string" },
+          "state": { "type": "string" },
+          "title": { "type": ["string", "null"] },
+          "created_at": { "type": "string", "format": "date-time" },
+          "plan": {
+            "type": ["object", "array", "string", "number", "boolean", "null"]
+          },
+          "task_events": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["event_id", "from_state", "to_state", "created_at"],
+              "properties": {
+                "event_id": { "type": "string" },
+                "from_state": { "type": "string" },
+                "to_state": { "type": "string" },
+                "metadata": {
+                  "type": ["object", "array", "string", "number", "boolean", "null"]
+                },
+                "created_at": { "type": "string", "format": "date-time" }
+              },
+              "additionalProperties": true
+            }
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "working_memory": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["ref_id", "session_id", "created_at"],
+        "properties": {
+          "ref_id": { "type": "string" },
+          "session_id": { "type": "string" },
+          "payload": {
+            "type": ["object", "array", "string", "number", "boolean", "null"]
+          },
+          "created_at": { "type": "string", "format": "date-time" }
+        },
+        "additionalProperties": true
+      }
+    },
+    "episodic_memory": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["entry_id", "session_id", "summary", "created_at"],
+        "properties": {
+          "entry_id": { "type": "string" },
+          "session_id": { "type": "string" },
+          "summary": { "type": "string" },
+          "metadata": { "type": "object" },
+          "created_at": { "type": "string", "format": "date-time" }
+        },
+        "additionalProperties": true
+      }
+    },
+    "audit_entries": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "runtime_events": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "remote_audits": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "observability_records": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "correlations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["task_id", "audit_decisions", "runtime_event_kinds", "state_transitions"],
+        "properties": {
+          "task_id": { "type": "string" },
+          "audit_decisions": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "runtime_event_kinds": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "remote_audit_statuses": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "observability_kinds": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "state_transitions": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "working_memory_refs": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "episodic_summaries": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "approval_refs": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "notes": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "additionalProperties": true
+}

@@ -62,6 +62,13 @@ v1 推荐至少支持以下 backend 类型：
 - `sandbox-runtime`
 - `attested-remote`
 
+解释：
+
+- `local-cpu` 是基线后端，必须长期可用
+- `local-gpu` 是主要加速后端，应按支持硬件清单声明
+- `local-npu` 是条件后端，只能在声明支持的 `hardware profile` 上激活
+- `attested-remote` 是条件执行位置，只能在 attestation、policy 与审计链完整时激活
+
 ### 3.3 `offload_policy`
 
 用于定义什么情况下允许远端或受证明远端执行：
@@ -317,6 +324,7 @@ route_profile:
 - CPU fallback 存在
 - GUI fallback 默认为关闭或手动
 - 远端执行默认关闭或手动
+- `local-cpu` 必须是基线能力；`local-gpu`、`local-npu`、`attested-remote` 只在声明支持的 profile 上进入可用态
 
 ## 13. 与现有文档的关系
 

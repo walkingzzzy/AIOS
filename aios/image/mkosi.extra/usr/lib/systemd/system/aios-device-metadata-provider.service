@@ -1,0 +1,14 @@
+[Unit]
+Description=AIOS Device Metadata Provider
+After=aios-agentd.service aios-deviced.service
+Wants=aios-agentd.service
+Requires=aios-deviced.service
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/aios/device-metadata-provider
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

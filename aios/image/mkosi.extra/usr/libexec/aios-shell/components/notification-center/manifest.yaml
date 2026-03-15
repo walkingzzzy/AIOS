@@ -1,0 +1,15 @@
+component_id: notification-center
+status: done
+role: shell-notification-surface
+integrates:
+  - aios-updated
+  - aios-deviced
+  - aios-policyd
+features:
+  - recovery-surface-summary
+  - capture-indicator-summary
+  - approval-summary
+  - backend-status-summary
+entrypoint: client.py
+prototype_entrypoint: prototype.py
+panel_entrypoint: panel.py

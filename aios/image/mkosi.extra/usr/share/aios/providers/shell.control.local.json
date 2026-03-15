@@ -1,0 +1,106 @@
+{
+  "provider_id": "shell.control.local",
+  "version": "0.1.0",
+  "kind": "shell-provider",
+  "display_name": "Shell Control Provider",
+  "owner": "aios-shell",
+  "capabilities": [
+    {
+      "capability_id": "shell.notification.open",
+      "read_only": true,
+      "recoverable": true,
+      "approval_required": false,
+      "external_side_effect": false,
+      "dynamic_code": false,
+      "user_interaction_required": true,
+      "supported_targets": ["notification-center"],
+      "input_schema_refs": ["aios/shell-notification-open.schema.json"],
+      "output_schema_refs": ["aios/shell-notification-open.schema.json"],
+      "audit_tags": ["shell", "notification"]
+    },
+    {
+      "capability_id": "shell.window.focus",
+      "read_only": false,
+      "recoverable": true,
+      "approval_required": false,
+      "external_side_effect": false,
+      "dynamic_code": false,
+      "user_interaction_required": true,
+      "supported_targets": ["window", "workspace", "surface"],
+      "input_schema_refs": ["aios/shell-window-focus.schema.json"],
+      "output_schema_refs": ["aios/shell-window-focus.schema.json"],
+      "audit_tags": ["shell", "focus"]
+    },
+    {
+      "capability_id": "shell.operator-audit.open",
+      "read_only": true,
+      "recoverable": true,
+      "approval_required": false,
+      "external_side_effect": false,
+      "dynamic_code": false,
+      "user_interaction_required": true,
+      "supported_targets": ["operator-audit", "audit-log", "cross-service-audit"],
+      "input_schema_refs": ["aios/shell-operator-audit-open.schema.json"],
+      "output_schema_refs": ["aios/shell-operator-audit-open.schema.json"],
+      "audit_tags": ["shell", "operator-audit"]
+    },
+    {
+      "capability_id": "shell.remote-governance.open",
+      "read_only": true,
+      "recoverable": true,
+      "approval_required": false,
+      "external_side_effect": false,
+      "dynamic_code": false,
+      "user_interaction_required": true,
+      "supported_targets": ["remote-governance", "fleet-governance", "cross-service-remote-governance"],
+      "input_schema_refs": ["aios/shell-remote-governance-open.schema.json"],
+      "output_schema_refs": ["aios/shell-remote-governance-open.schema.json"],
+      "audit_tags": ["shell", "remote-governance"]
+    },
+    {
+      "capability_id": "shell.panel-events.list",
+      "read_only": true,
+      "recoverable": true,
+      "approval_required": false,
+      "external_side_effect": false,
+      "dynamic_code": false,
+      "user_interaction_required": false,
+      "supported_targets": ["panel-log", "panel-slot", "shell-session"],
+      "input_schema_refs": ["aios/shell-panel-events-list.request.schema.json"],
+      "output_schema_refs": ["aios/shell-panel-events-list.response.schema.json"],
+      "audit_tags": ["shell", "panel-events"]
+    }
+  ],
+  "execution_location": "local",
+  "sandbox_class": "shell-control",
+  "required_permissions": ["shell.session-control"],
+  "resource_budget": {
+    "max_memory_mb": 128,
+    "max_concurrency": 2
+  },
+  "supported_targets": ["notification-center", "operator-audit", "audit-log", "cross-service-audit", "remote-governance", "fleet-governance", "cross-service-remote-governance", "window", "workspace", "surface", "panel-log", "panel-slot", "shell-session"],
+  "input_schema_refs": [
+    "aios/shell-notification-open.schema.json",
+    "aios/shell-window-focus.schema.json",
+    "aios/shell-operator-audit-open.schema.json",
+    "aios/shell-remote-governance-open.schema.json",
+    "aios/shell-panel-events-list.request.schema.json"
+  ],
+  "output_schema_refs": [
+    "aios/shell-notification-open.schema.json",
+    "aios/shell-window-focus.schema.json",
+    "aios/shell-operator-audit-open.schema.json",
+    "aios/shell-remote-governance-open.schema.json",
+    "aios/shell-panel-events-list.response.schema.json"
+  ],
+  "timeout_policy": "bounded-5s",
+  "retry_policy": "no-retry",
+  "healthcheck": {
+    "kind": "process",
+    "endpoint": "shell-control-provider",
+    "interval_seconds": 15
+  },
+  "audit_tags": ["shell", "provider"],
+  "taint_behavior": "session-bound",
+  "degradation_policy": "degrade-to-shellctl"
+}

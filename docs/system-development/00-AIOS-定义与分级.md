@@ -64,6 +64,31 @@ AIOS v1 必须至少覆盖以下系统对象：
 - 将 GUI 自动化作为系统主控制范式
 - 将远端云推理默认视为本地等价信任域
 
+### 3.3 完整系统中的基线能力与条件能力
+
+AIOS 的“完整系统”指的是**能力域完整**，不是“每台支持机器都必须暴露全部扩展能力”。
+
+必须长期稳定成立的**基线能力**包括：
+
+- bootable image / install / rollback / recovery
+- `agentd` / `runtimed` / `sessiond` / `policyd` / `deviced` / `updated`
+- 原生 AI Shell 与系统级审批 / 审计 / 恢复入口
+- `local-cpu` 为底线的 runtime substrate
+- provider registry / portal / compat sandbox 的受治理闭环
+
+按支持矩阵显式声明的**条件能力**包括：
+
+- `ui_tree` 或等价结构化图形来源
+- `local-gpu` / `local-npu` 等加速后端
+- 可信云卸载与 attestation 链
+- 高级多模态采集、复杂图形栈特性、多显示器 / 高刷 / 触控增强
+
+规则：
+
+- 条件能力必须由 `hardware profile`、`route/runtime profile`、`provider descriptor` 与 `policy` 共同声明
+- 条件能力不能被产品文案暗示为“全平台默认可用”
+- 某项条件能力未在当前平台声明支持，不应阻塞 AIOS 作为完整系统的其余基线闭环成立
+
 ## 4. AIOS 与相关概念的区别
 
 | 概念 | 是否等于 AIOS | 正确关系 |
@@ -129,6 +154,7 @@ AIOS v1 必须至少覆盖以下系统对象：
 - 更新、回滚、恢复链路稳定
 - 安全基线与审计基线达标
 - 兼容层与系统本体边界长期稳定
+- 条件能力按支持矩阵长期稳定声明，而不是以“所有机器全量具备”作为稳定版定义
 
 ## 7. 项目成功标准
 

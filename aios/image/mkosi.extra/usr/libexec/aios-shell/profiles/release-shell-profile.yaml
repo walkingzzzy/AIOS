@@ -1,0 +1,47 @@
+profile_id: release-shell
+desktop_host: gtk
+session_backend: compositor
+session:
+  entrypoint: formal
+  nested_fallback: disabled
+  compositor_required: true
+voice_input: true
+screen_context: true
+show_approval_panel: true
+show_recovery_actions: true
+multimodal_capture:
+  screen: true
+  audio: true
+  input_focus: true
+
+components:
+  launcher: true
+  notification_center: true
+  task_surface: true
+  approval_panel: true
+  recovery_surface: true
+  capture_indicators: true
+  portal_chooser: true
+  device_backend_status: true
+paths:
+  agentd_socket: /run/aios/agentd/agentd.sock
+  sessiond_socket: /run/aios/sessiond/sessiond.sock
+  policyd_socket: /run/aios/policyd/policyd.sock
+  shell_control_provider_socket: /run/aios/shell-provider/shell-control-provider.sock
+  screen_capture_provider_socket: /run/aios/screen-provider/screen-capture-provider.sock
+  updated_socket: /run/aios/updated/updated.sock
+  recovery_surface_model: /var/lib/aios/updated/recovery-surface.json
+  capture_indicator_state: /var/lib/aios/deviced/indicator-state.json
+  device_backend_state: /var/lib/aios/deviced/backend-state.json
+  deviced_socket: /run/aios/deviced/deviced.sock
+compositor:
+  backend_mode: drm-kms
+  manifest_path: ../compositor/Cargo.toml
+  config_path: ../compositor/release-compositor.conf
+  panel_action_log_path: /var/lib/aios/shell/panel-action-events.jsonl
+  panel_snapshot_refresh_ticks: 4
+  runtime_lock_path: /run/aios/shell/compositor/release.lock
+  runtime_ready_path: /run/aios/shell/compositor/release-ready.json
+  runtime_state_path: /var/lib/aios/shell/compositor/release-state.json
+  runtime_state_refresh_ticks: 1
+  drm_disable_connectors: false

@@ -1,0 +1,909 @@
+schema_version: "1.1.0"
+generated_at: "2026-03-14T00:00:00Z"
+entries:
+  - check_id: "observability-schema-smoke"
+    owner: "Team E / Systems"
+    gate: "validate"
+    domain: "observability"
+    blocking: true
+    command: "python3 scripts/test-observability-schema-smoke.py"
+    artifacts:
+      - "out/validation/observability-schema-validation-report.json"
+      - "out/validation/observability-schema-validation-report.md"
+    source_paths:
+      - "scripts/test-observability-schema-smoke.py"
+      - "aios/crates/aios-core/src/schema.rs"
+      - "aios/observability/schemas"
+      - "aios/observability/samples"
+    failure_symptom: "schema artifact missing or sample-schema contract mismatch"
+    triage: "tests/observability/test-plan.md"
+    workflow_jobs:
+      - "validate"
+    coverage_domains:
+      - "observability-governance"
+    status_source:
+      kind: "report-status"
+      report_path: "out/validation/observability-schema-validation-report.json"
+      field: "overall_status"
+      expected_values:
+        - "passed"
+
+  - check_id: "validation-matrix-smoke"
+    owner: "Team E / Systems"
+    gate: "validate"
+    domain: "validation-governance"
+    blocking: true
+    command: "python3 scripts/test-validation-matrix-smoke.py"
+    artifacts:
+      - "out/validation/validation-matrix-report.json"
+      - "out/validation/validation-matrix-report.md"
+    source_paths:
+      - "scripts/test-validation-matrix-smoke.py"
+      - "tests/observability/validation-matrix.yaml"
+    failure_symptom: "validation matrix metadata missing or report alignment drifted"
+    triage: "tests/observability/test-plan.md"
+    workflow_jobs:
+      - "validate"
+    coverage_domains:
+      - "observability-governance"
+      - "release-governance"
+    status_source:
+      kind: "report-status"
+      report_path: "out/validation/validation-matrix-report.json"
+      field: "overall_status"
+      expected_values:
+        - "passed"
+
+  - check_id: "high-risk-audit-coverage-smoke"
+    owner: "Team E / Security"
+    gate: "validate"
+    domain: "observability"
+    blocking: true
+    command: "python3 scripts/test-high-risk-audit-coverage-smoke.py"
+    artifacts:
+      - "out/validation/high-risk-audit-coverage-report.json"
+      - "out/validation/high-risk-audit-coverage-report.md"
+    source_paths:
+      - "scripts/test-high-risk-audit-coverage-smoke.py"
+      - "tests/observability/high-risk-audit-coverage.yaml"
+      - "aios/policy/capabilities/default-capability-catalog.yaml"
+      - "aios/image/mkosi.extra/etc/aios/policy/default-capability-catalog.yaml"
+    failure_symptom: "new high-risk capability or Team A recovery path drifted away from audit/observability coverage"
+    triage: "tests/observability/test-plan.md"
+    workflow_jobs:
+      - "validate"
+    coverage_domains:
+      - "observability-governance"
+      - "image-recovery-update"
+      - "release-governance"
+    status_source:
+      kind: "report-status"
+      report_path: "out/validation/high-risk-audit-coverage-report.json"
+      field: "overall_status"
+      expected_values:
+        - "passed"
+
+  - check_id: "observability-correlation-smoke"
+    owner: "Team E / Systems"
+    gate: "validate"
+    domain: "cross-service-correlation"
+    blocking: true
+    command: "python3 scripts/test-observability-correlation-smoke.py --bin-dir aios/target/debug"
+    artifacts:
+      - "out/validation/cross-service-correlation-report.json"
+      - "out/validation/cross-service-correlation-report.md"
+    source_paths:
+      - "scripts/build-observability-correlation-report.py"
+      - "scripts/test-observability-correlation-smoke.py"
+      - "aios/services/sessiond/src"
+      - "aios/services/policyd/src"
+      - "aios/services/runtimed/src"
+    failure_symptom: "cross-service correlation report missing session-task stitching evidence"
+    triage: "tests/observability/test-plan.md"
+    workflow_jobs:
+      - "validate"
+    coverage_domains:
+      - "control-plane"
+      - "observability-governance"
+    status_source:
+      kind: "json-conditions"
+      path: "out/validation/cross-service-correlation-report.json"
+      conditions:
+        - field: "summary.task_count"
+          minimum: 1
+        - field: "summary.observability_record_count"
+          minimum: 1
+
+  - check_id: "audit-evidence-export-smoke"
+    owner: "Team E / Systems"
+    gate: "validate"
+    domain: "audit-evidence-export"
+    blocking: true
+    command: "python3 scripts/test-audit-evidence-export-smoke.py --bin-dir aios/target/debug"
+    artifacts:
+      - "out/validation/audit-evidence-report.json"
+      - "out/validation/audit-evidence-report.md"
+    source_paths:
+      - "scripts/build-audit-evidence-report.py"
+      - "scripts/test-audit-evidence-export-smoke.py"
+      - "scripts/test-team-b-control-plane-smoke.py"
+      - "scripts/test-shell-provider-smoke.py"
+      - "scripts/test-deviced-policy-approval-smoke.py"
+      - "scripts/test-runtime-local-inference-provider-smoke.py"
+      - "scripts/test-updated-smoke.py"
+      - "scripts/build-default-hardware-evidence-index.py"
+      - "scripts/test-browser-provider-smoke.py"
+      - "scripts/test-office-provider-smoke.py"
+      - "scripts/test-mcp-bridge-provider-smoke.py"
+      - "scripts/test-code-sandbox-smoke.py"
+      - "aios/observability/schemas/audit-evidence-report.schema.json"
+      - "aios/services/sessiond/src"
+      - "aios/services/policyd/src"
+      - "aios/services/runtimed/src"
+    failure_symptom: "operator-facing audit evidence export is missing control-plane or shell/provider/compat/device/updated/hardware/release-signoff domain stitching"
+    triage: "tests/observability/test-plan.md"
+    workflow_jobs:
+      - "validate"
+    coverage_domains:
+      - "observability-governance"
+      - "control-plane"
+      - "shell"
+      - "provider"
+      - "compat"
+      - "device"
+      - "image-recovery-update"
+      - "hardware-evidence"
+      - "release-governance"
+    status_source:
+      kind: "json-conditions"
+      path: "out/validation/audit-evidence-report.json"
+      conditions:
+        - field: "summary.task_count"
+          minimum: 2
+        - field: "summary.approval_ref_count"
+          minimum: 1
+        - field: "summary.observability_record_count"
+          minimum: 1
+        - field: "summary.audit_decisions"
+          includes_all:
+            - "approval-pending"
+            - "approval-approved"
+            - "token-issued"
+        - field: "summary.covered_domains"
+          includes_all:
+            - "control-plane"
+            - "shell"
+            - "provider"
+            - "compat"
+            - "device"
+            - "updated"
+            - "hardware"
+            - "release-signoff"
+        - field: "domain_evidence.updated.event_kinds"
+          includes_all:
+            - "update.apply.completed"
+            - "update.rollback.completed"
+            - "recovery.bundle.exported"
+        - field: "domain_evidence.release-signoff.status_values"
+          includes_all:
+            - "passed"
+
+  - check_id: "ci-artifact-governance-smoke"
+    owner: "Team E / Systems"
+    gate: "validate"
+    domain: "validation-governance"
+    blocking: true
+    command: "python3 scripts/test-ci-artifact-governance-smoke.py"
+    artifacts:
+      - "out/validation/ci-artifact-governance-report.json"
+      - "out/validation/ci-artifact-governance-report.md"
+    source_paths:
+      - "scripts/test-ci-artifact-governance-smoke.py"
+      - "tests/observability/ci-artifact-governance.yaml"
+      - ".github/workflows/aios-ci.yml"
+    failure_symptom: "workflow artifact naming, retention, upload/download routing, or failure preservation drifted from governance policy"
+    triage: "tests/observability/test-plan.md"
+    workflow_jobs:
+      - "validate"
+    coverage_domains:
+      - "observability-governance"
+      - "release-governance"
+    status_source:
+      kind: "report-status"
+      report_path: "out/validation/ci-artifact-governance-report.json"
+      field: "overall_status"
+      expected_values:
+        - "passed"
+
+  - check_id: "cross-service-health-smoke"
+    owner: "Team E / Systems"
+    gate: "validate"
+    domain: "cross-service-health"
+    blocking: true
+    command: "python3 scripts/test-cross-service-health-smoke.py --bin-dir aios/target/debug --delivery-manifest out/aios-system-delivery/manifest.json"
+    artifacts:
+      - "out/validation/cross-service-health-report.json"
+      - "out/validation/cross-service-health-report.md"
+      - "out/validation/cross-service-health-events.jsonl"
+    source_paths:
+      - "scripts/build-cross-service-health-report.py"
+      - "scripts/test-cross-service-health-smoke.py"
+      - "aios/observability/schemas/cross-service-health-report.schema.json"
+      - "aios/observability/schemas/health-event.schema.json"
+    failure_symptom: "cross-service health report missing source coverage or failed health status"
+    triage: "tests/observability/test-plan.md"
+    workflow_jobs:
+      - "validate"
+      - "system-validation"
+    coverage_domains:
+      - "observability-governance"
+      - "control-plane"
+      - "runtime"
+      - "provider"
+      - "shell"
+      - "device"
+      - "compat"
+      - "image-recovery-update"
+      - "hardware-evidence"
+    status_source:
+      kind: "report-status"
+      report_path: "out/validation/cross-service-health-report.json"
+      field: "overall_status"
+      expected_values:
+        - "passed"
+
+  - check_id: "control-plane-health-export"
+    owner: "Team B / Control Plane"
+    gate: "validate"
+    domain: "control-plane"
+    blocking: true
+    command: "python3 scripts/test-cross-service-health-smoke.py --bin-dir aios/target/debug --delivery-manifest out/aios-system-delivery/manifest.json"
+    artifacts:
+      - "out/validation/cross-service-health-report.json"
+      - "out/validation/cross-service-health-events.jsonl"
+    source_paths:
+      - "scripts/build-cross-service-health-report.py"
+      - "scripts/test-cross-service-health-smoke.py"
+    failure_symptom: "core control-plane services lost stable cross-service health export coverage"
+    triage: "tests/observability/test-plan.md"
+    workflow_jobs:
+      - "validate"
+      - "system-validation"
+    coverage_domains:
+      - "control-plane"
+    status_source:
+      kind: "health-group"
+      check_ids:
+        - "sessiond"
+        - "policyd"
+        - "runtimed"
+        - "agentd"
+
+  - check_id: "provider-registry-health-export"
+    owner: "Team D / Providers"
+    gate: "validate"
+    domain: "provider"
+    blocking: true
+    command: "python3 scripts/test-cross-service-health-smoke.py --bin-dir aios/target/debug --delivery-manifest out/aios-system-delivery/manifest.json"
+    artifacts:
+      - "out/validation/cross-service-health-report.json"
+      - "out/validation/cross-service-health-events.jsonl"
+    source_paths:
+      - "scripts/build-cross-service-health-report.py"
+      - "scripts/test-cross-service-health-smoke.py"
+      - "scripts/test-provider-registry-smoke.py"
+    failure_symptom: "provider registry health export no longer covers the expected provider fleet"
+    triage: "tests/observability/test-plan.md"
+    workflow_jobs:
+      - "validate"
+      - "system-validation"
+    coverage_domains:
+      - "provider"
+    status_source:
+      kind: "health-check"
+      check_id: "provider-registry"
+
+  - check_id: "shell-surface-health-export"
+    owner: "Team C / Shell"
+    gate: "validate"
+    domain: "shell"
+    blocking: true
+    command: "python3 scripts/test-cross-service-health-smoke.py --bin-dir aios/target/debug --delivery-manifest out/aios-system-delivery/manifest.json"
+    artifacts:
+      - "out/validation/cross-service-health-report.json"
+      - "out/validation/cross-service-health-events.jsonl"
+    source_paths:
+      - "scripts/build-cross-service-health-report.py"
+      - "scripts/test-cross-service-health-smoke.py"
+      - "scripts/test-shell-provider-smoke.py"
+      - "scripts/test-screen-capture-provider-smoke.py"
+    failure_symptom: "shell control or screen-capture health exports are missing from the unified exporter path"
+    triage: "tests/observability/test-plan.md"
+    workflow_jobs:
+      - "validate"
+      - "system-validation"
+    coverage_domains:
+      - "shell"
+    status_source:
+      kind: "health-group"
+      check_ids:
+        - "shell-control-provider"
+        - "screen-capture-provider"
+
+  - check_id: "device-health-export"
+    owner: "Team D / Device"
+    gate: "validate"
+    domain: "device"
+    blocking: true
+    command: "python3 scripts/test-cross-service-health-smoke.py --bin-dir aios/target/debug --delivery-manifest out/aios-system-delivery/manifest.json"
+    artifacts:
+      - "out/validation/cross-service-health-report.json"
+      - "out/validation/cross-service-health-events.jsonl"
+    source_paths:
+      - "scripts/build-cross-service-health-report.py"
+      - "scripts/test-cross-service-health-smoke.py"
+      - "scripts/test-deviced-smoke.py"
+    failure_symptom: "device service health is missing from the unified exporter path"
+    triage: "tests/observability/test-plan.md"
+    workflow_jobs:
+      - "validate"
+      - "system-validation"
+    coverage_domains:
+      - "device"
+    status_source:
+      kind: "health-check"
+      check_id: "deviced"
+
+  - check_id: "compat-provider-health-export"
+    owner: "Team D / Compat"
+    gate: "validate"
+    domain: "compat"
+    blocking: false
+    command: "python3 scripts/test-cross-service-health-smoke.py --bin-dir aios/target/debug --delivery-manifest out/aios-system-delivery/manifest.json"
+    artifacts:
+      - "out/validation/cross-service-health-report.json"
+      - "out/validation/cross-service-health-events.jsonl"
+    source_paths:
+      - "scripts/build-cross-service-health-report.py"
+      - "scripts/test-cross-service-health-smoke.py"
+      - "scripts/test-browser-provider-smoke.py"
+      - "scripts/test-office-provider-smoke.py"
+      - "scripts/test-mcp-bridge-provider-smoke.py"
+      - "scripts/test-code-sandbox-smoke.py"
+    failure_symptom: "compat provider fleet no longer reaches the unified health export path"
+    triage: "tests/observability/test-plan.md"
+    workflow_jobs:
+      - "validate"
+      - "system-validation"
+    coverage_domains:
+      - "compat"
+      - "provider"
+    status_source:
+      kind: "provider-group"
+      provider_ids:
+        - "compat.browser.automation.local"
+        - "compat.office.document.local"
+        - "compat.mcp.bridge.local"
+        - "compat.code.sandbox.local"
+
+  - check_id: "runtime-local-inference-provider-smoke"
+    owner: "Team D / Runtime"
+    gate: "validate"
+    domain: "runtime-provider"
+    blocking: true
+    command: "python3 scripts/test-runtime-local-inference-provider-smoke.py --bin-dir aios/target/debug"
+    artifacts:
+      - "aios/runtime/providers/runtime.local-inference.json"
+      - "aios/providers/runtime-local-inference/service.yaml"
+      - "out/validation/cross-service-health-report.json"
+    source_paths:
+      - "scripts/test-runtime-local-inference-provider-smoke.py"
+      - "aios/providers/runtime-local-inference/src"
+      - "aios/runtime/providers/runtime.local-inference.json"
+      - "aios/providers/runtime-local-inference/service.yaml"
+    failure_symptom: "runtime local inference provider lost infer/embed/rerank contract, registry self-registration, or degradation semantics"
+    triage: "tests/ipc/runtime-local-inference-provider-test-plan.md"
+    coverage_domains:
+      - "runtime"
+      - "provider"
+    status_source:
+      kind: "provider-health"
+      provider_id: "runtime.local.inference"
+      acceptable_statuses:
+        - "ready"
+        - "idle"
+
+  - check_id: "gpu-backend-support-matrix-smoke"
+    owner: "Team D / Runtime"
+    gate: "validate"
+    domain: "runtime"
+    blocking: true
+    command: "python3 scripts/test-gpu-backend-support-matrix-smoke.py"
+    artifacts:
+      - "out/validation/gpu-backend-support-matrix-report.json"
+      - "out/validation/gpu-backend-support-matrix-report.md"
+    source_paths:
+      - "scripts/test-gpu-backend-support-matrix-smoke.py"
+      - "aios/runtime/gpu-backend-support-matrix.yaml"
+      - "aios/runtime/profiles/default-runtime-profile.yaml"
+      - "aios/runtime/platforms/nvidia-jetson-orin-agx/default-runtime-profile.yaml"
+      - "docs/system-development/38-GPU-backend-首选支持矩阵评估.md"
+    failure_symptom: "GPU backend support matrix drifted away from runtime profiles, Jetson worker bridge policy, or declared fallback semantics"
+    triage: "docs/system-development/38-GPU-backend-首选支持矩阵评估.md"
+    workflow_jobs:
+      - "validate"
+    coverage_domains:
+      - "runtime"
+      - "hardware-evidence"
+    status_source:
+      kind: "report-status"
+      report_path: "out/validation/gpu-backend-support-matrix-report.json"
+      field: "overall_status"
+      expected_values:
+        - "passed"
+
+  - check_id: "tier1-machine-nominations-smoke"
+    owner: "Team A / Platform"
+    gate: "validate"
+    domain: "hardware-evidence"
+    blocking: true
+    command: "python3 scripts/test-tier1-machine-nominations-smoke.py"
+    artifacts:
+      - "out/validation/tier1-machine-nominations-report.json"
+      - "out/validation/tier1-machine-nominations-report.md"
+    source_paths:
+      - "scripts/test-tier1-machine-nominations-smoke.py"
+      - "aios/hardware/tier1-nominated-machines.yaml"
+      - "aios/hardware/profiles/framework-laptop-13-amd-7040.yaml"
+      - "aios/hardware/profiles/nvidia-jetson-orin-agx.yaml"
+      - "docs/system-development/39-Tier1-正式机器冻结清单.md"
+    failure_symptom: "formal Tier 1 machine freeze drifted away from the nominated hardware profiles or platform bindings"
+    triage: "docs/system-development/39-Tier1-正式机器冻结清单.md"
+    workflow_jobs:
+      - "validate"
+    coverage_domains:
+      - "hardware-evidence"
+      - "image-recovery-update"
+    status_source:
+      kind: "report-status"
+      report_path: "out/validation/tier1-machine-nominations-report.json"
+      field: "overall_status"
+      expected_values:
+        - "passed"
+
+  - check_id: "default-tier1-hardware-evidence"
+    owner: "Team E / QA"
+    gate: "validate"
+    domain: "hardware-evidence"
+    blocking: true
+    command: "python3 scripts/build-default-hardware-evidence-index.py"
+    artifacts:
+      - "out/validation/tier1-hardware-boot-evidence-report.json"
+      - "out/validation/tier1-hardware-boot-evidence-report.md"
+      - "out/validation/tier1-hardware-support-matrix.md"
+      - "out/validation/tier1-hardware-known-limitations.md"
+      - "out/validation/tier1-hardware-validation-report.md"
+      - "out/validation/tier1-hardware-evidence-index.json"
+    source_paths:
+      - "scripts/build-default-hardware-evidence-index.py"
+      - "scripts/evaluate-aios-hardware-boot-evidence.py"
+      - "scripts/render-aios-hardware-validation-report.py"
+      - "aios/hardware/tier1-nominated-machines.yaml"
+      - "aios/hardware/profiles/generic-x86_64-uefi.yaml"
+    failure_symptom: "default Tier 1 hardware evidence baseline is missing, malformed, or no longer release-gate ready"
+    triage: "docs/system-development/39-Tier1-正式机器冻结清单.md"
+    workflow_jobs:
+      - "validate"
+    coverage_domains:
+      - "hardware-evidence"
+      - "release-governance"
+    status_source:
+      kind: "report-status"
+      report_path: "out/validation/tier1-hardware-evidence-index.json"
+      field: "validation_status"
+      expected_values:
+        - "passed"
+
+  - check_id: "image-build-strategy-smoke"
+    owner: "Team A / Platform"
+    gate: "validate"
+    domain: "image-delivery"
+    blocking: true
+    command: "python3 scripts/test-image-build-strategy-smoke.py"
+    artifacts:
+      - "out/validation/image-build-strategy-report.json"
+      - "out/validation/image-build-strategy-report.md"
+    source_paths:
+      - "scripts/test-image-build-strategy-smoke.py"
+      - "scripts/build-aios-image.sh"
+      - "scripts/sync-aios-image-overlay.sh"
+      - "scripts/build-aios-delivery-container.sh"
+    failure_symptom: "Linux x86_64 image builds no longer prefer the container-native delivery path when docker buildx is available"
+    triage: "aios/image/README.md"
+    workflow_jobs:
+      - "validate"
+    coverage_domains:
+      - "image-recovery-update"
+      - "release-governance"
+    status_source:
+      kind: "report-status"
+      report_path: "out/validation/image-build-strategy-report.json"
+      field: "overall_status"
+      expected_values:
+        - "passed"
+
+  - check_id: "delivery-rootfs-hygiene"
+    owner: "Team A / Platform"
+    gate: "system-validation"
+    domain: "image-delivery"
+    blocking: true
+    command: "python3 scripts/test-image-delivery-smoke.py --bundle-dir out/aios-system-delivery"
+    artifacts:
+      - "out/aios-system-delivery/manifest.json"
+    source_paths:
+      - "scripts/build-aios-delivery.py"
+      - "scripts/test-image-delivery-smoke.py"
+    failure_symptom: "delivery bundle manifest missing rootfs payload or file layout drifted"
+    triage: "docs/system-development/24-Boot-Firstboot-Recovery-验证清单.md"
+    workflow_jobs:
+      - "validate"
+      - "nightly-container-delivery"
+    coverage_domains:
+      - "image-recovery-update"
+    status_source:
+      kind: "system-validation-check"
+      check_id: "delivery-rootfs-hygiene"
+
+  - check_id: "firstboot-offline-hygiene"
+    owner: "Team A / Platform"
+    gate: "system-validation"
+    domain: "firstboot"
+    blocking: true
+    command: "python3 scripts/test-firstboot-hygiene-smoke.py --bundle-dir out/aios-system-delivery"
+    artifacts:
+      - "out/aios-system-delivery/rootfs/usr/libexec/aios/aios-firstboot.sh"
+    source_paths:
+      - "scripts/test-firstboot-hygiene-smoke.py"
+      - "aios/image/firstboot"
+    failure_symptom: "firstboot script lost offline bootstrap guarantees"
+    triage: "docs/system-development/24-Boot-Firstboot-Recovery-验证清单.md"
+    workflow_jobs:
+      - "validate"
+    coverage_domains:
+      - "image-recovery-update"
+    status_source:
+      kind: "system-validation-check"
+      check_id: "firstboot-offline-hygiene"
+
+  - check_id: "installer-integration"
+    owner: "Team A / Platform"
+    gate: "system-validation"
+    domain: "installer"
+    blocking: true
+    command: "python3 scripts/test-installer-smoke.py"
+    artifacts:
+      - "scripts/install-aios-system.py"
+    source_paths:
+      - "scripts/test-installer-smoke.py"
+      - "scripts/install-aios-system.py"
+    failure_symptom: "installer entrypoint missing or integration smoke failed"
+    triage: "docs/system-development/24-Boot-Firstboot-Recovery-验证清单.md"
+    coverage_domains:
+      - "image-recovery-update"
+    status_source:
+      kind: "system-validation-check"
+      check_id: "installer-integration"
+
+  - check_id: "installer-guided-ux"
+    owner: "Team A / Platform"
+    gate: "system-validation"
+    domain: "installer"
+    blocking: false
+    command: "python3 scripts/test-installer-ux-smoke.py"
+    artifacts:
+      - "aios/image/installer/aios-installer-guided.sh"
+    source_paths:
+      - "scripts/test-installer-ux-smoke.py"
+      - "aios/image/installer"
+    failure_symptom: "guided installer surface missing prompts or operator flow degraded"
+    triage: "docs/system-development/24-Boot-Firstboot-Recovery-验证清单.md"
+    workflow_jobs:
+      - "validate"
+    coverage_domains:
+      - "image-recovery-update"
+    status_source:
+      kind: "system-validation-check"
+      check_id: "installer-guided-ux"
+
+  - check_id: "vendor-firmware-adapter"
+    owner: "Team A / Platform"
+    gate: "system-validation"
+    domain: "firmware"
+    blocking: false
+    command: "python3 scripts/test-vendor-firmware-hook-smoke.py"
+    artifacts:
+      - "aios/image/platforms/nvidia-jetson-orin-agx/profile.yaml"
+      - "aios/services/updated/platforms/nvidia-jetson-orin-agx/share/profile.yaml"
+    source_paths:
+      - "scripts/test-vendor-firmware-hook-smoke.py"
+      - "aios/services/updated/platforms"
+    failure_symptom: "vendor firmware profile or export hook missing"
+    triage: "docs/system-development/24-Boot-Firstboot-Recovery-验证清单.md"
+    workflow_jobs:
+      - "validate"
+    coverage_domains:
+      - "image-recovery-update"
+    status_source:
+      kind: "system-validation-check"
+      check_id: "vendor-firmware-adapter"
+
+  - check_id: "container-native-delivery-preflight"
+    owner: "Team A / Platform"
+    gate: "system-validation"
+    domain: "container-delivery"
+    blocking: false
+    command: "python3 scripts/test-build-container-native-smoke.py"
+    artifacts:
+      - "scripts/build-aios-delivery-container.sh"
+      - "docker/aios-delivery.Dockerfile"
+    source_paths:
+      - "scripts/test-build-container-native-smoke.py"
+      - "scripts/build-aios-delivery-container.sh"
+      - "docker/aios-delivery.Dockerfile"
+    failure_symptom: "container-native delivery tooling missing or Docker preflight failed"
+    triage: "docs/system-development/24-Boot-Firstboot-Recovery-验证清单.md"
+    workflow_jobs:
+      - "validate"
+    coverage_domains:
+      - "image-recovery-update"
+    status_source:
+      kind: "system-validation-check"
+      check_id: "container-native-delivery-preflight"
+
+  - check_id: "qemu-preflight"
+    owner: "Team A / Platform"
+    gate: "system-validation"
+    domain: "qemu-boot"
+    blocking: true
+    command: "python3 scripts/test-boot-qemu-smoke.py"
+    artifacts:
+      - "aios/image/mkosi.output/aios-qemu-x86_64.raw"
+    source_paths:
+      - "scripts/test-boot-qemu-smoke.py"
+      - "scripts/boot-qemu.sh"
+    failure_symptom: "QEMU disk image missing or preflight boot prerequisites failed"
+    triage: "docs/system-development/24-Boot-Firstboot-Recovery-验证清单.md"
+    workflow_jobs:
+      - "validate"
+    coverage_domains:
+      - "image-recovery-update"
+    status_source:
+      kind: "system-validation-check"
+      check_id: "qemu-preflight"
+
+  - check_id: "qemu-bringup-firstboot"
+    owner: "Team A / Platform"
+    gate: "system-validation"
+    domain: "qemu-boot"
+    blocking: true
+    command: "python3 scripts/test-boot-qemu-bringup.py --timeout 180 --expect-firstboot"
+    artifacts:
+      - "out/boot-qemu-bringup.log"
+    source_paths:
+      - "scripts/test-boot-qemu-bringup.py"
+      - "scripts/boot-qemu.sh"
+    failure_symptom: "QEMU boot log missing firstboot completion evidence"
+    triage: "docs/system-development/24-Boot-Firstboot-Recovery-验证清单.md"
+    coverage_domains:
+      - "image-recovery-update"
+    status_source:
+      kind: "system-validation-check"
+      check_id: "qemu-bringup-firstboot"
+
+  - check_id: "qemu-recovery-bringup"
+    owner: "Team A / Platform"
+    gate: "system-validation"
+    domain: "recovery"
+    blocking: true
+    command: "python3 scripts/test-boot-qemu-recovery.py --timeout 180"
+    artifacts:
+      - "out/boot-qemu-recovery.log"
+    source_paths:
+      - "scripts/test-boot-qemu-recovery.py"
+      - "aios/image/recovery"
+    failure_symptom: "recovery image failed to boot or recovery surface not reachable"
+    triage: "docs/system-development/24-Boot-Firstboot-Recovery-验证清单.md"
+    coverage_domains:
+      - "image-recovery-update"
+    status_source:
+      kind: "system-validation-check"
+      check_id: "qemu-recovery-bringup"
+
+  - check_id: "installer-media-qemu"
+    owner: "Team A / Platform"
+    gate: "system-validation"
+    domain: "installer"
+    blocking: true
+    command: "python3 scripts/test-boot-qemu-installer.py --timeout 300 --boot-installed-target --cross-reboot"
+    artifacts:
+      - "out/boot-qemu-installer.log"
+      - "out/boot-qemu-installed-cross-reboot.log"
+    source_paths:
+      - "scripts/test-boot-qemu-installer.py"
+      - "scripts/test-qemu-cross-reboot.py"
+      - "aios/image/installer"
+    failure_symptom: "installer media boot, install, or cross-reboot evidence missing"
+    triage: "docs/system-development/24-Boot-Firstboot-Recovery-验证清单.md"
+    coverage_domains:
+      - "image-recovery-update"
+    status_source:
+      kind: "system-validation-check"
+      check_id: "installer-media-qemu"
+
+  - check_id: "platform-media-export"
+    owner: "Team A / Platform"
+    gate: "system-validation"
+    domain: "platform-media"
+    blocking: false
+    command: "python3 scripts/test-platform-media-smoke.py"
+    artifacts:
+      - "scripts/build-aios-platform-media.py"
+      - "aios/image/platforms/generic-x86_64-uefi/profile.yaml"
+    source_paths:
+      - "scripts/test-platform-media-smoke.py"
+      - "scripts/build-aios-platform-media.py"
+    failure_symptom: "platform media profile export missing expected artifacts"
+    triage: "docs/system-development/24-Boot-Firstboot-Recovery-验证清单.md"
+    coverage_domains:
+      - "image-recovery-update"
+    status_source:
+      kind: "system-validation-check"
+      check_id: "platform-media-export"
+
+  - check_id: "updated-recovery-surface"
+    owner: "Team A / Platform"
+    gate: "system-validation"
+    domain: "updated"
+    blocking: true
+    command: "python3 scripts/test-updated-smoke.py"
+    artifacts:
+      - "state/diagnostics"
+    source_paths:
+      - "scripts/test-updated-smoke.py"
+      - "aios/services/updated/src"
+    failure_symptom: "updated health probe missing recovery points or diagnostics"
+    triage: "docs/system-development/24-Boot-Firstboot-Recovery-验证清单.md"
+    coverage_domains:
+      - "image-recovery-update"
+    status_source:
+      kind: "system-validation-check"
+      check_id: "updated-recovery-surface"
+
+  - check_id: "updated-cross-restart"
+    owner: "Team A / Platform"
+    gate: "system-validation"
+    domain: "updated"
+    blocking: true
+    command: "python3 scripts/test-updated-restart-smoke.py --bin-dir aios/target/debug"
+    artifacts:
+      - "state/updated"
+    source_paths:
+      - "scripts/test-updated-restart-smoke.py"
+      - "aios/services/updated/src"
+    failure_symptom: "updated service restart flow failed to preserve state"
+    triage: "docs/system-development/24-Boot-Firstboot-Recovery-验证清单.md"
+    workflow_jobs:
+      - "validate"
+    coverage_domains:
+      - "image-recovery-update"
+    status_source:
+      kind: "system-validation-check"
+      check_id: "updated-cross-restart"
+
+  - check_id: "updated-firmware-backend"
+    owner: "Team A / Platform"
+    gate: "system-validation"
+    domain: "updated"
+    blocking: true
+    command: "python3 scripts/test-updated-firmware-backend-smoke.py"
+    artifacts:
+      - "scripts/test-updated-firmware-backend-smoke.py"
+    source_paths:
+      - "scripts/test-updated-firmware-backend-smoke.py"
+      - "aios/services/updated/platforms"
+    failure_symptom: "firmware backend hook missing or backend smoke failed"
+    triage: "docs/system-development/24-Boot-Firstboot-Recovery-验证清单.md"
+    coverage_domains:
+      - "image-recovery-update"
+    status_source:
+      kind: "system-validation-check"
+      check_id: "updated-firmware-backend"
+
+  - check_id: "updated-platform-profile"
+    owner: "Team A / Platform"
+    gate: "system-validation"
+    domain: "updated"
+    blocking: true
+    command: "python3 scripts/test-updated-platform-profile-smoke.py"
+    artifacts:
+      - "aios/services/updated/platforms/generic-x86_64-uefi/share/profile.yaml"
+    source_paths:
+      - "scripts/test-updated-platform-profile-smoke.py"
+      - "aios/services/updated/platforms"
+    failure_symptom: "platform profile share missing or profile contract drifted"
+    triage: "docs/system-development/24-Boot-Firstboot-Recovery-验证清单.md"
+    coverage_domains:
+      - "image-recovery-update"
+    status_source:
+      kind: "system-validation-check"
+      check_id: "updated-platform-profile"
+
+  - check_id: "hardware-boot-evidence"
+    owner: "Team E / QA"
+    gate: "system-validation"
+    domain: "hardware-evidence"
+    blocking: true
+    command: "python3 scripts/test-hardware-boot-evidence-smoke.py"
+    artifacts:
+      - "aios/hardware/evidence/aios-boot-evidence.sh"
+      - "scripts/evaluate-aios-hardware-boot-evidence.py"
+    source_paths:
+      - "scripts/test-hardware-boot-evidence-smoke.py"
+      - "scripts/evaluate-aios-hardware-boot-evidence.py"
+      - "scripts/render-aios-hardware-validation-report.py"
+    failure_symptom: "hardware boot evidence collection or evaluation artifact missing"
+    triage: "docs/system-development/24-Boot-Firstboot-Recovery-验证清单.md"
+    coverage_domains:
+      - "hardware-evidence"
+    status_source:
+      kind: "system-validation-check"
+      check_id: "hardware-boot-evidence"
+
+  - check_id: "full-regression-suite-smoke"
+    owner: "Team E / Systems"
+    gate: "validate"
+    domain: "release-governance"
+    blocking: false
+    command: "python3 scripts/test-full-regression-suite-smoke.py"
+    artifacts:
+      - "out/validation/full-regression-report.json"
+      - "out/validation/full-regression-report.md"
+    source_paths:
+      - "scripts/test-full-regression-suite-smoke.py"
+      - "scripts/run-aios-ci-local.py"
+      - "aios/observability/schemas/full-regression-report.schema.json"
+    failure_symptom: "full regression suite dry-run report is missing or no longer machine-readable"
+    triage: "tests/observability/test-plan.md"
+    workflow_jobs:
+      - "validate"
+    coverage_domains:
+      - "release-governance"
+    status_source:
+      kind: "report-status"
+      report_path: "out/validation/full-regression-report.json"
+      field: "overall_status"
+      expected_values:
+        - "planned"
+        - "passed"
+
+  - check_id: "release-gate"
+    owner: "Team E / Systems"
+    gate: "system-validation"
+    domain: "release-governance"
+    blocking: true
+    command: "python3 scripts/check-release-gate.py"
+    artifacts:
+      - "out/validation/release-gate-report.json"
+      - "out/validation/release-gate-report.md"
+    source_paths:
+      - "scripts/check-release-gate.py"
+      - "scripts/build-governance-evidence-index.py"
+      - "docs/RELEASE_CHECKLIST.md"
+    failure_symptom: "blocking release checks failed or machine-readable release rules could not be consumed"
+    triage: "tests/observability/test-plan.md"
+    workflow_jobs:
+      - "system-validation"
+    coverage_domains:
+      - "release-governance"
+    status_source:
+      kind: "checklist-rules"

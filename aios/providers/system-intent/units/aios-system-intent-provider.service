@@ -1,0 +1,14 @@
+[Unit]
+Description=AIOS System Intent Provider
+After=aios-agentd.service aios-sessiond.service aios-policyd.service
+Wants=aios-agentd.service
+Requires=aios-sessiond.service aios-policyd.service
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/aios/system-intent-provider
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

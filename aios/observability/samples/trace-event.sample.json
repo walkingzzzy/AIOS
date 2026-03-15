@@ -1,0 +1,25 @@
+{
+  "schema_version": "2026-03-13",
+  "event_id": "trace-0001",
+  "timestamp": "2026-03-13T12:05:00Z",
+  "generated_at": "2026-03-13T12:05:00Z",
+  "source": "agentd",
+  "kind": "provider-resolution",
+  "session_id": "session-01",
+  "task_id": "task-01",
+  "provider_id": "runtime.local.inference",
+  "approval_id": "approval-01",
+  "update_id": "update-01",
+  "boot_id": "boot-01",
+  "image_id": "image-qemu-x86_64-2026-03-13",
+  "artifact_path": "out/validation/system-delivery-validation-evidence-index.json",
+  "payload": {
+    "selected_provider_id": "runtime.local.inference",
+    "candidate_provider_ids": [
+      "runtime.local.inference"
+    ]
+  },
+  "notes": [
+    "provider resolution trace sample"
+  ]
+}

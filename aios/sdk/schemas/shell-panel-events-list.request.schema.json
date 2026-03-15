@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aios/shell-panel-events-list.request.schema.json",
+  "title": "AIOS Shell Panel Events List Request",
+  "type": "object",
+  "properties": {
+    "execution_token": { "type": "object" },
+    "limit": { "type": "integer", "minimum": 1, "maximum": 32 },
+    "kind": { "type": "string" },
+    "component": { "type": "string" },
+    "slot_id": { "type": "string" },
+    "panel_id": { "type": "string" },
+    "action_id": { "type": "string" },
+    "status_filter": { "type": "string" },
+    "include_payload": { "type": "boolean" }
+  },
+  "additionalProperties": true
+}

@@ -1,0 +1,396 @@
+name: aios-ci
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 19 * * *"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.85.0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python deps
+        run: python3 -m pip install --upgrade pip PyYAML jsonschema
+
+      - name: Validate task metadata
+        run: python3 scripts/sync-aios-task-metadata.py --check
+
+      - name: Python syntax checks
+        run: |
+          python3 -m py_compile \
+            scripts/sync-aios-task-metadata.py \
+            scripts/aios_governance_common.py \
+            scripts/test-observability-schema-smoke.py \
+            scripts/test-validation-matrix-smoke.py \
+            scripts/test-high-risk-audit-coverage-smoke.py \
+            scripts/test-gpu-backend-support-matrix-smoke.py \
+            scripts/test-tier1-machine-nominations-smoke.py \
+            scripts/build-default-hardware-evidence-index.py \
+            scripts/test-image-build-strategy-smoke.py \
+            scripts/test-ci-artifact-governance-smoke.py \
+            scripts/check-release-gate.py \
+            scripts/build-governance-evidence-index.py \
+            scripts/build-observability-correlation-report.py \
+            scripts/test-observability-correlation-smoke.py \
+            scripts/build-audit-evidence-report.py \
+            scripts/test-audit-evidence-export-smoke.py \
+            scripts/build-cross-service-health-report.py \
+            scripts/test-cross-service-health-smoke.py \
+            scripts/test-full-regression-suite-smoke.py \
+            scripts/build-aios-delivery.py \
+            scripts/test-image-delivery-smoke.py \
+            scripts/test-firstboot-hygiene-smoke.py \
+            scripts/test-installer-ux-smoke.py \
+            scripts/test-vendor-firmware-hook-smoke.py \
+            scripts/test-build-container-native-smoke.py \
+            scripts/test-boot-qemu-smoke.py \
+            scripts/test-boot-qemu-bringup.py \
+            scripts/test-ipc-smoke.py \
+            scripts/test-code-sandbox-smoke.py \
+            scripts/test-compat-runtime-smoke.py \
+            scripts/test-policyd-audit-store-smoke.py \
+            scripts/test-provider-registry-smoke.py \
+            scripts/test-portal-file-handle-smoke.py \
+            scripts/test-device-metadata-provider-smoke.py \
+            scripts/test-shell-provider-smoke.py \
+            scripts/test-shell-chooser-smoke.py \
+            scripts/test-screen-capture-provider-smoke.py \
+            scripts/test-runtime-local-inference-provider-smoke.py \
+            scripts/test-runtimed-backend-smoke.py \
+            scripts/test-runtimed-worker-contract-smoke.py \
+            scripts/test-runtimed-managed-worker-smoke.py \
+            scripts/test-shell-panels-smoke.py \
+            scripts/test-shellctl-smoke.py \
+            scripts/test-shell-control-clients-live-smoke.py \
+            scripts/test-shell-session-policy-registry-flow-smoke.py \
+            scripts/test-shell-desktop-smoke.py \
+            scripts/test-shell-session-smoke.py \
+            scripts/test-deviced-smoke.py \
+            scripts/test-deviced-continuous-native-smoke.py \
+            aios/compat/browser/runtime/browser_provider.py \
+            aios/compat/office/runtime/office_provider.py \
+            aios/compat/mcp-bridge/runtime/mcp_bridge_provider.py \
+            aios/compat/code-sandbox/runtime/aios_sandbox_executor.py \
+            aios/shell/runtime/shell_control_provider.py \
+            aios/shell/runtime/screen_capture_portal_provider.py \
+            aios/shell/runtime/shell_desktop.py \
+            aios/shell/components/portal-chooser/prototype.py \
+            aios/shell/components/portal-chooser/client.py \
+            aios/shell/components/portal-chooser/panel.py
+
+      - name: Cargo test
+        working-directory: aios
+        run: cargo test --workspace
+
+      - name: Observability schema smoke
+        run: python3 scripts/test-observability-schema-smoke.py
+
+      - name: Validation matrix smoke
+        run: python3 scripts/test-validation-matrix-smoke.py
+
+      - name: High-risk audit coverage smoke
+        run: python3 scripts/test-high-risk-audit-coverage-smoke.py
+
+      - name: GPU backend support matrix smoke
+        run: python3 scripts/test-gpu-backend-support-matrix-smoke.py
+
+      - name: Tier1 machine nominations smoke
+        run: python3 scripts/test-tier1-machine-nominations-smoke.py
+
+      - name: Build default Tier1 hardware evidence
+        run: python3 scripts/build-default-hardware-evidence-index.py
+
+      - name: Image build strategy smoke
+        run: python3 scripts/test-image-build-strategy-smoke.py
+
+      - name: CI artifact governance smoke
+        run: python3 scripts/test-ci-artifact-governance-smoke.py
+
+      - name: Build smoke binaries
+        working-directory: aios
+        run: |
+          cargo build \
+            -p aios-agentd \
+            -p aios-sessiond \
+            -p aios-policyd \
+            -p aios-runtimed \
+            -p aios-deviced \
+            -p aios-updated \
+            -p aios-device-metadata-provider \
+            -p aios-runtime-local-inference-provider \
+            -p aios-system-intent-provider \
+            -p aios-system-files-provider
+
+      - name: IPC smoke
+        run: python3 scripts/test-ipc-smoke.py --bin-dir aios/target/debug
+
+      - name: Portal file-handle smoke
+        run: python3 scripts/test-portal-file-handle-smoke.py --bin-dir aios/target/debug
+
+      - name: Policyd audit-store smoke
+        run: python3 scripts/test-policyd-audit-store-smoke.py --bin-dir aios/target/debug
+
+      - name: Provider registry smoke
+        run: python3 scripts/test-provider-registry-smoke.py --bin-dir aios/target/debug
+
+      - name: Device metadata provider smoke
+        run: python3 scripts/test-device-metadata-provider-smoke.py --bin-dir aios/target/debug
+
+      - name: Runtimed backend smoke
+        run: python3 scripts/test-runtimed-backend-smoke.py --bin-dir aios/target/debug
+
+      - name: Runtimed worker contract smoke
+        run: python3 scripts/test-runtimed-worker-contract-smoke.py --bin-dir aios/target/debug
+
+      - name: Runtimed managed worker smoke
+        run: python3 scripts/test-runtimed-managed-worker-smoke.py --bin-dir aios/target/debug
+
+      - name: Runtime local inference provider smoke
+        run: python3 scripts/test-runtime-local-inference-provider-smoke.py --bin-dir aios/target/debug
+
+      - name: Observability correlation smoke
+        run: python3 scripts/test-observability-correlation-smoke.py --bin-dir aios/target/debug
+
+      - name: Audit evidence export smoke
+        run: python3 scripts/test-audit-evidence-export-smoke.py --bin-dir aios/target/debug
+
+      - name: Filesystem provider smoke
+        run: TMPDIR=/tmp python3 scripts/test-provider-fs-smoke.py --bin-dir aios/target/debug
+
+      - name: Updated restart smoke
+        run: python3 scripts/test-updated-restart-smoke.py --bin-dir aios/target/debug
+
+      - name: Shell live smoke
+        run: python3 scripts/test-shell-live-smoke.py --bin-dir aios/target/debug
+
+      - name: Shell panels smoke
+        run: python3 scripts/test-shell-panels-smoke.py
+
+      - name: Shellctl smoke
+        run: python3 scripts/test-shellctl-smoke.py
+
+      - name: Shell control clients live smoke
+        run: python3 scripts/test-shell-control-clients-live-smoke.py
+
+      - name: Shell session policy registry flow smoke
+        run: python3 scripts/test-shell-session-policy-registry-flow-smoke.py --bin-dir aios/target/debug
+
+      - name: Shell desktop smoke
+        run: python3 scripts/test-shell-desktop-smoke.py
+
+      - name: Shell session smoke
+        run: python3 scripts/test-shell-session-smoke.py
+
+      - name: Deviced smoke
+        run: python3 scripts/test-deviced-smoke.py --bin-dir aios/target/debug
+
+      - name: Deviced continuous native smoke
+        run: python3 scripts/test-deviced-continuous-native-smoke.py --bin-dir aios/target/debug
+
+      - name: Shell chooser smoke
+        run: python3 scripts/test-shell-chooser-smoke.py
+
+      - name: Shell provider smoke
+        run: python3 scripts/test-shell-provider-smoke.py --bin-dir aios/target/debug
+
+      - name: Screen capture provider smoke
+        run: python3 scripts/test-screen-capture-provider-smoke.py --bin-dir aios/target/debug
+
+      - name: Browser provider smoke
+        run: python3 scripts/test-browser-provider-smoke.py
+
+      - name: Office provider smoke
+        run: python3 scripts/test-office-provider-smoke.py
+
+      - name: MCP bridge provider smoke
+        run: python3 scripts/test-mcp-bridge-provider-smoke.py
+
+      - name: Code sandbox smoke
+        run: python3 scripts/test-code-sandbox-smoke.py
+
+      - name: Compat runtime smoke
+        run: python3 scripts/test-compat-runtime-smoke.py --bin-dir aios/target/debug
+
+      - name: Build system delivery bundle
+        run: python3 scripts/build-aios-delivery.py --no-archive
+
+      - name: Cross-service health smoke
+        run: python3 scripts/test-cross-service-health-smoke.py --bin-dir aios/target/debug --delivery-manifest out/aios-system-delivery/manifest.json
+
+      - name: Delivery smoke
+        run: python3 scripts/test-image-delivery-smoke.py --bundle-dir out/aios-system-delivery
+
+      - name: Firstboot hygiene smoke
+        run: python3 scripts/test-firstboot-hygiene-smoke.py --bundle-dir out/aios-system-delivery
+
+      - name: Installer UX smoke
+        run: python3 scripts/test-installer-ux-smoke.py
+
+      - name: Vendor firmware adapter smoke
+        run: python3 scripts/test-vendor-firmware-hook-smoke.py
+
+      - name: Container-native delivery preflight smoke
+        run: python3 scripts/test-build-container-native-smoke.py
+
+      - name: Boot preflight smoke
+        run: python3 scripts/test-boot-qemu-smoke.py
+
+      - name: Full regression suite smoke
+        run: python3 scripts/test-full-regression-suite-smoke.py
+
+      - name: Upload validate artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aios-validate-artifacts
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            out/validation/observability-schema-validation-report.json
+            out/validation/observability-schema-validation-report.md
+            out/validation/validation-matrix-report.json
+            out/validation/validation-matrix-report.md
+            out/validation/high-risk-audit-coverage-report.json
+            out/validation/high-risk-audit-coverage-report.md
+            out/validation/gpu-backend-support-matrix-report.json
+            out/validation/gpu-backend-support-matrix-report.md
+            out/validation/tier1-machine-nominations-report.json
+            out/validation/tier1-machine-nominations-report.md
+            out/validation/tier1-hardware-boot-evidence-report.json
+            out/validation/tier1-hardware-boot-evidence-report.md
+            out/validation/tier1-hardware-support-matrix.md
+            out/validation/tier1-hardware-known-limitations.md
+            out/validation/tier1-hardware-validation-report.md
+            out/validation/tier1-hardware-evidence-index.json
+            out/validation/image-build-strategy-report.json
+            out/validation/image-build-strategy-report.md
+            out/validation/ci-artifact-governance-report.json
+            out/validation/ci-artifact-governance-report.md
+            out/validation/cross-service-correlation-report.json
+            out/validation/cross-service-correlation-report.md
+            out/validation/audit-evidence-report.json
+            out/validation/audit-evidence-report.md
+            out/validation/cross-service-health-report.json
+            out/validation/cross-service-health-report.md
+            out/validation/cross-service-health-events.jsonl
+            out/validation/full-regression-report.json
+            out/validation/full-regression-report.md
+
+  system-validation:
+    runs-on: ubuntu-latest
+    needs: validate
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.85.0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python deps
+        run: python3 -m pip install --upgrade pip PyYAML jsonschema
+
+      - name: Download validate artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: aios-validate-artifacts
+          path: .
+
+      - name: Install QEMU and firmware deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 ovmf qemu-utils
+
+      - name: Build AIOS binaries
+        working-directory: aios
+        run: cargo build -p aios-agentd -p aios-sessiond -p aios-policyd -p aios-runtimed -p aios-deviced -p aios-updated -p aios-device-metadata-provider -p aios-runtime-local-inference-provider -p aios-system-intent-provider -p aios-system-files-provider
+
+      - name: Build system delivery bundle
+        run: python3 scripts/build-aios-delivery.py --no-archive
+
+      - name: Cross-service health smoke
+        run: python3 scripts/test-cross-service-health-smoke.py --bin-dir aios/target/debug --delivery-manifest out/aios-system-delivery/manifest.json
+
+      - name: Build system image
+        run: bash scripts/build-aios-image.sh
+
+      - name: Build recovery image
+        run: bash scripts/build-aios-recovery-image.sh
+
+      - name: Build installer image
+        run: bash scripts/build-aios-installer-image.sh
+
+      - name: Run full system delivery validation
+        run: python3 scripts/test-system-delivery-validation.py
+
+      - name: Build governance evidence index
+        run: python3 scripts/build-governance-evidence-index.py
+
+      - name: Evaluate release gate
+        run: python3 scripts/check-release-gate.py
+
+      - name: Upload validation artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aios-system-validation-artifacts
+          retention-days: 21
+          if-no-files-found: warn
+          path: |
+            out/validation
+            out/boot-qemu-bringup.log
+            out/boot-qemu-recovery.log
+            out/boot-qemu-installer.log
+            out/boot-qemu-installed-cross-reboot.log
+
+  nightly-container-delivery:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    needs: validate
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python deps
+        run: python3 -m pip install --upgrade pip PyYAML jsonschema
+
+      - name: Container-native delivery build
+        run: bash scripts/build-aios-delivery-container.sh --no-archive
+
+      - name: Delivery smoke
+        run: python3 scripts/test-image-delivery-smoke.py --bundle-dir out/aios-system-delivery
+
+      - name: Upload container delivery artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aios-nightly-container-delivery-artifacts
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            out/aios-system-delivery

@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aios/diagnostic-bundle.schema.json",
+  "title": "AIOS Diagnostic Bundle",
+  "type": "object",
+  "required": ["bundle_id", "created_at", "service_id", "deployment"],
+  "properties": {
+    "schema_version": { "type": "string" },
+    "bundle_id": { "type": "string", "minLength": 1 },
+    "created_at": { "type": "string", "format": "date-time" },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "service_id": { "type": "string", "minLength": 1 },
+    "update_id": { "type": "string" },
+    "boot_id": { "type": "string" },
+    "image_id": { "type": "string" },
+    "artifact_path": { "type": "string" },
+    "reason": { "type": ["string", "null"] },
+    "deployment": {
+      "type": "object",
+      "required": ["service_id", "update_stack", "current_channel", "current_version", "status", "rollback_ready"],
+      "properties": {
+        "service_id": { "type": "string" },
+        "update_stack": { "type": "string" },
+        "current_channel": { "type": "string" },
+        "current_version": { "type": "string" },
+        "next_version": { "type": ["string", "null"] },
+        "status": { "type": "string" },
+        "rollback_ready": { "type": "boolean" },
+        "last_check_at": { "type": ["string", "null"] },
+        "notes": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": true
+    },
+    "probe": {
+      "type": ["object", "null"],
+      "properties": {
+        "overall_status": { "type": "string" },
+        "checked_at": { "type": ["string", "null"] },
+        "summary": { "type": ["string", "null"] },
+        "notes": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": true
+    },
+    "boot_state": {
+      "type": ["object", "null"],
+      "properties": {
+        "current_slot": { "type": "string" },
+        "last_good_slot": { "type": "string" },
+        "staged_slot": { "type": ["string", "null"] },
+        "boot_success": { "type": "boolean" },
+        "notes": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": true
+    },
+    "recovery_points": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "diagnostic_bundles": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "notes": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "additionalProperties": true
+}

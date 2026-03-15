@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aios/compat-mcp-bridge-result.schema.json",
+  "title": "AIOS Compat MCP Bridge Result Protocol",
+  "type": "object",
+  "required": [
+    "protocol_version",
+    "worker_contract",
+    "provider_id",
+    "status",
+    "operation",
+    "execution_location",
+    "request",
+    "target",
+    "policy",
+    "remote",
+    "audit",
+    "timestamps"
+  ],
+  "properties": {
+    "protocol_version": { "const": "1.0.0" },
+    "worker_contract": { "const": "compat-mcp-bridge-v1" },
+    "provider_id": { "const": "compat.mcp.bridge.local" },
+    "status": { "enum": ["ok", "error"] },
+    "operation": { "enum": ["compat.mcp.call", "compat.a2a.forward", null] },
+    "execution_location": { "const": "sandbox" },
+    "request": {
+      "type": "object",
+      "required": ["capability_id", "endpoint", "timeout_seconds", "payload_kind"],
+      "properties": {
+        "capability_id": { "type": ["string", "null"] },
+        "endpoint": { "type": ["string", "null"] },
+        "timeout_seconds": { "type": ["number", "null"], "minimum": 0 },
+        "payload_kind": { "type": ["string", "null"] },
+        "payload": {},
+        "tool": { "type": ["string", "null"] },
+        "request_id": { "type": ["string", "null"] }
+      },
+      "additionalProperties": true
+    },
+    "target": {
+      "type": "object",
+      "required": ["endpoint", "scheme", "authority", "host", "path"],
+      "properties": {
+        "endpoint": { "type": ["string", "null"] },
+        "scheme": { "type": ["string", "null"] },
+        "authority": { "type": ["string", "null"] },
+        "host": { "type": ["string", "null"] },
+        "path": { "type": ["string", "null"] }
+      },
+      "additionalProperties": true
+    },
+    "policy": {
+      "type": "object",
+      "required": ["trust_mode", "configured_mode", "enforced", "allowlist", "compat_permission_manifest"],
+      "properties": {
+        "trust_mode": { "type": ["string", "null"] },
+        "configured_mode": { "type": ["string", "null"] },
+        "enforced": { "type": "boolean" },
+        "allowlist": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "compat_permission_manifest": { "$ref": "aios/compat-permission-manifest.schema.json" }
+      },
+      "additionalProperties": true
+    },
+    "remote": {
+      "type": "object",
+      "required": ["http_status", "response_kind", "response", "content_type"],
+      "properties": {
+        "http_status": { "type": ["integer", "null"] },
+        "response_kind": { "type": "string", "minLength": 1 },
+        "response": {},
+        "content_type": { "type": ["string", "null"] }
+      },
+      "additionalProperties": true
+    },
+    "audit": {
+      "type": "object",
+      "required": ["audit_id", "audit_log", "capability_id", "audit_tags", "taint_behavior"],
+      "properties": {
+        "audit_id": { "type": ["string", "null"] },
+        "audit_log": { "type": ["string", "null"] },
+        "capability_id": { "type": ["string", "null"] },
+        "audit_tags": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "taint_behavior": { "type": ["string", "null"] }
+      },
+      "additionalProperties": true
+    },
+    "timestamps": {
+      "type": "object",
+      "required": ["started_at", "finished_at"],
+      "properties": {
+        "started_at": { "type": "string", "minLength": 1 },
+        "finished_at": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": true
+    },
+    "error": {
+      "type": ["object", "null"],
+      "properties": {
+        "category": { "type": "string", "minLength": 1 },
+        "error_code": { "type": "string", "minLength": 1 },
+        "message": { "type": "string", "minLength": 1 },
+        "retryable": { "type": "boolean" }
+      },
+      "required": ["category", "error_code", "message", "retryable"],
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

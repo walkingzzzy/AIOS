@@ -1,0 +1,38 @@
+platform_id: nvidia-jetson-orin-agx
+arch: aarch64
+boot_mode: uefi
+installer:
+  platform_label: NVIDIA Jetson AGX Orin Devkit
+  media_mode: embedded-system-image
+  default_target: aios-installer.target
+  source_payload_path: /usr/share/aios/installer/payload/aios-system.raw
+  target_overlay_dir: /usr/share/aios/installer/target-overlay
+  updated_platform_env_path: /etc/aios/updated/platform.env
+  runtime_platform_env_path: /etc/aios/runtime/platform.env
+  runtime_profile_path: /usr/share/aios/runtime/platforms/nvidia-jetson-orin-agx/default-runtime-profile.yaml
+  updated_platform_profile: /usr/share/aios/updated/platforms/nvidia-jetson-orin-agx/profile.yaml
+  vendor_id: nvidia
+  hardware_profile_id: nvidia-jetson-orin-agx
+  guided_ui:
+    mode: interactive
+    auto_confirm_seconds: 0
+  partition_strategy:
+    esp_partlabel: AIOS-ESP-NVIDIA
+    root_partlabel: AIOS-root-NVIDIA
+    var_partlabel: AIOS-var-NVIDIA
+    esp_partition_index: 1
+    root_partition_index: 2
+    var_partition_index: 3
+  firmware_hooks:
+    pre_install: /usr/share/aios/installer/hooks/pre-install.sh
+    post_install: /usr/share/aios/installer/hooks/post-install.sh
+recovery:
+  default_target: aios-recovery.target
+  updated_platform_env_path: /etc/aios/updated/platform.env
+  runtime_platform_env_path: /etc/aios/runtime/platform.env
+  runtime_profile_path: /usr/share/aios/runtime/platforms/nvidia-jetson-orin-agx/default-runtime-profile.yaml
+  updated_platform_profile: /usr/share/aios/updated/platforms/nvidia-jetson-orin-agx/profile.yaml
+artifacts:
+  system_image: aios-nvidia-jetson-orin-agx.raw
+  installer_image: aios-nvidia-jetson-orin-agx-installer.raw
+  recovery_image: aios-nvidia-jetson-orin-agx-recovery.raw

@@ -1,0 +1,5 @@
+console=ttyS0
+systemd.log_level=info
+systemd.unit=multi-user.target
+aios.profile=qemu-x86_64-dev
+aios.recovery_target=aios-recovery.target

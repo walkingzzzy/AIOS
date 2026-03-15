@@ -1,0 +1,26 @@
+{
+  "schema_version": "2026-03-13",
+  "audit_id": "audit-0001",
+  "timestamp": "2026-03-13T12:00:00Z",
+  "generated_at": "2026-03-13T12:00:00Z",
+  "user_id": "user-01",
+  "session_id": "session-01",
+  "task_id": "task-01",
+  "approval_id": "approval-01",
+  "provider_id": "system.files.local",
+  "capability_id": "system.file.bulk_delete",
+  "decision": "approved",
+  "execution_location": "local",
+  "route_state": "selected",
+  "update_id": "update-01",
+  "boot_id": "boot-01",
+  "image_id": "image-qemu-x86_64-2026-03-13",
+  "artifact_path": "out/validation/system-delivery-validation-report.json",
+  "taint_summary": "operator-approved",
+  "result": {
+    "status": "accepted"
+  },
+  "notes": [
+    "high-risk capability went through approval chain"
+  ]
+}

@@ -1,0 +1,130 @@
+schema_version: "1.0.0"
+generated_at: "2026-03-14T00:00:00Z"
+source_capability_catalog: "aios/policy/capabilities/default-capability-catalog.yaml"
+image_capability_catalog: "aios/image/mkosi.extra/etc/aios/policy/default-capability-catalog.yaml"
+required_operations:
+  - "update.apply"
+  - "update.rollback"
+  - "recovery.bundle.export"
+entries:
+  - entry_id: "capability.system.file.bulk_delete"
+    entry_type: "capability"
+    owner: "Team B / Security + Team D / Providers"
+    capability_id: "system.file.bulk_delete"
+    coverage_mode: "policy-audit + provider-audit"
+    code_paths:
+      - "aios/services/policyd/src/audit.rs"
+      - "aios/providers/system-files/src/audit.rs"
+    validation_commands:
+      - "python3 scripts/test-policyd-audit-store-smoke.py --bin-dir aios/target/debug"
+      - "python3 scripts/test-provider-fs-smoke.py --bin-dir aios/target/debug"
+      - "python3 scripts/test-ipc-smoke.py --bin-dir aios/target/debug"
+    required_patterns:
+      - "system.file.bulk_delete"
+      - "approval-pending"
+      - "approval-approved"
+      - "approval-scope-mismatch"
+      - "needs-approval"
+      - "token-consumed"
+      - "token-reused"
+      - "dry-run"
+
+  - entry_id: "capability.device.capture.screen.read"
+    entry_type: "capability"
+    owner: "Team D / Device + Team C / Shell"
+    capability_id: "device.capture.screen.read"
+    coverage_mode: "device trace + approval correlation"
+    code_paths:
+      - "aios/services/deviced/src/rpc.rs"
+      - "aios/shell/runtime/screen_capture_portal_provider.py"
+    validation_commands:
+      - "python3 scripts/test-deviced-policy-approval-smoke.py --bin-dir aios/target/debug"
+      - "python3 scripts/test-screen-capture-provider-smoke.py --bin-dir aios/target/debug"
+      - "python3 scripts/test-portal-capture-chain-smoke.py --bin-dir aios/target/debug"
+    required_patterns:
+      - "device.capture.requested"
+      - "device.capture.rejected"
+      - "approval_id"
+      - "device.capture.screen.read"
+
+  - entry_id: "capability.compat.a2a.forward"
+    entry_type: "capability"
+    owner: "Team D / Compat"
+    capability_id: "compat.a2a.forward"
+    coverage_mode: "bridge audit-jsonl"
+    code_paths:
+      - "aios/compat/mcp-bridge/runtime/mcp_bridge_provider.py"
+    validation_commands:
+      - "python3 scripts/test-mcp-bridge-provider-smoke.py"
+      - "python3 scripts/test-compat-runtime-smoke.py --bin-dir aios/target/debug"
+    required_patterns:
+      - "compat.a2a.forward"
+      - "audit_log"
+      - "decision = \"allowed\""
+      - "decision = \"denied\""
+      - "bridge_remote_timeout"
+
+  - entry_id: "capability.compat.code.execute"
+    entry_type: "capability"
+    owner: "Team D / Compat"
+    capability_id: "compat.code.execute"
+    coverage_mode: "sandbox audit-jsonl"
+    code_paths:
+      - "aios/compat/code-sandbox/runtime/aios_sandbox_executor.py"
+    validation_commands:
+      - "python3 scripts/test-code-sandbox-smoke.py"
+      - "python3 scripts/test-compat-runtime-smoke.py --bin-dir aios/target/debug"
+    required_patterns:
+      - "compat.code.execute"
+      - "audit_log"
+      - "decision = \"allowed\""
+      - "decision = \"denied\""
+      - "\"timed-out\""
+
+  - entry_id: "operation.update.apply"
+    entry_type: "operation"
+    owner: "Team A / Platform"
+    operation_id: "update.apply"
+    coverage_mode: "updated trace-event"
+    code_paths:
+      - "aios/services/updated/src/rpc.rs"
+      - "aios/services/updated/src/observability.rs"
+    validation_commands:
+      - "python3 scripts/test-updated-smoke.py --bin-dir aios/target/debug"
+      - "python3 scripts/test-updated-restart-smoke.py --bin-dir aios/target/debug"
+    required_patterns:
+      - "update.apply.completed"
+      - "update.apply"
+      - "update_id"
+
+  - entry_id: "operation.update.rollback"
+    entry_type: "operation"
+    owner: "Team A / Platform"
+    operation_id: "update.rollback"
+    coverage_mode: "updated trace-event"
+    code_paths:
+      - "aios/services/updated/src/rpc.rs"
+      - "aios/services/updated/src/observability.rs"
+    validation_commands:
+      - "python3 scripts/test-updated-smoke.py --bin-dir aios/target/debug"
+      - "python3 scripts/test-updated-restart-smoke.py --bin-dir aios/target/debug"
+    required_patterns:
+      - "update.rollback.completed"
+      - "update.rollback"
+      - "update_id"
+
+  - entry_id: "operation.recovery.bundle.export"
+    entry_type: "operation"
+    owner: "Team A / Platform"
+    operation_id: "recovery.bundle.export"
+    coverage_mode: "updated trace-event"
+    code_paths:
+      - "aios/services/updated/src/rpc.rs"
+      - "aios/services/updated/src/observability.rs"
+    validation_commands:
+      - "python3 scripts/test-updated-smoke.py --bin-dir aios/target/debug"
+      - "python3 scripts/test-updated-restart-smoke.py --bin-dir aios/target/debug"
+    required_patterns:
+      - "recovery.bundle.exported"
+      - "recovery.bundle.export"
+      - "update_id"

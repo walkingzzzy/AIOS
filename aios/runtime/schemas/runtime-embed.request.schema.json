@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aios/runtime-embed.request.schema.json",
+  "title": "AIOS Runtime Embed Request",
+  "type": "object",
+  "required": ["session_id", "task_id", "inputs"],
+  "properties": {
+    "session_id": { "type": "string" },
+    "task_id": { "type": "string" },
+    "inputs": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string" }
+    },
+    "model": { "type": "string" },
+    "preferred_backend": { "type": "string" },
+    "execution_token": { "type": "object" }
+  },
+  "additionalProperties": true
+}

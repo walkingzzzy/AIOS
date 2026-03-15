@@ -1,0 +1,16 @@
+profile_id: aios-installer-qemu
+platform_id: generic-x86_64-uefi
+platform_label: Generic x86_64 UEFI
+platform_profile: /usr/share/aios/updated/platforms/generic-x86_64-uefi/profile.yaml
+mode: image-clone
+source_disk: /dev/vdb
+target_disk: /dev/vdc
+optional_recovery_disk: /dev/vdd
+default_target: aios-installer.target
+install_slot: a
+boot_backend: firmware
+ui:
+  mode: auto
+  auto_confirm_seconds: 0
+  summary_path: /run/aios-installer/guided-summary.txt
+  session_path: /run/aios-installer/guided-session.json

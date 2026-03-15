@@ -1,0 +1,244 @@
+capabilities:
+  - capability_id: runtime.infer.submit
+    version: 1.0.0
+    risk_tier: low
+    approval_required: false
+    prompt_injection_sensitive: true
+    destructive: false
+    user_interaction_required: false
+    default_approval_lane: standard-capability-review
+    taint_tags:
+      - prompt-driven
+      - runtime
+
+  - capability_id: runtime.embed.vectorize
+    version: 1.0.0
+    risk_tier: low
+    approval_required: false
+    prompt_injection_sensitive: true
+    destructive: false
+    user_interaction_required: false
+    default_approval_lane: standard-capability-review
+    taint_tags:
+      - runtime
+      - embedding
+
+  - capability_id: runtime.rerank.score
+    version: 1.0.0
+    risk_tier: low
+    approval_required: false
+    prompt_injection_sensitive: true
+    destructive: false
+    user_interaction_required: false
+    default_approval_lane: standard-capability-review
+    taint_tags:
+      - runtime
+      - rerank
+
+  - capability_id: system.intent.execute
+    version: 1.0.0
+    risk_tier: low
+    approval_required: false
+    prompt_injection_sensitive: true
+    destructive: false
+    user_interaction_required: false
+    default_approval_lane: standard-capability-review
+    taint_tags:
+      - control-plane
+      - intent
+
+  - capability_id: provider.fs.open
+    version: 1.0.0
+    risk_tier: medium
+    approval_required: false
+    prompt_injection_sensitive: true
+    destructive: false
+    user_interaction_required: true
+    default_approval_lane: standard-capability-review
+    taint_tags:
+      - filesystem
+      - user-object-bound
+
+  - capability_id: system.file.bulk_delete
+    version: 1.0.0
+    risk_tier: high
+    approval_required: true
+    prompt_injection_sensitive: true
+    destructive: true
+    user_interaction_required: true
+    default_approval_lane: high-risk-side-effect-review
+    taint_tags:
+      - filesystem
+      - destructive
+
+  - capability_id: device.capture.screen.read
+    version: 1.0.0
+    risk_tier: high
+    approval_required: true
+    prompt_injection_sensitive: true
+    destructive: false
+    user_interaction_required: true
+    default_approval_lane: device-capture-review
+    taint_tags:
+      - screen
+      - device-data
+
+  - capability_id: device.metadata.get
+    version: 1.0.0
+    risk_tier: low
+    approval_required: false
+    prompt_injection_sensitive: false
+    destructive: false
+    user_interaction_required: false
+    default_approval_lane: standard-capability-review
+    taint_tags:
+      - device
+      - metadata
+
+  - capability_id: compat.office.export_pdf
+    version: 1.0.0
+    risk_tier: medium
+    approval_required: false
+    prompt_injection_sensitive: true
+    destructive: false
+    user_interaction_required: true
+    default_approval_lane: standard-capability-review
+    taint_tags:
+      - export
+      - compat
+
+  - capability_id: compat.document.open
+    version: 1.0.0
+    risk_tier: medium
+    approval_required: false
+    prompt_injection_sensitive: true
+    destructive: false
+    user_interaction_required: true
+    default_approval_lane: standard-capability-review
+    taint_tags:
+      - document
+      - user-object-bound
+      - compat
+
+  - capability_id: compat.browser.navigate
+    version: 1.0.0
+    risk_tier: low
+    approval_required: false
+    prompt_injection_sensitive: true
+    destructive: false
+    user_interaction_required: false
+    default_approval_lane: standard-capability-review
+    taint_tags:
+      - browser
+      - compat
+
+  - capability_id: compat.browser.extract
+    version: 1.0.0
+    risk_tier: low
+    approval_required: false
+    prompt_injection_sensitive: true
+    destructive: false
+    user_interaction_required: false
+    default_approval_lane: standard-capability-review
+    taint_tags:
+      - browser
+      - extracted-content
+      - compat
+
+  - capability_id: compat.mcp.call
+    version: 1.0.0
+    risk_tier: medium
+    approval_required: false
+    prompt_injection_sensitive: true
+    destructive: false
+    user_interaction_required: false
+    default_approval_lane: standard-capability-review
+    taint_tags:
+      - bridge
+      - remote
+      - compat
+
+  - capability_id: compat.a2a.forward
+    version: 1.0.0
+    risk_tier: high
+    approval_required: true
+    prompt_injection_sensitive: true
+    destructive: false
+    user_interaction_required: false
+    default_approval_lane: high-risk-side-effect-review
+    taint_tags:
+      - bridge
+      - remote
+      - compat
+
+  - capability_id: compat.code.execute
+    version: 1.0.0
+    risk_tier: high
+    approval_required: true
+    prompt_injection_sensitive: true
+    destructive: true
+    user_interaction_required: false
+    default_approval_lane: high-risk-side-effect-review
+    taint_tags:
+      - dynamic-code
+      - compat
+
+  - capability_id: shell.notification.open
+    version: 1.0.0
+    risk_tier: low
+    approval_required: false
+    prompt_injection_sensitive: false
+    destructive: false
+    user_interaction_required: true
+    default_approval_lane: standard-capability-review
+    taint_tags:
+      - shell
+      - notification
+
+  - capability_id: shell.window.focus
+    version: 1.0.0
+    risk_tier: medium
+    approval_required: false
+    prompt_injection_sensitive: true
+    destructive: false
+    user_interaction_required: true
+    default_approval_lane: standard-capability-review
+    taint_tags:
+      - shell
+      - focus
+
+  - capability_id: shell.operator-audit.open
+    version: 1.0.0
+    risk_tier: low
+    approval_required: false
+    prompt_injection_sensitive: false
+    destructive: false
+    user_interaction_required: true
+    default_approval_lane: standard-capability-review
+    taint_tags:
+      - shell
+      - operator-audit
+
+  - capability_id: shell.remote-governance.open
+    version: 1.0.0
+    risk_tier: low
+    approval_required: false
+    prompt_injection_sensitive: false
+    destructive: false
+    user_interaction_required: true
+    default_approval_lane: standard-capability-review
+    taint_tags:
+      - shell
+      - remote-governance
+
+  - capability_id: shell.panel-events.list
+    version: 1.0.0
+    risk_tier: low
+    approval_required: false
+    prompt_injection_sensitive: false
+    destructive: false
+    user_interaction_required: false
+    default_approval_lane: standard-capability-review
+    taint_tags:
+      - shell
+      - panel-events

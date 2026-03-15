@@ -1,0 +1,42 @@
+{
+  "provider_id": "device.metadata.local",
+  "version": "0.1.0",
+  "kind": "system-provider",
+  "display_name": "Local Device Metadata Provider",
+  "owner": "aios-system",
+  "capabilities": [
+    {
+      "capability_id": "device.metadata.get",
+      "read_only": true,
+      "recoverable": true,
+      "approval_required": false,
+      "external_side_effect": false,
+      "dynamic_code": false,
+      "user_interaction_required": false,
+      "supported_targets": ["device-metadata"],
+      "input_schema_refs": ["aios/device-metadata-get.request.schema.json"],
+      "output_schema_refs": ["aios/device-metadata-get.response.schema.json"],
+      "audit_tags": ["device", "metadata"]
+    }
+  ],
+  "execution_location": "local",
+  "sandbox_class": "device-metadata",
+  "required_permissions": [],
+  "resource_budget": {
+    "max_memory_mb": 128,
+    "max_concurrency": 4
+  },
+  "supported_targets": ["device-metadata"],
+  "input_schema_refs": ["aios/device-metadata-get.request.schema.json"],
+  "output_schema_refs": ["aios/device-metadata-get.response.schema.json"],
+  "timeout_policy": "bounded-3s",
+  "retry_policy": "retry-once",
+  "healthcheck": {
+    "kind": "process",
+    "endpoint": "deviced",
+    "interval_seconds": 15
+  },
+  "audit_tags": ["device", "local"],
+  "taint_behavior": "input-propagates",
+  "degradation_policy": "deny-on-unavailable"
+}

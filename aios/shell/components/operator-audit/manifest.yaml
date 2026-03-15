@@ -1,0 +1,20 @@
+component_id: operator-audit
+status: in_progress
+kind: shell-panel
+owner: aios-shell
+consumes:
+  - aios-policyd.audit.jsonl
+  - aios-runtimed.runtime-events.jsonl
+  - aios-runtimed.remote-audit.jsonl
+  - aios-compat.compat-observability.jsonl
+  - aios-compat.browser-remote-registry.json
+  - aios-compat.office-remote-registry.json
+  - aios-agentd.provider-registry-state
+capabilities:
+  - show_cross_service_audit_issues
+  - show_correlated_operator_tasks
+  - show_audit_artifact_paths
+  - show_remote_governance_correlation
+entrypoint: client.py
+prototype_entrypoint: prototype.py
+panel_entrypoint: panel.py

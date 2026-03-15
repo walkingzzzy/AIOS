@@ -1,0 +1,176 @@
+{
+  "report_id": "health-report-01",
+  "generated_at": "2026-03-13T13:30:00Z",
+  "workspace": "/Users/mac/Desktop/AIOS",
+  "overall_status": "passed",
+  "json_report": "/Users/mac/Desktop/AIOS/out/validation/cross-service-health-report.json",
+  "markdown_report": "/Users/mac/Desktop/AIOS/out/validation/cross-service-health-report.md",
+  "events_jsonl": "/Users/mac/Desktop/AIOS/out/validation/cross-service-health-events.jsonl",
+  "summary": {
+    "source_count": 3,
+    "passed_count": 3,
+    "failed_count": 0,
+    "event_count": 4,
+    "component_kinds": [
+      "service",
+      "provider",
+      "platform"
+    ],
+    "service_ids": [
+      "aios-sessiond",
+      "aios-agentd",
+      "aios-system-delivery"
+    ],
+    "overall_statuses": [
+      "ready"
+    ],
+    "failed_checks": [],
+    "artifact_paths": [
+      "/run/aios/sessiond/sessiond.sock",
+      "/run/aios/agentd/agentd.sock",
+      "/Users/mac/Desktop/AIOS/out/aios-system-delivery/manifest.json"
+    ]
+  },
+  "checks": [
+    {
+      "check_id": "sessiond",
+      "summary": "Service health export for aios-sessiond",
+      "status": "passed",
+      "source_kind": "rpc-service",
+      "target": "system.health.get via /run/aios/sessiond/sessiond.sock",
+      "component_kind": "service",
+      "event_count": 1,
+      "health_statuses": [
+        "ready"
+      ],
+      "service_ids": [
+        "aios-sessiond"
+      ],
+      "artifact_paths": [
+        "/run/aios/sessiond/sessiond.sock"
+      ],
+      "detail": "queried system.health.get",
+      "notes": [
+        "database exported in service notes"
+      ]
+    },
+    {
+      "check_id": "provider-registry",
+      "summary": "Provider registry health export",
+      "status": "passed",
+      "source_kind": "provider-registry",
+      "target": "provider.health.get via /run/aios/agentd/agentd.sock",
+      "component_kind": "provider",
+      "event_count": 2,
+      "health_statuses": [
+        "ready"
+      ],
+      "service_ids": [
+        "aios-agentd"
+      ],
+      "artifact_paths": [
+        "/run/aios/agentd/agentd.sock"
+      ],
+      "detail": "queried provider.health.get",
+      "notes": [
+        "required provider ids resolved"
+      ]
+    },
+    {
+      "check_id": "delivery-bundle",
+      "summary": "Delivery manifest health export",
+      "status": "passed",
+      "source_kind": "delivery-artifact",
+      "target": "manifest /Users/mac/Desktop/AIOS/out/aios-system-delivery/manifest.json",
+      "component_kind": "platform",
+      "event_count": 1,
+      "health_statuses": [
+        "ready"
+      ],
+      "service_ids": [
+        "aios-system-delivery"
+      ],
+      "artifact_paths": [
+        "/Users/mac/Desktop/AIOS/out/aios-system-delivery/manifest.json"
+      ],
+      "detail": "delivery manifest contains required sections",
+      "notes": [
+        "bundle_name=aios-system-delivery"
+      ]
+    }
+  ],
+  "events": [
+    {
+      "schema_version": "2026-03-13",
+      "event_id": "health-sessiond-01",
+      "generated_at": "2026-03-13T13:30:00Z",
+      "service_id": "aios-sessiond",
+      "component_kind": "service",
+      "source": "rpc",
+      "overall_status": "ready",
+      "readiness": true,
+      "summary": "system.health.get status=ready",
+      "artifact_path": "/run/aios/sessiond/sessiond.sock",
+      "notes": [
+        "database=/var/lib/aios/sessiond/sessiond.sqlite3"
+      ]
+    },
+    {
+      "schema_version": "2026-03-13",
+      "event_id": "health-system-files-local-01",
+      "generated_at": "2026-03-13T13:30:00Z",
+      "service_id": "aios-agentd",
+      "component_id": "system.files.local",
+      "component_kind": "provider",
+      "source": "rpc",
+      "overall_status": "ready",
+      "readiness": true,
+      "last_check_at": "2026-03-13T13:29:45Z",
+      "summary": "provider.health.get status=available",
+      "provider_id": "system.files.local",
+      "artifact_path": "/run/aios/agentd/agentd.sock",
+      "notes": [
+        "disabled=false",
+        "circuit_open=false"
+      ]
+    },
+    {
+      "schema_version": "2026-03-13",
+      "event_id": "health-browser-automation-01",
+      "generated_at": "2026-03-13T13:30:00Z",
+      "service_id": "aios-agentd",
+      "component_id": "compat.browser.automation.local",
+      "component_kind": "provider",
+      "source": "rpc",
+      "overall_status": "ready",
+      "readiness": true,
+      "last_check_at": "2026-03-13T13:29:45Z",
+      "summary": "provider.health.get status=available",
+      "provider_id": "compat.browser.automation.local",
+      "artifact_path": "/run/aios/agentd/agentd.sock",
+      "notes": [
+        "disabled=false",
+        "circuit_open=false"
+      ]
+    },
+    {
+      "schema_version": "2026-03-13",
+      "event_id": "health-delivery-01",
+      "generated_at": "2026-03-13T13:30:00Z",
+      "service_id": "aios-system-delivery",
+      "component_kind": "platform",
+      "source": "operator",
+      "overall_status": "ready",
+      "readiness": true,
+      "last_check_at": "2026-03-13T05:23:43.336152+00:00",
+      "summary": "delivery manifest contains required sections",
+      "image_id": "aios-system-delivery",
+      "artifact_path": "/Users/mac/Desktop/AIOS/out/aios-system-delivery/manifest.json",
+      "notes": [
+        "bundle_name=aios-system-delivery",
+        "schema_version=1.0.0"
+      ]
+    }
+  ],
+  "warnings": []
+}

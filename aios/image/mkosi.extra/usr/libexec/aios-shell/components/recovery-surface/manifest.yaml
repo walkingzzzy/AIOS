@@ -1,0 +1,19 @@
+component_id: recovery-surface
+status: done
+kind: shell-surface
+owner: aios-shell
+consumes:
+  - aios-updated.recovery-surface.json
+  - recovery.surface.get
+  - update.health.get
+  - update.check
+  - update.apply
+  - update.rollback
+  - recovery.bundle.export
+capabilities:
+  - show_update_status
+  - show_recovery_points
+  - trigger_recovery_actions
+entrypoint: client.py
+prototype_entrypoint: prototype.py
+panel_entrypoint: panel.py

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aios/intent.request.schema.json",
+  "title": "AIOS System Intent Request",
+  "type": "object",
+  "required": ["execution_token", "intent"],
+  "properties": {
+    "execution_token": { "type": "object" },
+    "intent": { "type": "string" }
+  },
+  "additionalProperties": false
+}

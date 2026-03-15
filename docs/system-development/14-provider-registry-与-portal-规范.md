@@ -50,6 +50,16 @@ Portal 是统一受控入口，而不是绕过 capability policy 的简化接口
 - 依赖的设备 / 网络 / 文件系统范围
 - 是否允许远端桥接
 
+### 2.4 Registry 覆盖 bridge，但不替代核心本地 IPC
+
+Provider registry 用于 system / shell / device / compat / remote bridge 的发现与解析。  
+但 AIOS 核心服务之间的本地协作仍应优先使用本地 IPC / system bus / Unix socket 等系统内通道。
+
+结论：
+
+- MCP / A2A provider 必须进入 registry
+- 但 MCP / A2A 不应被设计成 AIOS 核心控制面的唯一内部通信机制
+
 ## 3. Provider 分类
 
 | 类型 | 说明 | 示例 |
@@ -267,6 +277,7 @@ Registry 至少要记录：
 - 外部对端默认低信任
 - schema 校验失败的 provider 不得激活
 - `mcp.*` / `a2a.*` 只表示桥接来源，不代表授权豁免
+- 外部协议桥接默认属于 interop / compat 层，而不是 core local control plane
 
 ## 10. 路由与选择规则
 

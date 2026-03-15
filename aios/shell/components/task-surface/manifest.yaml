@@ -1,0 +1,16 @@
+component_id: task-surface
+status: done
+role: shell-task-surface
+integrates:
+  - aios-sessiond
+features:
+  - task.list
+  - task.get
+  - task.state.update
+  - task.events.list
+  - task.plan.get
+  - focus-task-detail
+  - provider-route-summary
+entrypoint: client.py
+prototype_entrypoint: prototype.py
+panel_entrypoint: panel.py

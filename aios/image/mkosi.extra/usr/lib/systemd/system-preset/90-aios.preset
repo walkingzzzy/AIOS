@@ -1,0 +1,12 @@
+enable aios-agentd.service
+enable aios-boot-evidence.service
+enable aios-device-metadata-provider.service
+enable aios-deviced.service
+enable aios-firstboot.service
+enable aios-policyd.service
+enable aios-runtime-local-inference-provider.service
+enable aios-runtimed.service
+enable aios-sessiond.service
+enable aios-system-files-provider.service
+enable aios-system-intent-provider.service
+enable aios-updated.service

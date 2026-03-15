@@ -1,0 +1,96 @@
+{
+  "provider_id": "compat.office.document.local",
+  "version": "0.1.0",
+  "kind": "compat-provider",
+  "display_name": "Office Document Compat Provider",
+  "owner": "aios-compat",
+  "worker_contract": "compat-office-document-v1",
+  "result_protocol_schema_ref": "aios/compat-office-result.schema.json",
+  "trust_policy_modes": ["registered-remote", "none", "bearer", "header", "execution-token"],
+  "capabilities": [
+    {
+      "capability_id": "compat.document.open",
+      "read_only": true,
+      "recoverable": true,
+      "approval_required": false,
+      "external_side_effect": false,
+      "dynamic_code": false,
+      "user_interaction_required": true,
+      "supported_targets": ["file"],
+      "input_schema_refs": ["aios/portal-handle.schema.json"],
+      "output_schema_refs": ["aios/document.open.response", "aios/compat-office-result.schema.json"],
+      "audit_tags": ["office", "document"]
+    },
+    {
+      "capability_id": "compat.office.export_pdf",
+      "read_only": false,
+      "recoverable": true,
+      "approval_required": true,
+      "external_side_effect": true,
+      "dynamic_code": false,
+      "user_interaction_required": true,
+      "supported_targets": ["file", "export-target"],
+      "input_schema_refs": ["aios/portal-handle.schema.json"],
+      "output_schema_refs": ["aios/document.export.response", "aios/compat-office-result.schema.json"],
+      "audit_tags": ["office", "export"]
+    }
+  ],
+  "execution_location": "sandbox",
+  "sandbox_class": "office-automation",
+  "required_permissions": ["document.user-selected"],
+  "resource_budget": {
+    "max_memory_mb": 1024,
+    "max_concurrency": 1
+  },
+  "compat_permission_manifest": {
+    "schema_version": "1.0.0",
+    "provider_id": "compat.office.document.local",
+    "execution_location": "sandbox",
+    "sandbox_class": "office-automation",
+    "required_permissions": ["document.user-selected"],
+    "resource_budget": {
+      "max_timeout_seconds": 60,
+      "max_memory_mb": 1024,
+      "max_concurrency": 1
+    },
+    "capabilities": [
+      {
+        "capability_id": "compat.document.open",
+        "permission_scopes": ["document.user-selected.read"],
+        "approval_required": false,
+        "dynamic_code": false,
+        "user_interaction_required": true,
+        "network_access": "none",
+        "subprocess_access": "none",
+        "filesystem_access": "portal-user-selected-read",
+        "target_binding": "portal-handle",
+        "audit_tags": ["office", "document"]
+      },
+      {
+        "capability_id": "compat.office.export_pdf",
+        "permission_scopes": ["document.user-selected.read", "document.export.write"],
+        "approval_required": true,
+        "dynamic_code": false,
+        "user_interaction_required": true,
+        "network_access": "none",
+        "subprocess_access": "none",
+        "filesystem_access": "portal-user-selected-read-export-output-write",
+        "target_binding": "portal-handle",
+        "audit_tags": ["office", "export"]
+      }
+    ],
+    "audit_tags": ["office", "compat", "sandbox"],
+    "taint_behavior": "user-object-bound"
+  },
+  "supported_targets": ["file", "export-target", "registered-remote"],
+  "timeout_policy": "bounded-60s",
+  "retry_policy": "no-retry",
+  "healthcheck": {
+    "kind": "process",
+    "endpoint": "office-provider",
+    "interval_seconds": 20
+  },
+  "audit_tags": ["office", "compat", "sandbox"],
+  "taint_behavior": "user-object-bound",
+  "degradation_policy": "fallback-to-manual-export"
+}

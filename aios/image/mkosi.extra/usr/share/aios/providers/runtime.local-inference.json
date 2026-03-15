@@ -1,0 +1,77 @@
+{
+  "provider_id": "runtime.local.inference",
+  "version": "0.1.0",
+  "kind": "runtime-provider",
+  "display_name": "Local Inference Runtime",
+  "owner": "aios-runtime",
+  "capabilities": [
+    {
+      "capability_id": "runtime.infer.submit",
+      "read_only": true,
+      "recoverable": true,
+      "approval_required": false,
+      "external_side_effect": false,
+      "dynamic_code": false,
+      "user_interaction_required": false,
+      "supported_targets": ["text"],
+      "input_schema_refs": ["aios/runtime-infer.request"],
+      "output_schema_refs": ["aios/runtime-infer.response"],
+      "audit_tags": ["runtime", "inference"]
+    },
+    {
+      "capability_id": "runtime.embed.vectorize",
+      "read_only": true,
+      "recoverable": true,
+      "approval_required": false,
+      "external_side_effect": false,
+      "dynamic_code": false,
+      "user_interaction_required": false,
+      "supported_targets": ["text"],
+      "input_schema_refs": ["aios/runtime-embed.request"],
+      "output_schema_refs": ["aios/runtime-embed.response"],
+      "audit_tags": ["runtime", "embedding"]
+    },
+    {
+      "capability_id": "runtime.rerank.score",
+      "read_only": true,
+      "recoverable": true,
+      "approval_required": false,
+      "external_side_effect": false,
+      "dynamic_code": false,
+      "user_interaction_required": false,
+      "supported_targets": ["text"],
+      "input_schema_refs": ["aios/runtime-rerank.request"],
+      "output_schema_refs": ["aios/runtime-rerank.response"],
+      "audit_tags": ["runtime", "rerank"]
+    }
+  ],
+  "execution_location": "local",
+  "sandbox_class": "runtime-local",
+  "required_permissions": [],
+  "resource_budget": {
+    "max_memory_mb": 4096,
+    "max_concurrency": 2,
+    "max_requests_per_minute": 120
+  },
+  "supported_targets": ["text"],
+  "input_schema_refs": [
+    "aios/runtime-infer.request",
+    "aios/runtime-embed.request",
+    "aios/runtime-rerank.request"
+  ],
+  "output_schema_refs": [
+    "aios/runtime-infer.response",
+    "aios/runtime-embed.response",
+    "aios/runtime-rerank.response"
+  ],
+  "timeout_policy": "bounded-30s",
+  "retry_policy": "no-retry",
+  "healthcheck": {
+    "kind": "local-socket",
+    "endpoint": "runtimed",
+    "interval_seconds": 10
+  },
+  "audit_tags": ["runtime", "local", "inference"],
+  "taint_behavior": "input-propagates",
+  "degradation_policy": "degrade-to-local-cpu"
+}

@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aios/compat-audit-query-result.schema.json",
+  "title": "AIOS Compat Audit Query Result Protocol",
+  "type": "object",
+  "required": [
+    "protocol_version",
+    "worker_contract",
+    "provider_id",
+    "status",
+    "operation",
+    "execution_location",
+    "request",
+    "query",
+    "store",
+    "audit",
+    "timestamps"
+  ],
+  "properties": {
+    "protocol_version": { "const": "1.0.0" },
+    "worker_contract": { "const": "compat-audit-query-v1" },
+    "provider_id": { "const": "compat.audit.query.local" },
+    "status": { "enum": ["ok", "error"] },
+    "operation": {
+      "enum": [
+        "compat.audit.query",
+        "compat.audit.saved_query.run",
+        "compat.audit.saved_query.save",
+        "compat.audit.saved_query.list",
+        "compat.audit.query.interactive",
+        null
+      ]
+    },
+    "execution_location": { "const": "local" },
+    "request": {
+      "type": "object",
+      "required": ["command", "query_id", "filters", "limit"],
+      "properties": {
+        "command": { "type": "string", "minLength": 1 },
+        "query_id": { "type": ["string", "null"] },
+        "filters": { "type": "object" },
+        "limit": { "type": ["integer", "null"] }
+      },
+      "additionalProperties": true
+    },
+    "query": {
+      "type": "object",
+      "required": ["source_log", "match_count", "report_path"],
+      "properties": {
+        "source_log": { "type": ["string", "null"] },
+        "match_count": { "type": ["integer", "null"] },
+        "report_path": { "type": ["string", "null"] }
+      },
+      "additionalProperties": true
+    },
+    "store": {
+      "type": "object",
+      "required": ["store_dir", "saved_queries_path", "history_path", "saved_query_count"],
+      "properties": {
+        "store_dir": { "type": "string" },
+        "saved_queries_path": { "type": "string" },
+        "history_path": { "type": "string" },
+        "saved_query_count": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": true
+    },
+    "audit": {
+      "type": "object",
+      "required": ["audit_log", "audit_tags", "taint_behavior"],
+      "properties": {
+        "audit_log": { "type": ["string", "null"] },
+        "audit_tags": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "taint_behavior": { "type": ["string", "null"] }
+      },
+      "additionalProperties": true
+    },
+    "timestamps": {
+      "type": "object",
+      "required": ["started_at", "finished_at"],
+      "properties": {
+        "started_at": { "type": "string", "minLength": 1 },
+        "finished_at": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": true
+    },
+    "error": {
+      "type": ["object", "null"],
+      "required": ["category", "error_code", "message", "retryable"],
+      "properties": {
+        "category": { "type": "string", "minLength": 1 },
+        "error_code": { "type": "string", "minLength": 1 },
+        "message": { "type": "string", "minLength": 1 },
+        "retryable": { "type": "boolean" }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

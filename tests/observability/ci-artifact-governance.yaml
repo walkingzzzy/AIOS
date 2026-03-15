@@ -1,0 +1,75 @@
+schema_version: "1.0.0"
+generated_at: "2026-03-14T00:00:00Z"
+jobs:
+  - job_id: "validate"
+    upload:
+      step_name: "Upload validate artifacts"
+      artifact_name: "aios-validate-artifacts"
+      uses: "actions/upload-artifact@v4"
+      if_condition: "always()"
+      if_no_files_found: "warn"
+      retention_days: 14
+      required_paths:
+        - "out/validation/observability-schema-validation-report.json"
+        - "out/validation/observability-schema-validation-report.md"
+        - "out/validation/validation-matrix-report.json"
+        - "out/validation/validation-matrix-report.md"
+        - "out/validation/high-risk-audit-coverage-report.json"
+        - "out/validation/high-risk-audit-coverage-report.md"
+        - "out/validation/gpu-backend-support-matrix-report.json"
+        - "out/validation/gpu-backend-support-matrix-report.md"
+        - "out/validation/tier1-machine-nominations-report.json"
+        - "out/validation/tier1-machine-nominations-report.md"
+        - "out/validation/tier1-hardware-boot-evidence-report.json"
+        - "out/validation/tier1-hardware-boot-evidence-report.md"
+        - "out/validation/tier1-hardware-support-matrix.md"
+        - "out/validation/tier1-hardware-known-limitations.md"
+        - "out/validation/tier1-hardware-validation-report.md"
+        - "out/validation/tier1-hardware-evidence-index.json"
+        - "out/validation/image-build-strategy-report.json"
+        - "out/validation/image-build-strategy-report.md"
+        - "out/validation/ci-artifact-governance-report.json"
+        - "out/validation/ci-artifact-governance-report.md"
+        - "out/validation/cross-service-correlation-report.json"
+        - "out/validation/cross-service-correlation-report.md"
+        - "out/validation/audit-evidence-report.json"
+        - "out/validation/audit-evidence-report.md"
+        - "out/validation/cross-service-health-report.json"
+        - "out/validation/cross-service-health-report.md"
+        - "out/validation/cross-service-health-events.jsonl"
+        - "out/validation/full-regression-report.json"
+        - "out/validation/full-regression-report.md"
+
+  - job_id: "system-validation"
+    required_downloads:
+      - step_name: "Download validate artifacts"
+        artifact_name: "aios-validate-artifacts"
+        uses: "actions/download-artifact@v4"
+        path: "."
+        must_precede_steps:
+          - "Cross-service health smoke"
+          - "Build governance evidence index"
+    upload:
+      step_name: "Upload validation artifacts"
+      artifact_name: "aios-system-validation-artifacts"
+      uses: "actions/upload-artifact@v4"
+      if_condition: "always()"
+      if_no_files_found: "warn"
+      retention_days: 21
+      required_paths:
+        - "out/validation"
+        - "out/boot-qemu-bringup.log"
+        - "out/boot-qemu-recovery.log"
+        - "out/boot-qemu-installer.log"
+        - "out/boot-qemu-installed-cross-reboot.log"
+
+  - job_id: "nightly-container-delivery"
+    upload:
+      step_name: "Upload container delivery artifacts"
+      artifact_name: "aios-nightly-container-delivery-artifacts"
+      uses: "actions/upload-artifact@v4"
+      if_condition: "always()"
+      if_no_files_found: "warn"
+      retention_days: 7
+      required_paths:
+        - "out/aios-system-delivery"

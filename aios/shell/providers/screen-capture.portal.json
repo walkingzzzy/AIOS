@@ -1,0 +1,42 @@
+{
+  "provider_id": "shell.screen-capture.portal",
+  "version": "0.1.0",
+  "kind": "device-provider",
+  "display_name": "Screen Capture Portal",
+  "owner": "aios-shell",
+  "capabilities": [
+    {
+      "capability_id": "device.capture.screen.read",
+      "read_only": true,
+      "recoverable": true,
+      "approval_required": true,
+      "external_side_effect": false,
+      "dynamic_code": false,
+      "user_interaction_required": true,
+      "supported_targets": ["screen", "window"],
+      "input_schema_refs": ["aios/portal-handle.schema.json"],
+      "output_schema_refs": ["aios/portal-handle.schema.json"],
+      "audit_tags": ["screen", "portal"]
+    }
+  ],
+  "execution_location": "sandbox",
+  "sandbox_class": "screen-capture",
+  "required_permissions": ["screen.user-selected"],
+  "resource_budget": {
+    "max_memory_mb": 1024,
+    "max_concurrency": 1
+  },
+  "supported_targets": ["screen", "window"],
+  "input_schema_refs": ["aios/portal-handle.schema.json"],
+  "output_schema_refs": ["aios/portal-handle.schema.json"],
+  "timeout_policy": "bounded-20s",
+  "retry_policy": "no-retry",
+  "healthcheck": {
+    "kind": "portal-broker",
+    "endpoint": "shell",
+    "interval_seconds": 20
+  },
+  "audit_tags": ["screen", "sandbox"],
+  "taint_behavior": "user-object-bound",
+  "degradation_policy": "deny-on-unavailable"
+}

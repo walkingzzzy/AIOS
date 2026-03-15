@@ -1,0 +1,897 @@
+{
+  "report_id": "audit-evidence-session-01",
+  "generated_at": "2026-03-14T13:10:00Z",
+  "workspace": "/workspace/aios",
+  "json_report": "/workspace/out/validation/audit-evidence-report.json",
+  "markdown_report": "/workspace/out/validation/audit-evidence-report.md",
+  "session": {
+    "session_id": "session-01",
+    "user_id": "user-01",
+    "status": "active",
+    "created_at": "2026-03-14T13:00:00Z",
+    "last_resumed_at": "2026-03-14T13:05:00Z",
+    "metadata": {
+      "initial_intent": "Delete a temporary file after approval"
+    }
+  },
+  "inputs": {
+    "session_db": "/workspace/state/sessiond/sessiond.sqlite3",
+    "policy_audit_log": "/workspace/state/policyd/audit.jsonl",
+    "audit_index": "/workspace/state/policyd/audit-index.json",
+    "runtime_events_log": "/workspace/state/runtimed/runtime-events.jsonl",
+    "remote_audit_log": "/workspace/state/runtimed/remote-audit.jsonl",
+    "observability_log": "/workspace/state/runtimed/observability.jsonl",
+    "domain_config": "/workspace/out/validation/audit-evidence-domain-config.json"
+  },
+  "audit_store": {
+    "active_segment_path": "/workspace/state/policyd/audit.jsonl",
+    "active_record_count": 4,
+    "archived_segment_count": 1,
+    "archived_segments": [
+      {
+        "path": "/workspace/state/policyd/audit-archive/audit-20260314-120000.jsonl",
+        "record_count": 8,
+        "first_timestamp": "2026-03-14T12:00:00Z",
+        "last_timestamp": "2026-03-14T12:45:00Z"
+      }
+    ]
+  },
+  "summary": {
+    "task_count": 2,
+    "audit_entry_count": 4,
+    "runtime_event_count": 3,
+    "remote_audit_count": 0,
+    "observability_record_count": 6,
+    "approval_ref_count": 3,
+    "approval_scope_count": 2,
+    "target_bound_approval_count": 1,
+    "constraint_bound_approval_count": 1,
+    "approval_scope_mismatch_count": 0,
+    "archived_segment_count": 1,
+    "domain_count": 7,
+    "covered_domains": [
+      "compat",
+      "control-plane",
+      "device",
+      "hardware",
+      "provider",
+      "shell",
+      "updated"
+    ],
+    "audit_decisions": [
+      "allowed",
+      "approval-approved",
+      "approval-pending",
+      "denied",
+      "token-issued",
+      "token-valid"
+    ],
+    "runtime_event_kinds": [
+      "runtime.infer.started",
+      "runtime.infer.completed"
+    ],
+    "observability_kinds": [
+      "task.state.updated",
+      "runtime.infer.completed"
+    ],
+    "artifact_paths": [
+      "/workspace/out/validation/audit-evidence-domain-config.json",
+      "/workspace/out/validation/system-delivery-validation-evidence-index.json",
+      "/workspace/out/validation/system-delivery-validation-report.json",
+      "/workspace/out/validation/tier1-hardware-boot-evidence-report.json",
+      "/workspace/out/validation/tier1-hardware-evidence-index.json",
+      "/workspace/state/compat/browser-audit.jsonl",
+      "/workspace/state/compat/office-audit.jsonl",
+      "/workspace/state/device/backend-state.json",
+      "/workspace/state/device/captures.json",
+      "/workspace/state/device/observability.jsonl",
+      "/workspace/state/policyd/audit-index.json",
+      "/workspace/state/policyd/audit.jsonl",
+      "/workspace/state/provider/runtime-provider-observability.jsonl",
+      "/workspace/state/runtimed/observability.jsonl",
+      "/workspace/state/runtimed/runtime-events.jsonl",
+      "/workspace/state/sessiond/sessiond.sqlite3",
+      "/workspace/state/shell/focus-state.json",
+      "/workspace/state/shell/panel-action-events.jsonl",
+      "/workspace/state/updated/boot-control.json",
+      "/workspace/state/updated/deployment-state.json",
+      "/workspace/state/updated/diagnostics/diag-001.json",
+      "/workspace/state/updated/health-probe.json",
+      "/workspace/state/updated/observability.jsonl",
+      "/workspace/state/updated/recovery-surface.json",
+      "/workspace/state/updated/recovery/recovery-001.json"
+    ]
+  },
+  "domain_evidence": {
+    "control-plane": {
+      "domain": "control-plane",
+      "source_count": 5,
+      "record_count": 14,
+      "task_count": 2,
+      "artifact_paths": [
+        "/workspace/out/validation/audit-evidence-domain-config.json",
+        "/workspace/state/policyd/audit-index.json",
+        "/workspace/state/policyd/audit.jsonl",
+        "/workspace/state/runtimed/observability.jsonl",
+        "/workspace/state/runtimed/runtime-events.jsonl",
+        "/workspace/state/sessiond/sessiond.sqlite3"
+      ],
+      "audit_decisions": [
+        "allowed",
+        "approval-approved",
+        "approval-pending",
+        "token-issued"
+      ],
+      "event_kinds": [
+        "runtime.infer.completed",
+        "runtime.infer.started",
+        "task.state.updated"
+      ],
+      "status_values": [],
+      "provider_ids": [],
+      "approval_refs": [
+        "apr-01"
+      ],
+      "capability_ids": [
+        "fs.delete",
+        "runtime.infer.submit"
+      ],
+      "action_ids": [],
+      "sources": [
+        {
+          "kind": "audit_log",
+          "format": "jsonl",
+          "path": "/workspace/state/policyd/audit.jsonl",
+          "present": true,
+          "record_count": 4
+        },
+        {
+          "kind": "runtime_events_log",
+          "format": "jsonl",
+          "path": "/workspace/state/runtimed/runtime-events.jsonl",
+          "present": true,
+          "record_count": 3
+        },
+        {
+          "kind": "remote_audit_log",
+          "format": "jsonl",
+          "path": "/workspace/state/runtimed/remote-audit.jsonl",
+          "present": true,
+          "record_count": 0
+        },
+        {
+          "kind": "observability_log",
+          "format": "jsonl",
+          "path": "/workspace/state/runtimed/observability.jsonl",
+          "present": true,
+          "record_count": 6
+        },
+        {
+          "kind": "audit_index",
+          "format": "json",
+          "path": "/workspace/state/policyd/audit-index.json",
+          "present": true,
+          "record_count": 1
+        }
+      ],
+      "notes": []
+    },
+    "shell": {
+      "domain": "shell",
+      "source_count": 3,
+      "record_count": 7,
+      "artifact_paths": [
+        "/workspace/state/policyd/audit.jsonl",
+        "/workspace/state/shell/focus-state.json",
+        "/workspace/state/shell/panel-action-events.jsonl"
+      ],
+      "audit_decisions": [
+        "token-issued",
+        "token-valid"
+      ],
+      "event_kinds": [
+        "panel-action.dispatch"
+      ],
+      "status_values": [
+        "dispatch-failed(approve)",
+        "dispatch-ok(refresh)"
+      ],
+      "provider_ids": [],
+      "approval_refs": [],
+      "capability_ids": [
+        "shell.notification.open",
+        "shell.panel-events.list",
+        "shell.window.focus"
+      ],
+      "action_ids": [
+        "approve",
+        "refresh"
+      ],
+      "sources": [
+        {
+          "kind": "audit_log",
+          "format": "jsonl",
+          "path": "/workspace/state/policyd/audit.jsonl",
+          "present": true,
+          "record_count": 5
+        },
+        {
+          "kind": "panel_actions",
+          "format": "jsonl",
+          "path": "/workspace/state/shell/panel-action-events.jsonl",
+          "present": true,
+          "record_count": 2
+        },
+        {
+          "kind": "focus_state",
+          "format": "json",
+          "path": "/workspace/state/shell/focus-state.json",
+          "present": true,
+          "record_count": 1
+        }
+      ],
+      "notes": []
+    },
+    "provider": {
+      "domain": "provider",
+      "source_count": 4,
+      "record_count": 18,
+      "artifact_paths": [
+        "/workspace/state/policyd/audit.jsonl",
+        "/workspace/state/provider/provider-health.json",
+        "/workspace/state/provider/runtime-provider-observability.jsonl",
+        "/workspace/state/provider/runtimed-observability.jsonl"
+      ],
+      "audit_decisions": [
+        "token-issued",
+        "token-valid"
+      ],
+      "event_kinds": [
+        "provider.registry.registered",
+        "provider.runtime.started",
+        "runtime.infer.completed",
+        "runtime.infer.started"
+      ],
+      "status_values": [
+        "available",
+        "ready"
+      ],
+      "provider_ids": [
+        "runtime.local.inference"
+      ],
+      "approval_refs": [],
+      "capability_ids": [
+        "runtime.embed.vectorize",
+        "runtime.infer.submit",
+        "runtime.rerank.score"
+      ],
+      "action_ids": [],
+      "sources": [
+        {
+          "kind": "audit_log",
+          "format": "jsonl",
+          "path": "/workspace/state/policyd/audit.jsonl",
+          "present": true,
+          "record_count": 8
+        },
+        {
+          "kind": "provider_observability",
+          "format": "jsonl",
+          "path": "/workspace/state/provider/runtime-provider-observability.jsonl",
+          "present": true,
+          "record_count": 6
+        },
+        {
+          "kind": "runtime_observability",
+          "format": "jsonl",
+          "path": "/workspace/state/provider/runtimed-observability.jsonl",
+          "present": true,
+          "record_count": 4
+        },
+        {
+          "kind": "provider_health",
+          "format": "json",
+          "path": "/workspace/state/provider/provider-health.json",
+          "present": true,
+          "record_count": 1
+        }
+      ],
+      "notes": [
+        "synthetic provider baseline retained for operator-facing evidence export"
+      ]
+    },
+    "compat": {
+      "domain": "compat",
+      "source_count": 5,
+      "record_count": 14,
+      "artifact_paths": [
+        "/workspace/state/compat/compat-browser-automation-local.jsonl",
+        "/workspace/state/compat/compat-code-sandbox-local.jsonl",
+        "/workspace/state/compat/compat-mcp-bridge-local.jsonl",
+        "/workspace/state/compat/compat-office-document-local.jsonl",
+        "/workspace/state/compat/compat-observability.jsonl"
+      ],
+      "audit_decisions": [
+        "allowed",
+        "denied"
+      ],
+      "event_kinds": [],
+      "status_values": [
+        "error",
+        "not-found",
+        "ok",
+        "timed-out"
+      ],
+      "provider_ids": [
+        "compat.browser.automation.local",
+        "compat.code.sandbox.local",
+        "compat.mcp.bridge.local",
+        "compat.office.document.local"
+      ],
+      "approval_refs": [],
+      "capability_ids": [
+        "compat.code.execute",
+        "compat.browser.navigate",
+        "compat.document.open",
+        "compat.office.export_pdf",
+        "compat.mcp.call",
+        "compat.a2a.forward"
+      ],
+      "action_ids": [],
+      "sources": [
+        {
+          "kind": "browser_audit",
+          "format": "jsonl",
+          "path": "/workspace/state/compat/compat-browser-automation-local.jsonl",
+          "present": true,
+          "record_count": 3
+        },
+        {
+          "kind": "office_audit",
+          "format": "jsonl",
+          "path": "/workspace/state/compat/compat-office-document-local.jsonl",
+          "present": true,
+          "record_count": 2
+        },
+        {
+          "kind": "mcp_bridge_audit",
+          "format": "jsonl",
+          "path": "/workspace/state/compat/compat-mcp-bridge-local.jsonl",
+          "present": true,
+          "record_count": 2
+        },
+        {
+          "kind": "code_sandbox_audit",
+          "format": "jsonl",
+          "path": "/workspace/state/compat/compat-code-sandbox-local.jsonl",
+          "present": true,
+          "record_count": 3
+        },
+        {
+          "kind": "shared_compat_observability",
+          "format": "jsonl",
+          "path": "/workspace/state/compat/compat-observability.jsonl",
+          "present": true,
+          "record_count": 4
+        }
+      ],
+      "notes": [
+        "shared compat observability sink retained for operator-facing audit export"
+      ]
+    },
+    "device": {
+      "domain": "device",
+      "source_count": 4,
+      "record_count": 9,
+      "artifact_paths": [
+        "/workspace/state/device/backend-state.json",
+        "/workspace/state/device/captures.json",
+        "/workspace/state/device/observability.jsonl",
+        "/workspace/state/policyd/audit.jsonl"
+      ],
+      "audit_decisions": [
+        "approval-approved",
+        "approval-pending"
+      ],
+      "event_kinds": [
+        "device.capture.rejected",
+        "device.capture.requested",
+        "device.state.reported"
+      ],
+      "status_values": [
+        "approved",
+        "ready"
+      ],
+      "provider_ids": [
+        "deviced.native.audio"
+      ],
+      "approval_refs": [
+        "device-apr-01"
+      ],
+      "capability_ids": [
+        "device.capture.audio"
+      ],
+      "action_ids": [],
+      "sources": [
+        {
+          "kind": "audit_log",
+          "format": "jsonl",
+          "path": "/workspace/state/policyd/audit.jsonl",
+          "present": true,
+          "record_count": 2
+        },
+        {
+          "kind": "observability_log",
+          "format": "jsonl",
+          "path": "/workspace/state/device/observability.jsonl",
+          "present": true,
+          "record_count": 5
+        },
+        {
+          "kind": "capture_state",
+          "format": "json",
+          "path": "/workspace/state/device/captures.json",
+          "present": true,
+          "record_count": 1
+        },
+        {
+          "kind": "backend_state",
+          "format": "json",
+          "path": "/workspace/state/device/backend-state.json",
+          "present": true,
+          "record_count": 1
+        }
+      ],
+      "notes": []
+    },
+    "updated": {
+      "domain": "updated",
+      "source_count": 8,
+      "record_count": 14,
+      "artifact_paths": [
+        "/workspace/out/validation/system-delivery-validation-evidence-index.json",
+        "/workspace/out/validation/system-delivery-validation-report.json",
+        "/workspace/state/updated/boot-control.json",
+        "/workspace/state/updated/deployment-state.json",
+        "/workspace/state/updated/diagnostics/diag-001.json",
+        "/workspace/state/updated/health-probe.json",
+        "/workspace/state/updated/observability.jsonl",
+        "/workspace/state/updated/recovery-surface.json",
+        "/workspace/state/updated/recovery/recovery-001.json"
+      ],
+      "audit_decisions": [],
+      "event_kinds": [
+        "recovery.bundle.exported",
+        "recovery.surface.reported",
+        "update.apply.completed",
+        "update.check.completed",
+        "update.health.reported",
+        "update.rollback.completed"
+      ],
+      "status_values": [
+        "accepted",
+        "active",
+        "degraded",
+        "healthy",
+        "idle",
+        "passed",
+        "ready",
+        "ready-to-stage",
+        "standby",
+        "succeeded",
+        "up-to-date"
+      ],
+      "provider_ids": [],
+      "approval_refs": [],
+      "capability_ids": [],
+      "action_ids": [],
+      "sources": [
+        {
+          "kind": "observability_log",
+          "format": "jsonl",
+          "path": "/workspace/state/updated/observability.jsonl",
+          "present": true,
+          "record_count": 7
+        },
+        {
+          "kind": "health_probe",
+          "format": "json",
+          "path": "/workspace/state/updated/health-probe.json",
+          "present": true,
+          "record_count": 1
+        },
+        {
+          "kind": "deployment_state",
+          "format": "json",
+          "path": "/workspace/state/updated/deployment-state.json",
+          "present": true,
+          "record_count": 1
+        },
+        {
+          "kind": "recovery_surface",
+          "format": "json",
+          "path": "/workspace/state/updated/recovery-surface.json",
+          "present": true,
+          "record_count": 1
+        },
+        {
+          "kind": "boot_state",
+          "format": "json",
+          "path": "/workspace/state/updated/boot-control.json",
+          "present": true,
+          "record_count": 1
+        },
+        {
+          "kind": "system_delivery_validation_index",
+          "format": "json",
+          "path": "/workspace/out/validation/system-delivery-validation-evidence-index.json",
+          "present": true,
+          "record_count": 1
+        },
+        {
+          "kind": "system_delivery_validation_report",
+          "format": "json",
+          "path": "/workspace/out/validation/system-delivery-validation-report.json",
+          "present": true,
+          "record_count": 1
+        },
+        {
+          "kind": "recovery_record",
+          "format": "json",
+          "path": "/workspace/state/updated/recovery/recovery-001.json",
+          "present": true,
+          "record_count": 1
+        },
+        {
+          "kind": "diagnostic_bundle",
+          "format": "json",
+          "path": "/workspace/state/updated/diagnostics/diag-001.json",
+          "present": true,
+          "record_count": 1
+        }
+      ],
+      "notes": [
+        "updated/recovery retained state and system-delivery validation artifacts exported for operator-facing evidence"
+      ]
+    },
+    "hardware": {
+      "domain": "hardware",
+      "source_count": 2,
+      "record_count": 2,
+      "artifact_paths": [
+        "/workspace/out/validation/tier1-hardware-boot-evidence-report.json",
+        "/workspace/out/validation/tier1-hardware-evidence-index.json"
+      ],
+      "audit_decisions": [],
+      "event_kinds": [],
+      "status_values": [
+        "passed",
+        "ready"
+      ],
+      "provider_ids": [],
+      "approval_refs": [],
+      "capability_ids": [],
+      "action_ids": [],
+      "sources": [
+        {
+          "kind": "hardware_evidence_index",
+          "format": "json",
+          "path": "/workspace/out/validation/tier1-hardware-evidence-index.json",
+          "present": true,
+          "record_count": 1
+        },
+        {
+          "kind": "hardware_validation_report",
+          "format": "json",
+          "path": "/workspace/out/validation/tier1-hardware-boot-evidence-report.json",
+          "present": true,
+          "record_count": 1
+        }
+      ],
+      "notes": [
+        "default Tier 1 hardware evidence baseline retained for operator-facing export"
+      ]
+    }
+  },
+  "compat_audit_overview": {
+    "record_count": 10,
+    "provider_count": 4,
+    "provider_ids": [
+      "compat.browser.automation.local",
+      "compat.code.sandbox.local",
+      "compat.mcp.bridge.local",
+      "compat.office.document.local"
+    ],
+    "capability_ids": [
+      "compat.a2a.forward",
+      "compat.browser.navigate",
+      "compat.code.execute",
+      "compat.document.open",
+      "compat.mcp.call",
+      "compat.office.export_pdf"
+    ],
+    "route_states": [
+      "compat-browser-centralized-policy",
+      "compat-mcp-bridge-centralized-policy",
+      "compat-office-centralized-policy",
+      "compat-sandbox-centralized-policy"
+    ],
+    "policy_modes": [
+      "policyd-verified"
+    ],
+    "shared_audit_log_paths": [
+      "/workspace/state/compat/compat-observability.jsonl"
+    ],
+    "centralized_policy_record_count": 10,
+    "standalone_policy_record_count": 0,
+    "token_verified_record_count": 10,
+    "approval_bound_record_count": 2,
+    "denied_record_count": 1,
+    "degraded_record_count": 0,
+    "timeout_record_count": 1,
+    "providers": [
+      {
+        "provider_id": "compat.browser.automation.local",
+        "record_count": 3,
+        "capability_ids": [
+          "compat.browser.navigate"
+        ],
+        "route_states": [
+          "compat-browser-centralized-policy"
+        ],
+        "status_values": [
+          "ok"
+        ],
+        "policy_modes": [
+          "policyd-verified"
+        ],
+        "token_verified_record_count": 3,
+        "approval_bound_record_count": 0,
+        "denied_record_count": 0,
+        "degraded_record_count": 0,
+        "timeout_record_count": 0,
+        "shared_audit_log_paths": [
+          "/workspace/state/compat/compat-observability.jsonl"
+        ],
+        "artifact_paths": [
+          "/workspace/state/compat/compat-browser-automation-local.jsonl"
+        ]
+      },
+      {
+        "provider_id": "compat.office.document.local",
+        "record_count": 2,
+        "capability_ids": [
+          "compat.document.open",
+          "compat.office.export_pdf"
+        ],
+        "route_states": [
+          "compat-office-centralized-policy"
+        ],
+        "status_values": [
+          "ok"
+        ],
+        "policy_modes": [
+          "policyd-verified"
+        ],
+        "token_verified_record_count": 2,
+        "approval_bound_record_count": 0,
+        "denied_record_count": 0,
+        "degraded_record_count": 0,
+        "timeout_record_count": 0,
+        "shared_audit_log_paths": [
+          "/workspace/state/compat/compat-observability.jsonl"
+        ],
+        "artifact_paths": [
+          "/workspace/state/compat/compat-office-document-local.jsonl"
+        ]
+      },
+      {
+        "provider_id": "compat.mcp.bridge.local",
+        "record_count": 2,
+        "capability_ids": [
+          "compat.a2a.forward",
+          "compat.mcp.call"
+        ],
+        "route_states": [
+          "compat-mcp-bridge-centralized-policy"
+        ],
+        "status_values": [
+          "error",
+          "ok"
+        ],
+        "policy_modes": [
+          "policyd-verified"
+        ],
+        "token_verified_record_count": 2,
+        "approval_bound_record_count": 1,
+        "denied_record_count": 1,
+        "degraded_record_count": 0,
+        "timeout_record_count": 0,
+        "shared_audit_log_paths": [
+          "/workspace/state/compat/compat-observability.jsonl"
+        ],
+        "artifact_paths": [
+          "/workspace/state/compat/compat-mcp-bridge-local.jsonl"
+        ]
+      },
+      {
+        "provider_id": "compat.code.sandbox.local",
+        "record_count": 3,
+        "capability_ids": [
+          "compat.code.execute"
+        ],
+        "route_states": [
+          "compat-sandbox-centralized-policy"
+        ],
+        "status_values": [
+          "error",
+          "ok"
+        ],
+        "policy_modes": [
+          "policyd-verified"
+        ],
+        "token_verified_record_count": 3,
+        "approval_bound_record_count": 1,
+        "denied_record_count": 0,
+        "degraded_record_count": 0,
+        "timeout_record_count": 1,
+        "shared_audit_log_paths": [
+          "/workspace/state/compat/compat-observability.jsonl"
+        ],
+        "artifact_paths": [
+          "/workspace/state/compat/compat-code-sandbox-local.jsonl"
+        ]
+      }
+    ]
+  },
+  "approval_scopes": [
+    {
+      "approval_ref": "apr-01",
+      "session_id": "session-01",
+      "task_id": "task-approved-delete",
+      "capability_id": "fs.delete",
+      "approval_lane": "high-risk-side-effect-review",
+      "execution_location": "local",
+      "status": "approved",
+      "target_hash": "sha256:team-b-danger",
+      "constraints": {
+        "allow_directory_delete": true,
+        "max_affected_paths": 8
+      },
+      "decisions": [
+        "approval-approved",
+        "approval-pending",
+        "token-issued"
+      ],
+      "mismatch_count": 0,
+      "scope_mismatches": []
+    },
+    {
+      "approval_ref": "device-apr-01",
+      "session_id": "session-01",
+      "task_id": null,
+      "capability_id": "device.capture.audio",
+      "approval_lane": "device-capture-review",
+      "execution_location": "local",
+      "status": "approved",
+      "target_hash": null,
+      "constraints": {
+        "continuous": true
+      },
+      "decisions": [
+        "approval-approved",
+        "approval-pending"
+      ],
+      "mismatch_count": 0,
+      "scope_mismatches": []
+    }
+  ],
+  "approval_scope_mismatches": [],
+  "tasks": [
+    {
+      "task_id": "task-allowed",
+      "state": "approved",
+      "title": "Summarize the current plan locally",
+      "audit_decisions": [
+        "allowed",
+        "token-issued"
+      ],
+      "runtime_event_kinds": [
+        "runtime.infer.started",
+        "runtime.infer.completed"
+      ],
+      "remote_audit_statuses": [],
+      "observability_kinds": [
+        "task.state.updated",
+        "runtime.infer.completed"
+      ],
+      "approval_refs": [],
+      "approval_scopes": [],
+      "provider_ids": [],
+      "artifact_paths": [
+        "/workspace/state/sessiond/sessiond.sqlite3",
+        "/workspace/state/policyd/audit.jsonl",
+        "/workspace/state/runtimed/runtime-events.jsonl",
+        "/workspace/state/runtimed/observability.jsonl"
+      ]
+    },
+    {
+      "task_id": "task-approved-delete",
+      "state": "approved",
+      "title": "Delete /tmp/team-b-danger.txt",
+      "audit_decisions": [
+        "approval-pending",
+        "approval-approved",
+        "token-issued"
+      ],
+      "runtime_event_kinds": [],
+      "remote_audit_statuses": [],
+      "observability_kinds": [
+        "task.created"
+      ],
+      "approval_refs": [
+        "apr-01"
+      ],
+      "approval_scopes": [
+        {
+          "approval_ref": "apr-01",
+          "session_id": "session-01",
+          "task_id": "task-approved-delete",
+          "capability_id": "fs.delete",
+          "approval_lane": "high-risk-side-effect-review",
+          "execution_location": "local",
+          "status": "approved",
+          "target_hash": "sha256:team-b-danger",
+          "constraints": {
+            "allow_directory_delete": true,
+            "max_affected_paths": 8
+          },
+          "decisions": [
+            "approval-approved",
+            "approval-pending",
+            "token-issued"
+          ],
+          "mismatch_count": 0,
+          "scope_mismatches": []
+        }
+      ],
+      "provider_ids": [],
+      "artifact_paths": [
+        "/workspace/state/sessiond/sessiond.sqlite3",
+        "/workspace/state/policyd/audit.jsonl",
+        "/workspace/state/runtimed/observability.jsonl"
+      ]
+    }
+  ],
+  "audit_entries": [
+    {
+      "audit_id": "audit-01",
+      "session_id": "session-01",
+      "task_id": "task-approved-delete",
+      "decision": "approval-pending",
+      "approval_id": "apr-01",
+      "artifact_path": "/workspace/state/policyd/audit.jsonl"
+    }
+  ],
+  "runtime_events": [
+    {
+      "event_id": "runtime-01",
+      "session_id": "session-01",
+      "task_id": "task-allowed",
+      "kind": "runtime.infer.completed"
+    }
+  ],
+  "remote_audits": [],
+  "observability_records": [
+    {
+      "event_id": "obs-01",
+      "session_id": "session-01",
+      "task_id": "task-approved-delete",
+      "kind": "task.created",
+      "artifact_path": "/workspace/state/sessiond/sessiond.sqlite3"
+    }
+  ],
+  "notes": [
+    "control-plane, shell, provider, compat, device, updated, and hardware evidence export sample"
+  ]
+}

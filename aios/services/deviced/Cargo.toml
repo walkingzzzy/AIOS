@@ -1,0 +1,22 @@
+[package]
+name = "aios-deviced"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "deviced"
+path = "src/main.rs"
+
+[dependencies]
+aios-contracts = { path = "../../crates/aios-contracts" }
+aios-core = { path = "../../crates/aios-core" }
+aios-rpc = { path = "../../crates/aios-rpc" }
+anyhow.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true

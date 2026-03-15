@@ -1,0 +1,30 @@
+service_id: aios-system-files-provider
+plane: provider
+role: filesystem-provider
+implementation_status: in_progress
+maturity: partial_impl
+current_phase: phase3
+primary_language: rust
+async_runtime: tokio
+transport:
+  primary: uds-jsonrpc
+storage:
+  primary: none
+inputs:
+  - portal_handle
+  - execution_token
+outputs:
+  - file_preview
+  - directory_listing
+  - deletion_result
+dependencies:
+  requires:
+    - aios-sessiond
+    - aios-policyd
+blockers:
+  - chooser-export-flow-not-integrated
+  - provider-integration-evidence-not-broad-enough
+next_milestones:
+  - freeze-provider-lifecycle-contract
+  - publish-provider-onboarding-guide
+  - tighten-delete-chooser-integration

@@ -1,0 +1,28 @@
+service_id: aios-system-intent-provider
+plane: provider
+role: system-intent-provider
+implementation_status: in_progress
+maturity: partial_impl
+current_phase: phase3
+primary_language: rust
+async_runtime: tokio
+transport:
+  primary: uds-jsonrpc
+storage:
+  primary: none
+inputs:
+  - execution_token
+  - session_task_plan
+outputs:
+  - structured_intent_actions
+dependencies:
+  requires:
+    - aios-agentd
+    - aios-sessiond
+    - aios-policyd
+blockers:
+  - planner-heuristics-are-still-minimal
+  - no-direct-agent-execution-bridge-yet
+next_milestones:
+  - align-provider-actions-with-agentd-topology
+  - extend-intent-action-taxonomy

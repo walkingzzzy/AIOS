@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aios/shell-notification-open.schema.json",
+  "title": "AIOS Shell Notification Open",
+  "type": "object",
+  "properties": {
+    "execution_token": { "type": "object" },
+    "include_model": { "type": "boolean" },
+    "source": { "type": "string" }
+  },
+  "additionalProperties": true
+}

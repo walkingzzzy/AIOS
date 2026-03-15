@@ -8,3 +8,9 @@ out/
 *.qcow2
 *.raw
 *.img
+__pycache__/
+*.py[cod]
+.pytest_cache/
+target/
+aios/image/mkosi.extra/usr/libexec/aios/*
+!aios/image/mkosi.extra/usr/libexec/aios/*.sh

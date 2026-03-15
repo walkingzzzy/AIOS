@@ -1,0 +1,42 @@
+{
+  "provider_id": "system.intent.local",
+  "version": "0.1.0",
+  "kind": "system-provider",
+  "display_name": "Local Intent Executor",
+  "owner": "aios-control-plane",
+  "capabilities": [
+    {
+      "capability_id": "system.intent.execute",
+      "read_only": true,
+      "recoverable": true,
+      "approval_required": false,
+      "external_side_effect": false,
+      "dynamic_code": false,
+      "user_interaction_required": false,
+      "supported_targets": ["intent"],
+      "input_schema_refs": ["aios/intent.request"],
+      "output_schema_refs": ["aios/intent.response"],
+      "audit_tags": ["control-plane", "intent"]
+    }
+  ],
+  "execution_location": "local",
+  "sandbox_class": "system-control",
+  "required_permissions": [],
+  "resource_budget": {
+    "max_memory_mb": 256,
+    "max_concurrency": 8
+  },
+  "supported_targets": ["intent"],
+  "input_schema_refs": ["aios/intent.request"],
+  "output_schema_refs": ["aios/intent.response"],
+  "timeout_policy": "bounded-5s",
+  "retry_policy": "retry-once",
+  "healthcheck": {
+    "kind": "process",
+    "endpoint": "agentd",
+    "interval_seconds": 15
+  },
+  "audit_tags": ["control-plane", "local"],
+  "taint_behavior": "input-propagates",
+  "degradation_policy": "fallback-to-manual-plan"
+}

@@ -1,0 +1,13 @@
+component_id: device-backend-status
+status: in_progress
+kind: shell-panel
+owner: aios-shell
+consumes:
+  - aios-deviced.backend-state.json
+  - device.state.get
+capabilities:
+  - show_backend_readiness
+  - show_modality_availability
+entrypoint: client.py
+prototype_entrypoint: prototype.py
+panel_entrypoint: panel.py

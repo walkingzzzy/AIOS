@@ -1,0 +1,18 @@
+id: generic-x86_64-uefi
+platform_tier: tier1
+vendor_id: generic
+model: reference-x86_64-uefi-target
+arch: x86_64
+boot: uefi
+gpu: optional
+npu: optional
+wifi: optional
+bluetooth: optional
+audio: optional
+camera: optional
+updated_platform_profile: /usr/share/aios/updated/platforms/generic-x86_64-uefi/profile.yaml
+bringup_status: reference-profile-only
+hardware_evidence_required: true
+notes:
+  - Generic x86_64 UEFI is the repo-level reference bring-up target, not a vendor-frozen release machine.
+  - Real hardware install and rollback evidence is still pending.

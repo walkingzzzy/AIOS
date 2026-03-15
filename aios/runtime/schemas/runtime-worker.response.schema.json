@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aios/runtime-worker.response.schema.json",
+  "title": "AIOS Runtime Worker Response",
+  "type": "object",
+  "required": [
+    "backend_id",
+    "route_state",
+    "content",
+    "rejected",
+    "degraded"
+  ],
+  "properties": {
+    "worker_contract": {
+      "type": "string",
+      "const": "runtime-worker-v1"
+    },
+    "backend_id": {
+      "type": "string",
+      "enum": ["local-gpu", "local-npu", "local-cpu", "attested-remote"]
+    },
+    "route_state": { "type": "string" },
+    "content": { "type": "string" },
+    "rejected": { "type": "boolean" },
+    "degraded": { "type": "boolean" },
+    "reason": {
+      "type": ["string", "null"]
+    },
+    "estimated_latency_ms": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    }
+  },
+  "additionalProperties": true
+}

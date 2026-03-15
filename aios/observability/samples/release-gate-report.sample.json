@@ -1,0 +1,37 @@
+{
+  "generated_at": "2026-03-13T12:27:00Z",
+  "workspace": "/Users/mac/Desktop/AIOS",
+  "overall_status": "passed",
+  "gate_status": "passed",
+  "json_report": "/Users/mac/Desktop/AIOS/out/validation/release-gate-report.json",
+  "markdown_report": "/Users/mac/Desktop/AIOS/out/validation/release-gate-report.md",
+  "release_checklist": "/Users/mac/Desktop/AIOS/docs/RELEASE_CHECKLIST.md",
+  "validation_report": "/Users/mac/Desktop/AIOS/out/validation/system-delivery-validation-report.json",
+  "evidence_index": "/Users/mac/Desktop/AIOS/out/validation/governance-evidence-index.json",
+  "health_report": "/Users/mac/Desktop/AIOS/out/validation/cross-service-health-report.json",
+  "hardware_evidence_index": "/Users/mac/Desktop/AIOS/out/validation/tier1-hardware-evidence-index.json",
+  "checks": [
+    {
+      "check_id": "validation-report-schema",
+      "status": "passed",
+      "blocking": true,
+      "detail": "validation report matches schema"
+    },
+    {
+      "check_id": "cross-service-health-export",
+      "status": "passed",
+      "blocking": true,
+      "detail": "health report overall_status=passed"
+    },
+    {
+      "check_id": "hardware-evidence-index",
+      "status": "passed",
+      "blocking": true,
+      "detail": "validation_status=passed; record_count=2; baseline_kind=synthetic-tier1-release-gate"
+    }
+  ],
+  "blocking_checks": [],
+  "warnings": [
+    "hardware evidence gate is satisfied by the synthetic Tier 1 baseline; attach real-machine sign-off separately"
+  ]
+}

@@ -1,0 +1,51 @@
+{
+  "schema_version": "2026-03-13",
+  "bundle_id": "diag-1741867200000",
+  "created_at": "2026-03-13T12:10:00Z",
+  "generated_at": "2026-03-13T12:10:00Z",
+  "service_id": "aios-updated",
+  "update_id": "update-01",
+  "boot_id": "boot-01",
+  "image_id": "image-qemu-x86_64-2026-03-13",
+  "artifact_path": "state/diagnostics/diag-1741867200000.json",
+  "reason": "manual-export",
+  "deployment": {
+    "service_id": "aios-updated",
+    "update_stack": "systemd-sysupdate",
+    "current_channel": "stable",
+    "current_version": "0.1.0",
+    "next_version": "0.1.1",
+    "status": "staged-update",
+    "rollback_ready": true,
+    "last_check_at": "2026-03-13T12:08:00Z",
+    "notes": [
+      "boot_current_slot=a"
+    ]
+  },
+  "probe": {
+    "overall_status": "healthy",
+    "checked_at": "2026-03-13T12:09:00Z",
+    "summary": "probe ok",
+    "notes": [
+      "command=health_probe"
+    ]
+  },
+  "boot_state": {
+    "current_slot": "a",
+    "last_good_slot": "a",
+    "staged_slot": "b",
+    "boot_success": true,
+    "notes": [
+      "pending reboot"
+    ]
+  },
+  "recovery_points": [
+    "recovery-001.json"
+  ],
+  "diagnostic_bundles": [
+    "diag-1741867200000.json"
+  ],
+  "notes": [
+    "diagnostic bundle export sample"
+  ]
+}

@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aios/validation-report.schema.json",
+  "title": "AIOS Validation Report",
+  "type": "object",
+  "required": ["generated_at", "workspace", "overall_status", "json_report", "markdown_report", "checks"],
+  "properties": {
+    "generated_at": { "type": "string", "format": "date-time" },
+    "workspace": { "type": "string" },
+    "overall_status": {
+      "type": "string",
+      "enum": ["passed", "failed"]
+    },
+    "json_report": { "type": "string" },
+    "markdown_report": { "type": "string" },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["check_id", "summary", "command", "status", "returncode", "duration_seconds", "stdout", "stderr", "evidence_paths"],
+        "properties": {
+          "check_id": { "type": "string" },
+          "summary": { "type": "string" },
+          "command": { "type": "string" },
+          "status": {
+            "type": "string",
+            "enum": ["passed", "failed"]
+          },
+          "returncode": { "type": "integer" },
+          "duration_seconds": { "type": "number", "minimum": 0 },
+          "stdout": { "type": "string" },
+          "stderr": { "type": "string" },
+          "parsed_output": {
+            "type": ["object", "array", "string", "number", "boolean", "null"]
+          },
+          "evidence_paths": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}

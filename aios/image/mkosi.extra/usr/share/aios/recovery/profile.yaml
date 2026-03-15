@@ -1,0 +1,10 @@
+recovery_id: aios-recovery-minimal
+default_target: aios-recovery.target
+recovery_surface_path: /var/lib/aios/updated/recovery-surface.json
+diagnostics_dir: /var/lib/aios/updated/diagnostics
+boot_control_path: /var/lib/aios/updated/boot-control.json
+allowed_actions:
+  - inspect-recovery-surface
+  - export-diagnostics
+  - rollback-latest
+  - reboot-system

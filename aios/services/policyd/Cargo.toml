@@ -1,0 +1,24 @@
+[package]
+name = "aios-policyd"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "policyd"
+path = "src/main.rs"
+
+[dependencies]
+aios-contracts = { path = "../../crates/aios-contracts" }
+aios-core = { path = "../../crates/aios-core" }
+aios-rpc = { path = "../../crates/aios-rpc" }
+anyhow.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true

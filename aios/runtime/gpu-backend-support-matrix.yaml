@@ -1,0 +1,88 @@
+schema_version: "1.0.0"
+updated_at: "2026-03-14"
+task_id: "P5-GPU-001"
+summary:
+  default_backend_policy: "global-default-local-cpu"
+  conditional_preferred_backend: "local-gpu"
+  release_grade_gpu_support_established: false
+  rationale:
+    - "local-cpu remains the only platform-agnostic runtime baseline."
+    - "local-gpu is a conditional capability that must be declared by hardware profile."
+    - "Jetson currently has the strongest repo-level GPU route because it ships a dedicated runtime profile and managed worker bridge."
+    - "No platform has release-grade vendor GPU evidence yet, so CPU fallback must remain enabled."
+backends:
+  - backend_id: "local-cpu"
+    support_tier: "baseline"
+    default_state: "preferred-global"
+    activation_requirements:
+      - "default runtime profile present"
+    validation:
+      - "scripts/test-runtimed-backend-smoke.py"
+      - "scripts/test-runtimed-jetson-platform-worker-failure-smoke.py"
+  - backend_id: "local-gpu"
+    support_tier: "conditional"
+    default_state: "declared-not-preferred-globally"
+    activation_requirements:
+      - "configured wrapper or managed worker command"
+      - "supported gpu device or explicit hardware-profile bridge"
+      - "cpu_fallback=true"
+    validation:
+      - "scripts/test-runtimed-backend-smoke.py"
+      - "scripts/test-runtimed-hardware-profile-managed-worker-smoke.py"
+      - "scripts/test-runtimed-jetson-platform-worker-smoke.py"
+      - "scripts/test-runtimed-jetson-platform-worker-failure-smoke.py"
+      - "scripts/test-runtime-local-inference-provider-smoke.py"
+platforms:
+  - hardware_profile_id: "qemu-x86_64"
+    runtime_profile: "aios/runtime/profiles/default-runtime-profile.yaml"
+    preferred_backend: "local-cpu"
+    allowed_backends:
+      - "local-cpu"
+      - "local-gpu"
+      - "attested-remote"
+    support_state: "repo-qemu-validated"
+    release_grade_supported: false
+    evidence:
+      - "scripts/test-runtimed-backend-smoke.py"
+    notes:
+      - "QEMU path proves runtime wrapper and fallback semantics, not physical GPU readiness."
+  - hardware_profile_id: "generic-x86_64-uefi"
+    runtime_profile: "aios/runtime/profiles/default-runtime-profile.yaml"
+    preferred_backend: "local-cpu"
+    allowed_backends:
+      - "local-cpu"
+      - "local-gpu"
+      - "attested-remote"
+    support_state: "platform-media-exportable"
+    release_grade_supported: false
+    evidence:
+      - "scripts/test-runtimed-backend-smoke.py"
+      - "scripts/test-image-delivery-smoke.py"
+    notes:
+      - "Repo currently ships no platform-specific vendor GPU runtime asset for generic x86_64 UEFI."
+  - hardware_profile_id: "nvidia-jetson-orin-agx"
+    runtime_profile: "aios/runtime/platforms/nvidia-jetson-orin-agx/default-runtime-profile.yaml"
+    preferred_backend: "local-gpu"
+    allowed_backends:
+      - "local-cpu"
+      - "local-gpu"
+      - "local-npu"
+      - "attested-remote"
+    support_state: "bringup-kit-validated"
+    release_grade_supported: false
+    managed_worker_bridge: "aios/runtime/platforms/nvidia-jetson-orin-agx/bin/launch-managed-worker.sh"
+    fallback_backend: "local-cpu"
+    evidence:
+      - "scripts/test-runtimed-hardware-profile-managed-worker-smoke.py"
+      - "scripts/test-runtimed-jetson-platform-worker-smoke.py"
+      - "scripts/test-runtimed-jetson-platform-worker-failure-smoke.py"
+      - "scripts/test-image-delivery-smoke.py"
+      - "scripts/test-platform-media-smoke.py"
+    notes:
+      - "Jetson runtime profile prefers local-gpu and routes local-gpu/local-npu through a managed worker bridge."
+      - "When no vendor bridge command is configured, runtimed must report launch-failed and degrade to local-cpu."
+evidence_docs:
+  - "docs/system-development/15-runtime-profile-与-route-profile-规范.md"
+  - "docs/system-development/30-支持矩阵与已知限制.md"
+  - "docs/system-development/32-版本兼容矩阵.md"
+  - "docs/system-development/38-GPU-backend-首选支持矩阵评估.md"

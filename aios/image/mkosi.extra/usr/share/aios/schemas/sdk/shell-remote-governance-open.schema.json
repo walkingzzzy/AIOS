@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "aios/shell-remote-governance-open.schema.json",
+  "title": "Shell Remote Governance Open",
+  "type": "object",
+  "properties": {
+    "execution_token": { "type": "object" },
+    "include_model": { "type": "boolean" },
+    "issue_only": { "type": "boolean" },
+    "limit": { "type": "integer", "minimum": 1, "maximum": 32 },
+    "source": { "type": "string" },
+    "query_source": { "type": "string" },
+    "severity": { "type": "string" },
+    "fleet_id": { "type": "string" },
+    "governance_group": { "type": "string" },
+    "status": { "type": "string" },
+    "provider_ref": { "type": "string" },
+    "provider_id": { "type": "string" },
+    "attestation_mode": { "type": "string" },
+    "control_plane_status": { "type": "string" },
+    "approval_ref": { "type": "string" },
+    "text": { "type": "string" },
+    "report_path": { "type": "string" }
+  },
+  "additionalProperties": true
+}

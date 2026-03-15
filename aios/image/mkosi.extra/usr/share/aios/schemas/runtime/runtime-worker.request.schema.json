@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aios/runtime-worker.request.schema.json",
+  "title": "AIOS Runtime Worker Request",
+  "type": "object",
+  "required": [
+    "backend_id",
+    "session_id",
+    "task_id",
+    "prompt",
+    "estimated_latency_ms",
+    "timeout_ms"
+  ],
+  "properties": {
+    "worker_contract": {
+      "type": "string",
+      "const": "runtime-worker-v1"
+    },
+    "backend_id": {
+      "type": "string",
+      "enum": ["local-gpu", "local-npu", "local-cpu", "attested-remote"]
+    },
+    "session_id": { "type": "string" },
+    "task_id": { "type": "string" },
+    "prompt": { "type": "string" },
+    "model": {
+      "type": ["string", "null"]
+    },
+    "estimated_latency_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "timeout_ms": {
+      "type": "integer",
+      "minimum": 1
+    }
+  },
+  "additionalProperties": true
+}

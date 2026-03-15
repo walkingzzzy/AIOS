@@ -1,0 +1,33 @@
+id: framework-laptop-13-amd-7040
+platform_tier: tier1
+vendor_id: framework
+model: framework-laptop-13-amd-7040-series
+arch: x86_64
+boot: uefi
+gpu: integrated
+npu: optional
+wifi: required
+bluetooth: required
+audio: required
+camera: required
+canonical_hardware_profile_id: generic-x86_64-uefi
+platform_media_id: generic-x86_64-uefi
+updated_platform_profile: /usr/share/aios/updated/platforms/generic-x86_64-uefi/profile.yaml
+runtime_profile: /etc/aios/runtime/default-runtime-profile.yaml
+bringup_status: nominated-formal-tier1
+hardware_evidence_required: true
+boot_evidence_expectations:
+  min_boots: 2
+  require_boot_success: true
+  require_deployment_state: true
+  require_boot_state: true
+  require_bootctl_status: true
+  require_firmware_status: true
+  require_sysupdate_listing: true
+release_track_intent:
+  - developer-preview
+  - product-preview
+notes:
+  - Selected as the primary x86_64 Tier 1 developer machine for current bring-up and release-preview work.
+  - Reuses the generic-x86_64-uefi platform media combination until machine-specific hardware evidence is attached.
+  - Real hardware install, second-boot, update, rollback, and recovery evidence is still pending.

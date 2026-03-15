@@ -1,0 +1,10 @@
+[Source]
+Type=url-file
+Path=https://updates.aios.invalid/generic-x86_64-uefi/
+MatchPattern=aios-@v.raw.xz
+
+[Target]
+Type=partition
+Path=/dev/disk/by-partlabel/AIOS-root-b
+MatchPattern=aios-@v.raw.xz
+Version=

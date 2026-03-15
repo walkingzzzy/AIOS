@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aios/release-gate-report.schema.json",
+  "title": "AIOS Release Gate Report",
+  "type": "object",
+  "required": [
+    "generated_at",
+    "workspace",
+    "overall_status",
+    "gate_status",
+    "json_report",
+    "markdown_report",
+    "validation_report",
+    "evidence_index",
+    "health_report",
+    "checks",
+    "blocking_checks"
+  ],
+  "properties": {
+    "generated_at": { "type": "string", "format": "date-time" },
+    "workspace": { "type": "string" },
+    "overall_status": {
+      "type": "string",
+      "enum": ["passed", "failed"]
+    },
+    "gate_status": {
+      "type": "string",
+      "enum": ["passed", "failed"]
+    },
+    "json_report": { "type": "string" },
+    "markdown_report": { "type": "string" },
+    "release_checklist": { "type": "string" },
+    "validation_report": { "type": "string" },
+    "evidence_index": { "type": "string" },
+    "health_report": { "type": "string" },
+    "hardware_evidence_index": { "type": ["string", "null"] },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["check_id", "status", "blocking", "detail"],
+        "properties": {
+          "check_id": { "type": "string" },
+          "status": {
+            "type": "string",
+            "enum": ["passed", "failed", "warning"]
+          },
+          "blocking": { "type": "boolean" },
+          "detail": { "type": "string" }
+        },
+        "additionalProperties": true
+      }
+    },
+    "blocking_checks": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "warnings": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "additionalProperties": true
+}
