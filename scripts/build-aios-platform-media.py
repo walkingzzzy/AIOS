@@ -20,6 +20,7 @@ BOOT_EVIDENCE_SERVICE = ROOT / "aios" / "hardware" / "evidence" / "aios-boot-evi
 BOOT_EVIDENCE_SCRIPT = ROOT / "aios" / "hardware" / "evidence" / "aios-boot-evidence.sh"
 BOOT_EVIDENCE_EVALUATOR = ROOT / "scripts" / "evaluate-aios-hardware-boot-evidence.py"
 HARDWARE_REPORT_RENDERER = ROOT / "scripts" / "render-aios-hardware-validation-report.py"
+DEVICE_VALIDATION_COLLECTOR = ROOT / "scripts" / "collect-aios-device-validation.py"
 TIER1_TEMPLATE = ROOT / "aios" / "hardware" / "profiles" / "tier1-template.yaml"
 HARDWARE_PROFILE_DIR = ROOT / "aios" / "hardware" / "profiles"
 TIER1_NOMINATIONS_PATH = ROOT / "aios" / "hardware" / "tier1-nominated-machines.yaml"
@@ -454,43 +455,47 @@ def write_bringup_readme(
         )
     lines.extend(
         [
-        "- `checklists/install-rollback-checklist.md`: hardware install / first-boot / rollback acceptance checklist.",
-        "- `reports/hardware-validation-template.md`: bring-up record template for the target machine.",
-        "- `reports/evidence-index-template.json`: structured evidence index template for logs, photos, and evaluator outputs.",
-        "- `support/support-matrix.md`: current declared support matrix for the nominated machine/profile.",
-        "- `support/known-limitations.md`: current release boundary and known limitation summary for the nominated machine/profile.",
-        "- `assets/aios-boot-evidence.service` and `assets/aios-boot-evidence.sh`: boot evidence assets for retrofitting older systems.",
-        "- `scripts/pull-boot-evidence.sh`: fetch boot evidence records from a target host over SSH.",
-        "- `scripts/evaluate-boot-evidence.sh`: run the bundled cross-reboot evaluator.",
-        "- `scripts/render-hardware-validation.sh`: render the final validation report and evidence index from evaluator output.",
-        "- `scripts/collect-and-render-hardware-validation.sh`: optionally pull evidence, run the evaluator, then render the final validation report in one command.",
-        "",
-        "## Suggested workflow",
-        "",
-        "1. Review `support/support-matrix.md` and `support/known-limitations.md` before flashing media.",
-        "2. Review any formal nominated machine profiles under `profiles/` before deciding which machine to validate first.",
-        "3. Fill in the generated Tier 1 profile with the actual vendor/model/support notes.",
-        "4. Keep the canonical hardware profile, nominated machine profile, and generated Tier 1 profile together in the bring-up archive.",
-        "5. Flash the installer and recovery media onto separate removable disks.",
-        "6. Boot the installer media, install AIOS to the target disk, then boot the installed system.",
-        "7. Verify that `/etc/aios/updated/platform.env` points at the platform profile expected by this platform media export.",
-        "8. If the target image does not already carry `aios-boot-evidence.service`, retrofit it into the mounted sysroot with `scripts/install-boot-evidence-assets.sh`.",
-        "9. After each hardware boot, pull `/var/lib/aios/hardware-evidence/boots` back to the host and archive it.",
-        "10. Tick off `checklists/install-rollback-checklist.md` as installer boot / install / firstboot / rollback milestones are completed.",
-        "11. Once at least two unique boot IDs are collected, run the evaluator and attach its report to the bring-up record.",
-        "",
-        "## Example commands",
-        "",
-        "- Flash installer media: `./installer-media/write-installer-media.sh /dev/<installer-usb>`",
-        "- Flash recovery media: `./recovery-media/write-recovery-media.sh /dev/<recovery-usb>`",
-        "- Pull evidence: `./bringup/scripts/pull-boot-evidence.sh root@<target-host> ./out/hardware-boots`",
-        "- Evaluate evidence: `./bringup/scripts/evaluate-boot-evidence.sh ./out/hardware-boots --expect-slot-transition a:b --expect-last-good-slot b`",
-        "- Render final report: `./bringup/scripts/render-hardware-validation.sh ./out/hardware-boots/report.json --machine-vendor <vendor> --machine-model <model>`",
-        "- Pull + evaluate + render in one step: `AIOS_BRINGUP_PULL_HOST=root@<target-host> ./bringup/scripts/collect-and-render-hardware-validation.sh ./out/hardware-boots -- --machine-vendor <vendor> --machine-model <model>`",
-        "",
-        "Keep the resulting evaluator JSON/Markdown report with the Tier 1 machine record. Until that evidence exists, this platform remains repo/QEMU validated but not hardware validated.",
-        "",
-    ]
+            "- `checklists/install-rollback-checklist.md`: hardware install / first-boot / rollback acceptance checklist.",
+            "- `reports/hardware-validation-template.md`: bring-up record template for the target machine.",
+            "- `reports/evidence-index-template.json`: structured evidence index template for logs, photos, evaluator outputs, and vendor runtime evidence.",
+            "- `support/support-matrix.md`: current declared support matrix for the nominated machine/profile.",
+            "- `support/known-limitations.md`: current release boundary and known limitation summary for the nominated machine/profile.",
+            "- `assets/aios-boot-evidence.service` and `assets/aios-boot-evidence.sh`: boot evidence assets for retrofitting older systems.",
+            "- `scripts/pull-boot-evidence.sh`: fetch boot evidence records from a target host over SSH.",
+            "- `scripts/evaluate-boot-evidence.sh`: run the bundled cross-reboot evaluator.",
+            "- `scripts/render-hardware-validation.sh`: render the final validation report and evidence index from evaluator output.",
+            "- `scripts/collect-device-validation.sh`: collect deviced / device-metadata snapshots plus backend evidence into renderer-ready report args.",
+            "- `scripts/collect-and-render-hardware-validation.sh`: optionally pull evidence, collect device validation, run the evaluator, then render the final validation report in one command.",
+            "",
+            "## Suggested workflow",
+            "",
+            "1. Review `support/support-matrix.md` and `support/known-limitations.md` before flashing media.",
+            "2. Review any formal nominated machine profiles under `profiles/` before deciding which machine to validate first.",
+            "3. Fill in the generated Tier 1 profile with the actual vendor/model/support notes.",
+            "4. Keep the canonical hardware profile, nominated machine profile, and generated Tier 1 profile together in the bring-up archive.",
+            "5. Flash the installer and recovery media onto separate removable disks.",
+            "6. Boot the installer media, install AIOS to the target disk, then boot the installed system.",
+            "7. Verify that `/etc/aios/updated/platform.env` points at the platform profile expected by this platform media export.",
+            "8. If the target image does not already carry `aios-boot-evidence.service`, retrofit it into the mounted sysroot with `scripts/install-boot-evidence-assets.sh`.",
+            "9. After each hardware boot, pull `/var/lib/aios/hardware-evidence/boots` back to the host and archive it.",
+            "10. Collect `device.state.get` / `device.metadata.get` snapshots into `reports/device-validation/` once the installed system is reachable.",
+            "11. If the platform ships a vendor runtime helper, set `AIOS_BRINGUP_VENDOR_RUNTIME_EVIDENCE_DIR` before running `scripts/collect-device-validation.sh` so `vendor-execution.json` artifacts are auto-wired into the final report.",
+            "12. Tick off `checklists/install-rollback-checklist.md` as installer boot / install / firstboot / rollback milestones are completed.",
+            "13. Once at least two unique boot IDs are collected, run the evaluator and attach its report to the bring-up record.",
+            "",
+            "## Example commands",
+            "",
+            "- Flash installer media: `./installer-media/write-installer-media.sh /dev/<installer-usb>`",
+            "- Flash recovery media: `./recovery-media/write-recovery-media.sh /dev/<recovery-usb>`",
+            "- Pull evidence: `./bringup/scripts/pull-boot-evidence.sh root@<target-host> ./out/hardware-boots`",
+            "- Evaluate evidence: `./bringup/scripts/evaluate-boot-evidence.sh ./out/hardware-boots --expect-slot-transition a:b --expect-last-good-slot b`",
+            "- Collect device validation snapshots: `AIOS_BRINGUP_DEVICE_VALIDATION_HOST=root@<target-host> AIOS_BRINGUP_VENDOR_RUNTIME_EVIDENCE_DIR=/var/lib/aios/runtimed/jetson-vendor-evidence ./bringup/scripts/collect-device-validation.sh ./out/device-validation`",
+            "- Render final report: `./bringup/scripts/render-hardware-validation.sh ./out/hardware-boots/report.json --machine-vendor <vendor> --machine-model <model>`",
+            "- Pull + collect + evaluate + render in one step: `AIOS_BRINGUP_PULL_HOST=root@<target-host> AIOS_BRINGUP_VENDOR_RUNTIME_EVIDENCE_DIR=/var/lib/aios/runtimed/jetson-vendor-evidence ./bringup/scripts/collect-and-render-hardware-validation.sh ./out/hardware-boots -- --machine-vendor <vendor> --machine-model <model>`",
+            "",
+            "Keep the resulting evaluator JSON/Markdown report with the Tier 1 machine record. Until that evidence exists, this platform remains repo/QEMU validated but not hardware validated.",
+            "",
+        ]
     )
     path.write_text("\n".join(lines))
 
@@ -512,9 +517,11 @@ def write_bringup_checklist(path: Path, platform_id: str) -> None:
         "- [ ] Confirm firstboot completed and `/etc/aios/updated/platform.env` points at the expected platform profile.",
         "- [ ] Collect at least two distinct boot evidence records with unique `boot_id` values.",
         "- [ ] Run `scripts/evaluate-boot-evidence.sh` against the collected evidence.",
+        "- [ ] Run `scripts/collect-device-validation.sh` or equivalent and confirm the expected release-grade backend IDs are present.",
+        "- [ ] If vendor runtime helper evidence is expected, confirm `vendor-execution.json` artifacts are attached to the final report.",
         "- [ ] Validate rollback path using the recovery media or staged update path.",
-        "- [ ] Attach evaluator output, logs, and operator notes to `reports/hardware-validation-template.md`.",
-        "- [ ] Mark hardware validation complete only after install, firstboot, and rollback evidence are attached.",
+        "- [ ] Attach evaluator output, backend-state evidence, vendor runtime evidence, logs, and operator notes to `reports/hardware-validation-template.md`.",
+        "- [ ] Mark hardware validation complete only after install, firstboot, rollback, and vendor runtime evidence (when applicable) are attached.",
         "",
     ]
     path.write_text("\n".join(lines))
@@ -555,6 +562,29 @@ def write_hardware_validation_report_template(path: Path, platform_id: str) -> N
         "- Boot evidence directory collected:",
         "- Boot IDs observed:",
         "",
+        "## Device And Multimodal Validation",
+        "",
+        "- deviced health:",
+        "- device.state.get overall backend status:",
+        "- device.state.get available backend count:",
+        "- device.state.get ui_tree current support:",
+        "- device.metadata.get readiness status:",
+        "- device.metadata.get backend overall status:",
+        "- device.metadata.get available modalities:",
+        "- release-grade backend ids:",
+        "- release-grade backend origins:",
+        "- release-grade backend stacks:",
+        "- release-grade contract kinds:",
+        "- backend-state artifact attached:",
+        "- vendor runtime sign-off status:",
+        "- vendor runtime provider ids:",
+        "- vendor runtime service ids:",
+        "- vendor runtime statuses:",
+        "- vendor runtime kinds:",
+        "- vendor runtime backend ids:",
+        "- vendor runtime evidence count:",
+        "- vendor runtime evidence attached:",
+        "",
         "## Rollback Outcome",
         "",
         "- Rollback trigger used:",
@@ -569,6 +599,7 @@ def write_hardware_validation_report_template(path: Path, platform_id: str) -> N
         "- Installer log:",
         "- Recovery log:",
         "- Photos / serial captures:",
+        "- Vendor runtime evidence:",
         "",
         "## Open Issues",
         "",
@@ -596,6 +627,8 @@ def write_evidence_index_template(path: Path, platform_id: str) -> None:
             "boot_evidence_dir": "",
             "evaluator_json": "",
             "evaluator_markdown": "",
+            "device_backend_state_artifact": "",
+            "vendor_runtime_evidence": [],
             "recovery_log": "",
             "photos": [],
         },
@@ -781,6 +814,11 @@ def prepare_bringup_kit(
         scripts_dir / HARDWARE_REPORT_RENDERER.name,
         executable=True,
     )
+    copy_file(
+        DEVICE_VALIDATION_COLLECTOR,
+        scripts_dir / DEVICE_VALIDATION_COLLECTOR.name,
+        executable=True,
+    )
 
     install_script = scripts_dir / "install-boot-evidence-assets.sh"
     write_executable(
@@ -847,6 +885,34 @@ def prepare_bringup_kit(
         "\"${cmd[@]}\"\n"
     )
 
+    device_validation_wrapper = scripts_dir / "collect-device-validation.sh"
+    write_executable(
+        device_validation_wrapper,
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n\n"
+        "script_dir=\"$(cd \"$(dirname \"${BASH_SOURCE[0]}\")\" && pwd)\"\n"
+        "output_dir=\"${1:-${AIOS_BRINGUP_DEVICE_VALIDATION_DIR:-$script_dir/../reports/device-validation}}\"\n"
+        "remote_host=\"${AIOS_BRINGUP_DEVICE_VALIDATION_HOST:-${AIOS_BRINGUP_PULL_HOST:-}}\"\n"
+        "remote_python=\"${AIOS_BRINGUP_REMOTE_PYTHON:-python3}\"\n"
+        "remote_sudo=\"${AIOS_BRINGUP_REMOTE_SUDO:-sudo}\"\n"
+        "deviced_socket=\"${AIOS_BRINGUP_DEVICED_SOCKET:-/run/aios/deviced/deviced.sock}\"\n"
+        "device_metadata_socket=\"${AIOS_BRINGUP_DEVICE_METADATA_SOCKET:-/run/aios/device-metadata-provider/device-metadata-provider.sock}\"\n"
+        "vendor_runtime_evidence_dir=\"${AIOS_BRINGUP_VENDOR_RUNTIME_EVIDENCE_DIR:-}\"\n"
+        "timeout=\"${AIOS_BRINGUP_DEVICE_VALIDATION_TIMEOUT:-5}\"\n"
+        "cmd=(python3 \"$script_dir/collect-aios-device-validation.py\" --output-dir \"$output_dir\" --deviced-socket \"$deviced_socket\" --device-metadata-socket \"$device_metadata_socket\" --timeout \"$timeout\")\n"
+        "if [[ -n \"$vendor_runtime_evidence_dir\" ]]; then\n"
+        "  cmd+=(--vendor-runtime-evidence-dir \"$vendor_runtime_evidence_dir\")\n"
+        "fi\n"
+        "if [[ -n \"$remote_host\" ]]; then\n"
+        "  cmd+=(--remote-host \"$remote_host\" --remote-python \"$remote_python\")\n"
+        "  if [[ -n \"$remote_sudo\" ]]; then\n"
+        "    cmd+=(--remote-sudo \"$remote_sudo\")\n"
+        "  fi\n"
+        "fi\n"
+        "cmd+=(\"${@:2}\")\n"
+        "\"${cmd[@]}\"\n"
+    )
+
     render_wrapper = scripts_dir / "render-hardware-validation.sh"
     write_executable(
         render_wrapper,
@@ -863,10 +929,17 @@ def prepare_bringup_kit(
         "evidence_index_out=\"${AIOS_BRINGUP_EVIDENCE_INDEX_OUT:-$script_dir/../reports/hardware-validation-evidence.json}\"\n"
         "support_matrix=\"${AIOS_BRINGUP_SUPPORT_MATRIX:-$script_dir/../support/support-matrix.md}\"\n"
         "known_limitations=\"${AIOS_BRINGUP_KNOWN_LIMITATIONS:-$script_dir/../support/known-limitations.md}\"\n"
+        "device_validation_dir=\"${AIOS_BRINGUP_DEVICE_VALIDATION_DIR:-$script_dir/../reports/device-validation}\"\n"
+        "device_validation_args_file=\"${AIOS_BRINGUP_DEVICE_VALIDATION_ARGS_FILE:-$device_validation_dir/renderer-args.txt}\"\n"
+        "auto_renderer_args=()\n"
+        "if [[ \"${AIOS_BRINGUP_AUTOWIRE_DEVICE_VALIDATION:-1}\" != \"0\" && -f \"$device_validation_args_file\" ]]; then\n"
+        "  mapfile -t auto_renderer_args < \"$device_validation_args_file\"\n"
+        "fi\n"
         "cmd=(python3 \"$script_dir/render-aios-hardware-validation-report.py\" --evaluator-json \"$evaluator_json\" --report-out \"$report_out\" --evidence-index-out \"$evidence_index_out\" --support-matrix \"$support_matrix\" --known-limitations \"$known_limitations\")\n"
         "if [[ -f \"$profile_path\" ]]; then\n"
         "  cmd+=(--profile \"$profile_path\")\n"
         "fi\n"
+        "cmd+=(\"${auto_renderer_args[@]}\")\n"
         "cmd+=(\"${@:2}\")\n"
         "\"${cmd[@]}\"\n"
     )
@@ -886,6 +959,11 @@ def prepare_bringup_kit(
         "script_dir=\"$(cd \"$(dirname \"${BASH_SOURCE[0]}\")\" && pwd)\"\n"
         "evaluator_json=\"${AIOS_BRINGUP_EVALUATOR_JSON_OUT:-$script_dir/../reports/hardware-validation-evaluator.json}\"\n"
         "evaluator_md=\"${AIOS_BRINGUP_EVALUATOR_MD_OUT:-$script_dir/../reports/hardware-validation-evaluator.md}\"\n"
+        "device_validation_dir=\"${AIOS_BRINGUP_DEVICE_VALIDATION_DIR:-$script_dir/../reports/device-validation}\"\n"
+        "device_validation_mode=\"${AIOS_BRINGUP_COLLECT_DEVICE_VALIDATION:-auto}\"\n"
+        "device_validation_host=\"${AIOS_BRINGUP_DEVICE_VALIDATION_HOST:-${AIOS_BRINGUP_PULL_HOST:-}}\"\n"
+        "local_deviced_socket=\"${AIOS_BRINGUP_DEVICED_SOCKET:-/run/aios/deviced/deviced.sock}\"\n"
+        "local_device_metadata_socket=\"${AIOS_BRINGUP_DEVICE_METADATA_SOCKET:-/run/aios/device-metadata-provider/device-metadata-provider.sock}\"\n"
         "mode=\"evaluator\"\n"
         "evaluator_args=()\n"
         "renderer_args=()\n"
@@ -905,10 +983,29 @@ def prepare_bringup_kit(
         "if [[ -n \"${AIOS_BRINGUP_PULL_HOST:-}\" ]]; then\n"
         "  \"$script_dir/pull-boot-evidence.sh\" \"$AIOS_BRINGUP_PULL_HOST\" \"$input_dir\"\n"
         "fi\n\n"
+        "should_collect_device_validation=0\n"
+        "if [[ \"$device_validation_mode\" == \"1\" || \"$device_validation_mode\" == \"always\" ]]; then\n"
+        "  should_collect_device_validation=1\n"
+        "elif [[ \"$device_validation_mode\" != \"0\" && \"$device_validation_mode\" != \"never\" ]]; then\n"
+        "  if [[ -n \"$device_validation_host\" ]]; then\n"
+        "    should_collect_device_validation=1\n"
+        "  elif [[ -S \"$local_deviced_socket\" || -S \"$local_device_metadata_socket\" ]]; then\n"
+        "    should_collect_device_validation=1\n"
+        "  fi\n"
+        "fi\n"
+        "if [[ \"$should_collect_device_validation\" == \"1\" ]]; then\n"
+        "  \"$script_dir/collect-device-validation.sh\" \"$device_validation_dir\"\n"
+        "elif [[ \"$device_validation_mode\" == \"1\" || \"$device_validation_mode\" == \"always\" ]]; then\n"
+        "  echo \"device validation collection requested but no local sockets or remote host are available\" >&2\n"
+        "  exit 65\n"
+        "fi\n\n"
         "\"$script_dir/evaluate-boot-evidence.sh\" \"$input_dir\" --output \"$evaluator_json\" --report-md \"$evaluator_md\" \"${evaluator_args[@]}\"\n"
         "\"$script_dir/render-hardware-validation.sh\" \"$evaluator_json\" --evaluator-md \"$evaluator_md\" \"${renderer_args[@]}\"\n"
         "printf 'wrote evaluator json to %s\\n' \"$evaluator_json\"\n"
         "printf 'wrote evaluator markdown to %s\\n' \"$evaluator_md\"\n"
+        "if [[ -f \"$device_validation_dir/collection-summary.json\" ]]; then\n"
+        "  printf 'wrote device validation summary to %s\\n' \"$device_validation_dir/collection-summary.json\"\n"
+        "fi\n"
         "printf 'wrote final hardware validation report to %s\\n' \"${AIOS_BRINGUP_REPORT_OUT:-$script_dir/../reports/hardware-validation-report.md}\"\n"
         "printf 'wrote final evidence index to %s\\n' \"${AIOS_BRINGUP_EVIDENCE_INDEX_OUT:-$script_dir/../reports/hardware-validation-evidence.json}\"\n"
     )
@@ -981,10 +1078,12 @@ def prepare_bringup_kit(
             "install_boot_evidence_assets": str(install_script),
             "pull_boot_evidence": str(pull_script),
             "evaluate_boot_evidence": str(evaluate_wrapper),
+            "collect_device_validation": str(device_validation_wrapper),
             "render_hardware_validation": str(render_wrapper),
             "collect_and_render_hardware_validation": str(collect_wrapper),
             "evaluator": str(scripts_dir / BOOT_EVIDENCE_EVALUATOR.name),
             "report_renderer": str(scripts_dir / HARDWARE_REPORT_RENDERER.name),
+            "device_validation_collector": str(scripts_dir / DEVICE_VALIDATION_COLLECTOR.name),
         },
         "assets": {
             "boot_evidence_service": str(assets_dir / BOOT_EVIDENCE_SERVICE.name),

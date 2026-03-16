@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aios/hardware/hardware-boot-evidence-report.schema.json",
+  "title": "AIOS Hardware Boot Evidence Report",
+  "type": "object",
+  "required": [
+    "generated_at",
+    "input_dir",
+    "profile",
+    "record_count",
+    "unique_boot_ids",
+    "resolved_expectations",
+    "checks",
+    "passed",
+    "record_summaries",
+    "records"
+  ],
+  "properties": {
+    "generated_at": { "type": "string", "format": "date-time" },
+    "input_dir": { "type": "string", "minLength": 1 },
+    "profile": { "type": ["string", "null"] },
+    "record_count": { "type": "integer", "minimum": 0 },
+    "unique_boot_ids": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "resolved_expectations": {
+      "type": "object",
+      "required": [
+        "min_boots",
+        "expect_slot_transition",
+        "expect_last_good_slot",
+        "require_boot_success",
+        "require_deployment_state",
+        "require_boot_state",
+        "require_bootctl_status",
+        "require_firmware_status",
+        "require_sysupdate_listing"
+      ],
+      "properties": {
+        "min_boots": { "type": "integer", "minimum": 1 },
+        "expect_slot_transition": { "type": ["string", "null"] },
+        "expect_last_good_slot": { "type": ["string", "null"] },
+        "require_boot_success": { "type": "boolean" },
+        "require_deployment_state": { "type": "boolean" },
+        "require_boot_state": { "type": "boolean" },
+        "require_bootctl_status": { "type": "boolean" },
+        "require_firmware_status": { "type": "boolean" },
+        "require_sysupdate_listing": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "passed", "detail"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "passed": { "type": "boolean" },
+          "detail": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "passed": { "type": "boolean" },
+    "record_summaries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "path",
+          "captured_at",
+          "boot_id",
+          "current_slot",
+          "last_good_slot",
+          "boot_success",
+          "deployment_state_present",
+          "boot_state_present",
+          "bootctl_success",
+          "firmwarectl_success",
+          "sysupdate_success"
+        ],
+        "properties": {
+          "path": { "type": "string", "minLength": 1 },
+          "captured_at": { "type": ["string", "null"] },
+          "boot_id": { "type": ["string", "null"] },
+          "current_slot": { "type": ["string", "null"] },
+          "last_good_slot": { "type": ["string", "null"] },
+          "boot_success": { "type": "boolean" },
+          "deployment_state_present": { "type": "boolean" },
+          "boot_state_present": { "type": "boolean" },
+          "bootctl_success": { "type": "boolean" },
+          "firmwarectl_success": { "type": "boolean" },
+          "sysupdate_success": { "type": "boolean" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "records": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "data"],
+        "properties": {
+          "path": { "type": "string", "minLength": 1 },
+          "data": { "type": "object" }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

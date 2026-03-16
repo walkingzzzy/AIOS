@@ -7,12 +7,12 @@ import signal
 import socket
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_WORK_ROOT = ROOT / "out" / "validation" / "shell-panel-bridge-service-smoke"
 COMPOSITOR_MANIFEST = ROOT / "aios/shell/compositor/Cargo.toml"
 
 
@@ -26,18 +26,47 @@ def write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False))
 
 
+def load_bridge_transport(socket_path: Path) -> dict | None:
+    if not socket_path.exists() or not socket_path.is_file():
+        return None
+    try:
+        payload = json.loads(socket_path.read_text(encoding="utf-8") or "{}")
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("transport") != "tcp":
+        return None
+    return payload
+
+
 def rpc_call(socket_path: Path, method: str, params: dict, timeout: float = 2.0) -> dict:
     payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-        client.settimeout(timeout)
-        client.connect(str(socket_path))
-        client.sendall(json.dumps(payload).encode("utf-8") + b"\n")
-        data = b""
-        while not data.endswith(b"\n"):
-            chunk = client.recv(65536)
-            if not chunk:
-                break
-            data += chunk
+    transport = load_bridge_transport(socket_path)
+    if transport is not None:
+        host = str(transport.get("host") or "127.0.0.1")
+        port = int(transport.get("port") or 0)
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
+            client.settimeout(timeout)
+            client.connect((host, port))
+            client.sendall(json.dumps(payload).encode("utf-8") + b"\n")
+            data = b""
+            while not data.endswith(b"\n"):
+                chunk = client.recv(65536)
+                if not chunk:
+                    break
+                data += chunk
+    else:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.settimeout(timeout)
+            client.connect(str(socket_path))
+            client.sendall(json.dumps(payload).encode("utf-8") + b"\n")
+            data = b""
+            while not data.endswith(b"\n"):
+                chunk = client.recv(65536)
+                if not chunk:
+                    break
+                data += chunk
     response = json.loads(data.decode("utf-8"))
     if response.get("error"):
         raise RuntimeError(str(response["error"]))
@@ -72,7 +101,10 @@ def terminate(process: subprocess.Popen) -> str:
 
 
 def main() -> int:
-    temp_root = Path(tempfile.mkdtemp(prefix="aios-shell-panel-bridge-"))
+    temp_root = DEFAULT_WORK_ROOT
+    if temp_root.exists():
+        shutil.rmtree(temp_root, ignore_errors=True)
+    temp_root.mkdir(parents=True, exist_ok=True)
     failed = False
     process: subprocess.Popen[str] | None = None
 
@@ -231,7 +263,7 @@ def main() -> int:
                     "keyboard_enabled = true",
                     "touch_enabled = false",
                     "keyboard_layout = us",
-                    "placeholder_surfaces = launcher,portal-chooser",
+                    "panel_slots = launcher,portal-chooser",
                     f"panel_bridge_socket = {socket_path}",
                     f"panel_action_log_path = {panel_action_log}",
                     "panel_snapshot_refresh_ticks = 1",
@@ -286,3 +318,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+

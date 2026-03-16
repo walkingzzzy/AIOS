@@ -165,6 +165,33 @@ where
         .with_context(|| format!("failed to decode yaml file {}", path.display()))
 }
 
+pub fn load_yaml_file_validated<T>(
+    path: &Path,
+    namespace: SchemaNamespace,
+    schema_file_name: &str,
+) -> anyhow::Result<T>
+where
+    T: DeserializeOwned,
+{
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read yaml file {}", path.display()))?;
+    let yaml_value: serde_yaml::Value = serde_yaml::from_str(&text)
+        .with_context(|| format!("failed to decode yaml file {}", path.display()))?;
+    let json_value = serde_json::to_value(&yaml_value)
+        .with_context(|| format!("failed to normalize yaml file {}", path.display()))?;
+    let schema_path = resolve_schema_path(namespace, schema_file_name)?;
+    let validator = compile_json_schema_document(&schema_path, &[])?;
+    validator.validate_value(&json_value).with_context(|| {
+        format!(
+            "yaml file {} failed schema validation against {}",
+            path.display(),
+            schema_path.display()
+        )
+    })?;
+    serde_yaml::from_value(yaml_value)
+        .with_context(|| format!("failed to decode yaml file {}", path.display()))
+}
+
 pub fn load_json_file(path: &Path) -> anyhow::Result<Value> {
     let text = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read json file {}", path.display()))?;

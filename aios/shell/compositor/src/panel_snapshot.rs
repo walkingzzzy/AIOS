@@ -1,10 +1,13 @@
 use serde::Deserialize;
 use std::fs;
 use std::io::{Read, Write};
-use std::os::unix::net::UnixStream;
+use std::net::TcpStream;
 use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
+
+#[cfg(unix)]
+use std::os::unix::net::UnixStream;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PanelSnapshot {
@@ -62,6 +65,13 @@ struct RawHeader {
     tone: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct BridgeTransportDescriptor {
+    transport: Option<String>,
+    host: Option<String>,
+    port: Option<u16>,
+}
+
 pub fn load_panel_snapshot(path: &Path) -> Result<PanelSnapshot, String> {
     let contents = fs::read_to_string(path)
         .map_err(|error| format!("read-panel-snapshot:{}:{error}", path.display()))?;
@@ -69,10 +79,7 @@ pub fn load_panel_snapshot(path: &Path) -> Result<PanelSnapshot, String> {
 }
 
 pub fn load_panel_snapshot_from_command(command: &str) -> Result<PanelSnapshot, String> {
-    let output = Command::new("/bin/sh")
-        .arg("-lc")
-        .arg(command)
-        .output()
+    let output = run_shell_command(command)
         .map_err(|error| format!("exec-panel-snapshot-command:{error}"))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -108,10 +115,58 @@ fn call_panel_bridge(
     method: &str,
     params: serde_json::Value,
 ) -> Result<String, String> {
+    if let Some((host, port)) = load_tcp_bridge_transport(path)? {
+        return call_panel_bridge_tcp(path, &host, port, method, params);
+    }
+
+    #[cfg(unix)]
+    {
+        return call_panel_bridge_unix(path, method, params);
+    }
+
+    #[cfg(not(unix))]
+    {
+        Err(format!(
+            "panel-bridge-unavailable:{}:{}:unix-sockets-unsupported",
+            method,
+            path.display()
+        ))
+    }
+}
+
+#[cfg(unix)]
+fn call_panel_bridge_unix(
+    path: &Path,
+    method: &str,
+    params: serde_json::Value,
+) -> Result<String, String> {
     let mut stream = UnixStream::connect(path)
         .map_err(|error| format!("connect-panel-bridge:{}:{error}", path.display()))?;
     let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+    call_panel_bridge_stream(path, &mut stream, method, params)
+}
+
+fn call_panel_bridge_tcp(
+    path: &Path,
+    host: &str,
+    port: u16,
+    method: &str,
+    params: serde_json::Value,
+) -> Result<String, String> {
+    let mut stream = TcpStream::connect((host, port))
+        .map_err(|error| format!("connect-panel-bridge:{}:{error}", path.display()))?;
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+    call_panel_bridge_stream(path, &mut stream, method, params)
+}
+
+fn call_panel_bridge_stream<T: Read + Write>(
+    path: &Path,
+    stream: &mut T,
+    method: &str,
+    params: serde_json::Value,
+) -> Result<String, String> {
     let request = serde_json::json!({
         "jsonrpc": "2.0",
         "id": 1,
@@ -150,6 +205,42 @@ fn call_panel_bridge(
         .unwrap_or_else(|| serde_json::Value::Null);
     serde_json::to_string(&result)
         .map_err(|error| format!("encode-panel-bridge-result:{}:{error}", path.display()))
+}
+
+fn load_tcp_bridge_transport(path: &Path) -> Result<Option<(String, u16)>, String> {
+    if !path.exists() || !path.is_file() {
+        return Ok(None);
+    }
+    let contents = match fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(_) => return Ok(None),
+    };
+    let descriptor = match serde_json::from_str::<BridgeTransportDescriptor>(&contents) {
+        Ok(descriptor) => descriptor,
+        Err(_) => return Ok(None),
+    };
+    if descriptor.transport.as_deref() != Some("tcp") {
+        return Ok(None);
+    }
+    let host = descriptor.host.unwrap_or_else(|| "127.0.0.1".to_string());
+    let port = descriptor.port.ok_or_else(|| {
+        format!(
+            "decode-panel-bridge-descriptor:{}:missing-port",
+            path.display()
+        )
+    })?;
+    Ok(Some((host, port)))
+}
+
+fn run_shell_command(command: &str) -> Result<std::process::Output, std::io::Error> {
+    #[cfg(windows)]
+    {
+        Command::new("cmd").arg("/C").arg(command).output()
+    }
+    #[cfg(not(windows))]
+    {
+        Command::new("/bin/sh").arg("-lc").arg(command).output()
+    }
 }
 
 fn parse_panel_snapshot(source: &str, contents: &str) -> Result<PanelSnapshot, String> {

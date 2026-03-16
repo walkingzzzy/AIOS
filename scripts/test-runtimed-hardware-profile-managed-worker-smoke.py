@@ -14,7 +14,7 @@ import textwrap
 import time
 from pathlib import Path
 
-from aios_cargo_bins import default_aios_bin_dir
+from aios_cargo_bins import default_aios_bin_dir, resolve_binary_path
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -44,10 +44,14 @@ def parse_args() -> argparse.Namespace:
 
 def resolve_binary(name: str, explicit: Path | None, bin_dir: Path | None) -> Path:
     if explicit is not None:
-        return explicit
+        return resolve_binary_path(explicit.parent, explicit.name)
     if bin_dir is not None:
-        return bin_dir / name
-    return default_aios_bin_dir(ROOT) / name
+        return resolve_binary_path(bin_dir, name)
+    return resolve_binary_path(default_aios_bin_dir(ROOT), name)
+
+
+def unix_rpc_supported() -> bool:
+    return hasattr(socket, "AF_UNIX") and os.name != "nt"
 
 
 def ensure_binary(path: Path, package: str) -> None:
@@ -127,6 +131,9 @@ def require(condition: bool, message: str) -> None:
 
 def main() -> int:
     args = parse_args()
+    if not unix_rpc_supported():
+        print("runtimed hardware profile managed worker smoke skipped: unix rpc transport unsupported on this platform")
+        return 0
     runtimed = resolve_binary("runtimed", args.runtimed, args.bin_dir)
     ensure_binary(runtimed, "aios-runtimed")
 
@@ -143,11 +150,44 @@ def main() -> int:
 
     runtime_profile = state_root / "runtime-profile.yaml"
     route_profile = state_root / "route-profile.yaml"
-    managed_worker_template = (
-        f"{sys.executable} {REFERENCE_WORKER} unix "
-        "--backend $AIOS_RUNTIME_WORKER_BACKEND_ID "
-        "--socket $AIOS_RUNTIME_WORKER_SOCKET_PATH"
+    worker_launcher = state_root / "reference_worker_launcher.py"
+    worker_launcher.write_text(
+        textwrap.dedent(
+            f"""\
+            #!/usr/bin/env python3
+            from __future__ import annotations
+
+            import os
+            import sys
+
+            REFERENCE_WORKER = {json.dumps(str(REFERENCE_WORKER))}
+
+
+            def main() -> int:
+                backend = os.environ["AIOS_RUNTIME_WORKER_BACKEND_ID"]
+                socket_path = os.environ["AIOS_RUNTIME_WORKER_SOCKET_PATH"]
+                os.execv(
+                    sys.executable,
+                    [
+                        sys.executable,
+                        REFERENCE_WORKER,
+                        "unix",
+                        "--backend",
+                        backend,
+                        "--socket",
+                        socket_path,
+                    ],
+                )
+                return 0
+
+
+            if __name__ == "__main__":
+                raise SystemExit(main())
+            """
+        )
     )
+    os.chmod(worker_launcher, 0o755)
+    managed_worker_template = f"{sys.executable} {worker_launcher}"
     runtime_profile.write_text(
         textwrap.dedent(
             f"""\

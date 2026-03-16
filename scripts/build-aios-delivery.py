@@ -12,7 +12,7 @@ import tarfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from aios_cargo_bins import cargo_target_bin_dir, default_aios_bin_dir
+from aios_cargo_bins import cargo_target_bin_dir, default_aios_bin_dir, resolve_binary_path
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -140,10 +140,13 @@ COMPAT_RUNTIME_DIRECTORIES = [
 ]
 
 SCHEMA_DIRECTORIES = [
+    AIOS_ROOT / "image" / "schemas",
+    AIOS_ROOT / "hardware" / "schemas",
     AIOS_ROOT / "sdk" / "schemas",
     AIOS_ROOT / "policy" / "schemas",
     AIOS_ROOT / "runtime" / "schemas",
     AIOS_ROOT / "observability" / "schemas",
+    AIOS_ROOT / "services" / "updated" / "schemas",
 ]
 
 IMAGE_ASSETS = [
@@ -209,6 +212,33 @@ HARDWARE_EVIDENCE_ROOTFS_MAPPINGS = [
 ]
 
 MASKED_SYSTEMD_UNITS = ["systemd-firstboot.service"]
+HOST_LINK_PLACEHOLDER_PREFIX = "aios-host-link-target:"
+
+
+def write_symlink_or_placeholder(path: Path, target: Path | str) -> str:
+    target_text = str(target)
+    if path.exists() or path.is_symlink():
+        path.unlink()
+    try:
+        path.symlink_to(Path(target_text))
+    except OSError as error:
+        if os.name != "nt" or getattr(error, "winerror", None) != 1314:
+            raise
+        path.write_text(f"{HOST_LINK_PLACEHOLDER_PREFIX}{target_text}\n")
+    return target_text
+
+
+def read_symlink_or_placeholder(path: Path) -> str | None:
+    if path.is_symlink():
+        return os.readlink(path)
+    if path.is_file():
+        try:
+            payload = path.read_text(encoding="utf-8").strip()
+        except UnicodeDecodeError:
+            return None
+        if payload.startswith(HOST_LINK_PLACEHOLDER_PREFIX):
+            return payload[len(HOST_LINK_PLACEHOLDER_PREFIX):]
+    return None
 
 
 def parse_args() -> argparse.Namespace:
@@ -308,7 +338,11 @@ def copy_tree(source: Path, destination: Path) -> None:
 
 
 def ensure_binaries(bin_dir: Path, build_missing: bool, cargo_target: str | None = None) -> list[Path]:
-    missing = [component for component in COMPONENTS if not (bin_dir / component["binary"]).exists()]
+    missing = [
+        component
+        for component in COMPONENTS
+        if not resolve_binary_path(bin_dir, component["binary"]).exists()
+    ]
     if missing and build_missing:
         packages = [component["package"] for component in missing]
         command = ["cargo", "build"]
@@ -316,13 +350,17 @@ def ensure_binaries(bin_dir: Path, build_missing: bool, cargo_target: str | None
             command.extend(["--target", cargo_target])
         command.extend(sum([["-p", package] for package in packages], []))
         run(command, cwd=AIOS_ROOT)
-        missing = [component for component in COMPONENTS if not (bin_dir / component["binary"]).exists()]
+        missing = [
+            component
+            for component in COMPONENTS
+            if not resolve_binary_path(bin_dir, component["binary"]).exists()
+        ]
 
     if missing:
         missing_lines = ", ".join(sorted(component["binary"] for component in missing))
         raise SystemExit(f"missing binaries in {bin_dir}: {missing_lines}")
 
-    return [bin_dir / component["binary"] for component in COMPONENTS]
+    return [resolve_binary_path(bin_dir, component["binary"]) for component in COMPONENTS]
 
 
 def create_unit_wants(rootfs_dir: Path, unit_name: str) -> None:
@@ -331,7 +369,7 @@ def create_unit_wants(rootfs_dir: Path, unit_name: str) -> None:
     target = wants_dir / unit_name
     if target.exists() or target.is_symlink():
         target.unlink()
-    target.symlink_to(Path("..") / unit_name)
+    write_symlink_or_placeholder(target, Path("..") / unit_name)
 
 
 def mask_systemd_unit(rootfs_dir: Path, unit_name: str) -> str:
@@ -339,7 +377,7 @@ def mask_systemd_unit(rootfs_dir: Path, unit_name: str) -> str:
     mask_path.parent.mkdir(parents=True, exist_ok=True)
     if mask_path.exists() or mask_path.is_symlink():
         mask_path.unlink()
-    mask_path.symlink_to(Path("/dev/null"))
+    write_symlink_or_placeholder(mask_path, "/dev/null")
     return mask_path.relative_to(rootfs_dir).as_posix()
 
 
@@ -364,7 +402,7 @@ def prepare_firstboot_hygiene(rootfs_dir: Path) -> dict[str, object]:
     dbus_machine_id_path.parent.mkdir(parents=True, exist_ok=True)
     if dbus_machine_id_path.exists() or dbus_machine_id_path.is_symlink():
         dbus_machine_id_path.unlink()
-    dbus_machine_id_path.symlink_to(Path("/etc/machine-id"))
+    write_symlink_or_placeholder(dbus_machine_id_path, "/etc/machine-id")
 
     random_seed_path = rootfs_dir / "var" / "lib" / "systemd" / "random-seed"
     random_seed_path.parent.mkdir(parents=True, exist_ok=True)
@@ -375,7 +413,7 @@ def prepare_firstboot_hygiene(rootfs_dir: Path) -> dict[str, object]:
         "machine_id": machine_id_path.relative_to(rootfs_dir).as_posix(),
         "machine_id_state": "empty-file",
         "dbus_machine_id": dbus_machine_id_path.relative_to(rootfs_dir).as_posix(),
-        "dbus_machine_id_target": os.readlink(dbus_machine_id_path),
+        "dbus_machine_id_target": read_symlink_or_placeholder(dbus_machine_id_path),
         "random_seed": random_seed_path.relative_to(rootfs_dir).as_posix(),
         "random_seed_present": False,
     }
@@ -398,12 +436,13 @@ def collect_file_manifest(bundle_dir: Path, *, exclude: set[str] | None = None) 
         relative = path.relative_to(bundle_dir).as_posix()
         if relative in excluded:
             continue
-        if path.is_symlink():
+        link_target = read_symlink_or_placeholder(path)
+        if link_target is not None:
             records.append(
                 {
                     "path": relative,
                     "type": "symlink",
-                    "target": os.readlink(path),
+                    "target": link_target,
                 }
             )
             continue
@@ -417,10 +456,22 @@ def collect_file_manifest(bundle_dir: Path, *, exclude: set[str] | None = None) 
     return records
 
 
+def sync_overlay_source_assets(overlay_dir: Path) -> None:
+    copy_tree(
+        RUNTIME_PLATFORM_SOURCE,
+        overlay_dir / "usr" / "share" / "aios" / "runtime" / "platforms",
+    )
+    shell_compositor_overlay = overlay_dir / "usr" / "libexec" / "aios-shell" / "compositor"
+    copy_tree(AIOS_ROOT / "shell" / "compositor" / "src", shell_compositor_overlay / "src")
+    for name in ["Cargo.toml", "Cargo.lock", "default-compositor.conf", "release-compositor.conf"]:
+        copy_file(AIOS_ROOT / "shell" / "compositor" / name, shell_compositor_overlay / name)
+
+
 def sync_overlay(rootfs_dir: Path, overlay_dir: Path) -> None:
     if overlay_dir.exists():
         shutil.rmtree(overlay_dir)
     shutil.copytree(rootfs_dir, overlay_dir, symlinks=True)
+    sync_overlay_source_assets(overlay_dir)
 
 
 def write_manifest(bundle_dir: Path, payload: dict[str, object]) -> Path:
@@ -548,7 +599,7 @@ def stage_rootfs(bundle_dir: Path, bin_dir: Path) -> dict[str, object]:
 
     component_records = []
     for component in COMPONENTS:
-        binary_source = bin_dir / component["binary"]
+        binary_source = resolve_binary_path(bin_dir, component["binary"])
         binary_destination = rootfs_dir / "usr" / "libexec" / "aios" / component["binary"]
         metadata_name = f"{component['component_id']}.yaml"
         copy_file(binary_source, binary_destination)

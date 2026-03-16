@@ -3,7 +3,25 @@
   "$id": "aios/runtime-profile.schema.json",
   "title": "AIOS Runtime Profile",
   "type": "object",
-  "required": ["profile_id", "scope", "default_backend", "allowed_backends", "cpu_fallback"],
+  "required": [
+    "profile_id",
+    "scope",
+    "default_backend",
+    "allowed_backends",
+    "local_model_pool",
+    "remote_model_pool",
+    "embedding_backend",
+    "rerank_backend",
+    "cpu_fallback",
+    "memory_budget_mb",
+    "kv_cache_budget_mb",
+    "timeout_ms",
+    "max_concurrency",
+    "max_parallel_models",
+    "offload_policy",
+    "degradation_policy",
+    "observability_level"
+  ],
   "properties": {
     "profile_id": { "type": "string" },
     "scope": { "enum": ["system", "organization", "user", "workspace", "session", "task"] },
@@ -11,6 +29,8 @@
     "allowed_backends": { "type": "array", "items": { "type": "string" } },
     "local_model_pool": { "type": "array", "items": { "type": "string" } },
     "remote_model_pool": { "type": "array", "items": { "type": "string" } },
+    "embedding_backend": { "type": "string" },
+    "rerank_backend": { "type": "string" },
     "backend_worker_contract": { "type": ["string", "null"] },
     "backend_commands": {
       "type": "object",
@@ -39,7 +59,8 @@
     "max_parallel_models": { "type": "integer", "minimum": 1 },
     "offload_policy": { "enum": ["disabled", "manual-only", "allowed-low-sensitivity", "allowed-by-policy"] },
     "degradation_policy": { "type": "string" },
-    "observability_level": { "type": "string" }
+    "observability_level": { "type": "string" },
+    "notes": { "type": "array", "items": { "type": "string" } }
   },
   "additionalProperties": true
 }

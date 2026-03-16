@@ -8,6 +8,7 @@ import os
 import sys
 import textwrap
 import time
+import base64
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from html.parser import HTMLParser
@@ -24,6 +25,30 @@ from aios.compat.runtime_support import (
     append_jsonl,
     resolve_policy_context,
     standalone_policy_context,
+)
+from aios.compat.remote_runtime_support import (
+    RemoteAttestation,
+    RemoteGovernance,
+    RemoteRegistration,
+    RemoteSupportError,
+    VALID_REMOTE_ATTESTATION_MODES,
+    VALID_REMOTE_AUTH_MODES,
+    agentd_rpc,
+    agentd_socket_path,
+    encode_execution_token,
+    find_remote_registration,
+    load_remote_registry,
+    normalize_remote_provider_id,
+    post_json,
+    remote_registration_status,
+    remote_registration_summary,
+    remote_target_hash,
+    remove_remote_registration,
+    revoke_remote_registration,
+    resolve_trust_policy,
+    touch_remote_registration,
+    upsert_remote_registration,
+    write_remote_registry,
 )
 
 
@@ -44,6 +69,15 @@ DEFAULT_AUDIT_LOG_ENV = "AIOS_COMPAT_OFFICE_AUDIT_LOG"
 DEFAULT_USER_ID = "compat-user"
 DEFAULT_SESSION_ID = "compat-session"
 DEFAULT_TASK_ID = "compat-task"
+DEFAULT_REMOTE_REGISTRY_ENV = "AIOS_OFFICE_REMOTE_REGISTRY"
+DEFAULT_REMOTE_AUTH_SECRET_ENV = "AIOS_OFFICE_REMOTE_AUTH_SECRET"
+DEFAULT_TRUST_MODE_ENV = "AIOS_OFFICE_TRUST_MODE"
+DEFAULT_ALLOWLIST_ENV = "AIOS_OFFICE_ALLOWLIST"
+DEFAULT_REMOTE_ATTESTATION_MODE_ENV = "AIOS_OFFICE_REMOTE_ATTESTATION_MODE"
+DEFAULT_REMOTE_FLEET_ID_ENV = "AIOS_OFFICE_REMOTE_FLEET_ID"
+DEFAULT_REMOTE_GOVERNANCE_GROUP_ENV = "AIOS_OFFICE_REMOTE_GOVERNANCE_GROUP"
+DEFAULT_REMOTE_POLICY_GROUP_ENV = "AIOS_OFFICE_REMOTE_POLICY_GROUP"
+DEFAULT_REMOTE_APPROVAL_REF_ENV = "AIOS_OFFICE_REMOTE_APPROVAL_REF"
 SUPPORTED_SUFFIXES = {
     ".txt",
     ".md",
@@ -64,12 +98,14 @@ PDF_START_Y = 720
 PDF_LINE_HEIGHT = 14
 PDF_WRAP_WIDTH = 88
 PDF_LINES_PER_PAGE = 46
+DEFAULT_TIMEOUT_SECONDS = 10.0
 COMMAND_EXIT_CODES = {
     "invalid_request": 2,
     "precondition_failed": 3,
     "permission_denied": 13,
     "internal": 1,
 }
+PROVIDER_REGISTER_METHOD = "provider.register"
 
 
 @dataclass(frozen=True)
@@ -91,6 +127,8 @@ class OfficeContext:
     capability_id: str | None
     source_path: str | None
     output_path: str | None
+    endpoint: str | None
+    provider_ref: str | None
     preview_chars: int | None
     started_at: str
 
@@ -172,19 +210,83 @@ def parse_args() -> argparse.Namespace:
     subparsers.add_parser("manifest")
     health_parser = subparsers.add_parser("health")
     health_parser.add_argument("--audit-log", type=Path)
+    health_parser.add_argument("--remote-registry", type=Path)
     add_policy_args(health_parser)
     subparsers.add_parser("permissions")
 
+    list_parser = subparsers.add_parser("list-remotes")
+    list_parser.add_argument("--remote-registry", type=Path)
+
+    register_parser = subparsers.add_parser("register-remote")
+    register_parser.add_argument("--provider-ref", required=True)
+    register_parser.add_argument("--endpoint", required=True)
+    register_parser.add_argument("--capability", action="append", dest="capabilities", required=True)
+    register_parser.add_argument(
+        "--auth-mode",
+        default="none",
+        choices=sorted(VALID_REMOTE_AUTH_MODES),
+    )
+    register_parser.add_argument("--auth-header-name")
+    register_parser.add_argument("--auth-secret-env")
+    register_parser.add_argument("--display-name")
+    register_parser.add_argument(
+        "--attestation-mode",
+        choices=sorted(VALID_REMOTE_ATTESTATION_MODES),
+    )
+    register_parser.add_argument("--attestation-issuer")
+    register_parser.add_argument("--attestation-subject")
+    register_parser.add_argument("--attestation-issued-at")
+    register_parser.add_argument("--attestation-expires-at")
+    register_parser.add_argument("--attestation-evidence-ref")
+    register_parser.add_argument("--attestation-digest")
+    register_parser.add_argument("--attestation-status")
+    register_parser.add_argument("--fleet-id")
+    register_parser.add_argument("--governance-group")
+    register_parser.add_argument("--policy-group")
+    register_parser.add_argument("--registered-by")
+    register_parser.add_argument("--approval-ref")
+    register_parser.add_argument("--allow-lateral-movement", action="store_true")
+    register_parser.add_argument("--heartbeat-ttl-seconds", type=int)
+    register_parser.add_argument("--remote-registry", type=Path)
+
+    heartbeat_parser = subparsers.add_parser("heartbeat-remote")
+    heartbeat_parser.add_argument("--provider-ref", required=True)
+    heartbeat_parser.add_argument("--heartbeat-at")
+    heartbeat_parser.add_argument("--remote-registry", type=Path)
+
+    revoke_parser = subparsers.add_parser("revoke-remote")
+    revoke_parser.add_argument("--provider-ref", required=True)
+    revoke_parser.add_argument("--reason")
+    revoke_parser.add_argument("--revoked-at")
+    revoke_parser.add_argument("--remote-registry", type=Path)
+
+    unregister_parser = subparsers.add_parser("unregister-remote")
+    unregister_parser.add_argument("--provider-ref", required=True)
+    unregister_parser.add_argument("--remote-registry", type=Path)
+
+    control_plane_parser = subparsers.add_parser("register-control-plane")
+    control_plane_parser.add_argument("--provider-ref", required=True)
+    control_plane_parser.add_argument("--remote-registry", type=Path)
+    control_plane_parser.add_argument("--agentd-socket", type=Path)
+    control_plane_parser.add_argument("--provider-id")
+    control_plane_parser.add_argument("--display-name")
+
     open_parser = subparsers.add_parser("open")
     open_parser.add_argument("--path", type=Path, required=True)
+    open_parser.add_argument("--endpoint")
+    open_parser.add_argument("--provider-ref")
     open_parser.add_argument("--preview-chars", type=int, default=240)
     open_parser.add_argument("--audit-log", type=Path)
+    open_parser.add_argument("--remote-registry", type=Path)
     add_policy_args(open_parser)
 
     export_parser = subparsers.add_parser("export-pdf")
     export_parser.add_argument("--path", type=Path, required=True)
     export_parser.add_argument("--output-path", type=Path, required=True)
+    export_parser.add_argument("--endpoint")
+    export_parser.add_argument("--provider-ref")
     export_parser.add_argument("--audit-log", type=Path)
+    export_parser.add_argument("--remote-registry", type=Path)
     add_policy_args(export_parser)
 
     return parser.parse_args()
@@ -199,6 +301,8 @@ def context_from_args(args: argparse.Namespace) -> OfficeContext:
             capability_id="compat.document.open",
             source_path=str(args.path),
             output_path=None,
+            endpoint=args.endpoint,
+            provider_ref=args.provider_ref,
             preview_chars=args.preview_chars,
             started_at=started_at,
         )
@@ -209,6 +313,8 @@ def context_from_args(args: argparse.Namespace) -> OfficeContext:
             capability_id="compat.office.export_pdf",
             source_path=str(args.path),
             output_path=str(args.output_path),
+            endpoint=args.endpoint,
+            provider_ref=args.provider_ref,
             preview_chars=None,
             started_at=started_at,
         )
@@ -218,6 +324,8 @@ def context_from_args(args: argparse.Namespace) -> OfficeContext:
         capability_id=None,
         source_path=None,
         output_path=None,
+        endpoint=None,
+        provider_ref=None,
         preview_chars=None,
         started_at=started_at,
     )
@@ -241,6 +349,16 @@ def resolve_audit_log(args: argparse.Namespace) -> Path | None:
         return audit_log
     raw = os.environ.get(DEFAULT_AUDIT_LOG_ENV)
     return Path(raw) if raw else None
+
+
+def load_office_remote_registry(
+    args: argparse.Namespace | None = None,
+) -> tuple[Path, list[RemoteRegistration]]:
+    return load_remote_registry(
+        explicit=getattr(args, "remote_registry", None) if args is not None else None,
+        env_var=DEFAULT_REMOTE_REGISTRY_ENV,
+        state_subdir="compat-office",
+    )
 
 
 def load_compat_permission_manifest() -> dict[str, object]:
@@ -278,7 +396,308 @@ def compat_capability(capability_id: str | None) -> dict[str, object]:
     return {}
 
 
+def office_trust_policy() -> dict[str, object]:
+    return resolve_trust_policy(
+        mode_env=DEFAULT_TRUST_MODE_ENV,
+        allowlist_env=DEFAULT_ALLOWLIST_ENV,
+        default_mode="permissive",
+    )
+
+
+def office_remote_attestation(args: argparse.Namespace) -> RemoteAttestation:
+    mode = (
+        args.attestation_mode
+        or os.environ.get(DEFAULT_REMOTE_ATTESTATION_MODE_ENV)
+        or "bootstrap"
+    ).strip().lower()
+    issuer = args.attestation_issuer or (
+        f"{PROVIDER_ID}.attestor" if mode == "verified" else None
+    )
+    subject = args.attestation_subject or args.provider_ref
+    evidence_ref = (
+        args.attestation_evidence_ref
+        or f"attestation://compat-office/{args.provider_ref}"
+    )
+    digest = args.attestation_digest or f"sha256:{remote_target_hash(args.endpoint)}"
+    status = args.attestation_status or ("trusted" if mode == "verified" else "bootstrap")
+    return RemoteAttestation(
+        mode=mode,
+        issuer=issuer,
+        subject=subject,
+        issued_at=args.attestation_issued_at or utc_now(),
+        expires_at=args.attestation_expires_at,
+        evidence_ref=evidence_ref,
+        digest=digest,
+        status=status,
+    )
+
+
+def office_remote_governance(args: argparse.Namespace) -> RemoteGovernance:
+    return RemoteGovernance(
+        fleet_id=(
+            args.fleet_id
+            or os.environ.get(DEFAULT_REMOTE_FLEET_ID_ENV)
+            or "compat-office-local"
+        ),
+        governance_group=(
+            args.governance_group
+            or os.environ.get(DEFAULT_REMOTE_GOVERNANCE_GROUP_ENV)
+            or "operator-audit"
+        ),
+        policy_group=(
+            args.policy_group
+            or os.environ.get(DEFAULT_REMOTE_POLICY_GROUP_ENV)
+            or "compat-office-remote"
+        ),
+        registered_by=args.registered_by or PROVIDER_ID,
+        approval_ref=args.approval_ref or os.environ.get(DEFAULT_REMOTE_APPROVAL_REF_ENV),
+        allow_lateral_movement=bool(args.allow_lateral_movement),
+    )
+
+
+def remote_auth_description(
+    registration: RemoteRegistration | None,
+    registry_path: Path | None,
+) -> dict[str, object]:
+    if registration is None:
+        return {
+            "registered": False,
+            "provider_ref": None,
+            "auth_mode": None,
+            "target_hash": None,
+            "registry_path": str(registry_path) if registry_path is not None else None,
+        }
+    return {
+        "registered": True,
+        "provider_ref": registration.provider_ref,
+        "display_name": registration.display_name,
+        "auth_mode": registration.auth_mode,
+        "auth_header_name": registration.auth_header_name,
+        "auth_secret_env": registration.auth_secret_env,
+        "target_hash": registration.target_hash,
+        "capabilities": registration.capabilities,
+        "endpoint": registration.endpoint,
+        "registered_at": registration.registered_at,
+        "control_plane_provider_id": registration.control_plane_provider_id,
+        "registration_status": remote_registration_status(registration),
+        "last_heartbeat_at": registration.last_heartbeat_at,
+        "heartbeat_ttl_seconds": registration.heartbeat_ttl_seconds,
+        "revoked_at": registration.revoked_at,
+        "revocation_reason": registration.revocation_reason,
+        "attestation": (
+            registration.attestation.to_payload()
+            if registration.attestation is not None
+            else None
+        ),
+        "governance": (
+            registration.governance.to_payload()
+            if registration.governance is not None
+            else None
+        ),
+        "registry_path": str(registry_path) if registry_path is not None else None,
+    }
+
+
+def ensure_remote_registration_usable(
+    registration: RemoteRegistration,
+    *,
+    registry_path: Path,
+) -> None:
+    status = remote_registration_status(registration)
+    if status == "active":
+        return
+    if status == "revoked":
+        raise OfficeCommandError(
+            category="permission_denied",
+            error_code="office_remote_provider_revoked",
+            message=f"registered remote office provider is revoked: {registration.provider_ref}",
+            retryable=False,
+            details={
+                "provider_ref": registration.provider_ref,
+                "registration_status": status,
+                "revoked_at": registration.revoked_at,
+                "revocation_reason": registration.revocation_reason,
+                "remote_registry": str(registry_path),
+            },
+        )
+    raise OfficeCommandError(
+        category="precondition_failed",
+        error_code="office_remote_provider_stale",
+        message=f"registered remote office provider is not active: {registration.provider_ref}",
+        retryable=False,
+        details={
+            "provider_ref": registration.provider_ref,
+            "registration_status": status,
+            "last_heartbeat_at": registration.last_heartbeat_at,
+            "heartbeat_ttl_seconds": registration.heartbeat_ttl_seconds,
+            "remote_registry": str(registry_path),
+        },
+    )
+
+
+def resolve_remote_registration(
+    context: OfficeContext,
+    args: argparse.Namespace,
+) -> tuple[Path, RemoteRegistration | None]:
+    path, registrations = load_office_remote_registry(args)
+    match: RemoteRegistration | None = None
+
+    if context.provider_ref:
+        match = next(
+            (registration for registration in registrations if registration.provider_ref == context.provider_ref),
+            None,
+        )
+        if match is None:
+            raise OfficeCommandError(
+                category="precondition_failed",
+                error_code="office_remote_provider_not_registered",
+                message=f"remote provider is not registered: {context.provider_ref}",
+                retryable=False,
+                details={"provider_ref": context.provider_ref, "remote_registry": str(path)},
+            )
+    elif context.endpoint:
+        match = next(
+            (registration for registration in registrations if registration.endpoint == context.endpoint),
+            None,
+        )
+
+    if match is None:
+        return path, None
+
+    if context.endpoint and context.endpoint != match.endpoint:
+        raise OfficeCommandError(
+            category="invalid_request",
+            error_code="office_endpoint_registration_mismatch",
+            message="endpoint does not match the registered remote office provider endpoint",
+            retryable=False,
+            details={
+                "provider_ref": match.provider_ref,
+                "registered_endpoint": match.endpoint,
+                "requested_endpoint": context.endpoint,
+                "remote_registry": str(path),
+            },
+        )
+
+    if context.capability_id and context.capability_id not in match.capabilities:
+        raise OfficeCommandError(
+            category="permission_denied",
+            error_code="office_capability_not_registered",
+            message=f"registered remote office provider does not allow {context.capability_id}",
+            retryable=False,
+            details={
+                "provider_ref": match.provider_ref,
+                "registered_capabilities": match.capabilities,
+                "remote_registry": str(path),
+            },
+        )
+
+    ensure_remote_registration_usable(match, registry_path=path)
+    return path, match
+
+
+def resolve_effective_endpoint(
+    context: OfficeContext,
+    registration: RemoteRegistration | None,
+) -> str | None:
+    return context.endpoint or (registration.endpoint if registration is not None else None)
+
+
+def build_remote_auth_headers(
+    *,
+    context: OfficeContext,
+    registration: RemoteRegistration | None,
+    policy_context: CompatPolicyContext,
+) -> dict[str, str]:
+    if registration is None:
+        return {}
+
+    headers = {
+        "X-AIOS-Remote-Provider": registration.provider_ref,
+        "X-AIOS-Target-Hash": registration.target_hash,
+    }
+    auth_mode = registration.auth_mode
+    header_name = registration.auth_header_name
+
+    if auth_mode == "none":
+        return headers
+
+    if auth_mode in {"bearer", "header"}:
+        secret_env = registration.auth_secret_env or DEFAULT_REMOTE_AUTH_SECRET_ENV
+        secret = os.environ.get(secret_env)
+        if not secret:
+            raise OfficeCommandError(
+                category="precondition_failed",
+                error_code="office_remote_secret_missing",
+                message=f"remote auth secret env is not set: {secret_env}",
+                retryable=False,
+                details={"provider_ref": registration.provider_ref, "auth_secret_env": secret_env},
+            )
+        effective_header = header_name or ("Authorization" if auth_mode == "bearer" else "X-AIOS-Office-Secret")
+        headers[effective_header] = f"Bearer {secret}" if auth_mode == "bearer" else secret
+        return headers
+
+    if auth_mode == "execution-token":
+        if not isinstance(policy_context.execution_token, dict):
+            raise OfficeCommandError(
+                category="precondition_failed",
+                error_code="office_execution_token_missing",
+                message="registered remote office provider requires execution_token auth",
+                retryable=False,
+                details={"provider_ref": registration.provider_ref},
+            )
+        token_context = policy_context.token_context or {}
+        if token_context.get("capability_id") != context.capability_id:
+            raise OfficeCommandError(
+                category="permission_denied",
+                error_code="office_execution_token_capability_mismatch",
+                message="execution token capability does not match office operation",
+                retryable=False,
+                details={
+                    "provider_ref": registration.provider_ref,
+                    "expected_capability_id": context.capability_id,
+                    "token_capability_id": token_context.get("capability_id"),
+                },
+            )
+        if token_context.get("execution_location") != "sandbox":
+            raise OfficeCommandError(
+                category="permission_denied",
+                error_code="office_execution_token_location_mismatch",
+                message="execution token execution_location must be sandbox for compat office bridge",
+                retryable=False,
+                details={"provider_ref": registration.provider_ref},
+            )
+        if token_context.get("target_hash") != registration.target_hash:
+            raise OfficeCommandError(
+                category="permission_denied",
+                error_code="office_execution_token_target_mismatch",
+                message="execution token target_hash does not match registered remote office target",
+                retryable=False,
+                details={
+                    "provider_ref": registration.provider_ref,
+                    "expected_target_hash": registration.target_hash,
+                    "token_target_hash": token_context.get("target_hash"),
+                },
+            )
+        effective_header = header_name or "X-AIOS-Execution-Token"
+        headers[effective_header] = encode_execution_token(policy_context.execution_token)
+        signature = policy_context.execution_token.get("signature")
+        if isinstance(signature, str) and signature:
+            headers["X-AIOS-Execution-Token-Signature"] = signature
+        return headers
+
+    raise OfficeCommandError(
+        category="precondition_failed",
+        error_code="office_remote_auth_mode_invalid",
+        message=f"unsupported remote auth mode: {auth_mode}",
+        retryable=False,
+        details={"provider_ref": registration.provider_ref, "auth_mode": auth_mode},
+    )
+
+
 def build_manifest() -> dict[str, object]:
+    trust_policy = office_trust_policy()
+    registry_path, registrations = load_office_remote_registry()
+    summary = remote_registration_summary(registrations)
     return {
         "provider_id": PROVIDER_ID,
         "execution_location": "sandbox",
@@ -292,15 +711,37 @@ def build_manifest() -> dict[str, object]:
             "permission-manifest",
             "office-result-protocol-v1",
             "audit-jsonl",
+            "remote-register",
+            "remote-list",
+            "remote-heartbeat",
+            "remote-revoke",
+            "remote-unregister",
+            "remote-control-plane-register",
+            "remote-office-bridge",
         ],
         "compat_permission_schema_ref": COMPAT_PERMISSION_SCHEMA_REF,
         "compat_permission_manifest": load_compat_permission_manifest(),
         "result_protocol_schema_ref": RESULT_PROTOCOL_SCHEMA_REF,
+        "trust_policy": trust_policy,
+        "remote_registry": {
+            "path": str(registry_path),
+            "registered_remote_count": len(registrations),
+            "registered_providers": [registration.provider_ref for registration in registrations],
+            "auth_modes": sorted({registration.auth_mode for registration in registrations}),
+            "status_counts": summary["counts"],
+            "control_plane_provider_ids": sorted(
+                {
+                    registration.control_plane_provider_id
+                    for registration in registrations
+                    if registration.control_plane_provider_id
+                }
+            ),
+        },
         "notes": [
             "Baseline local document runtime is available",
             "Structured compat-office-document-v1 payloads are emitted for success and error paths",
             "Optional JSONL audit sink can be configured for machine-readable evidence",
-            "Supports text, markdown, and HTML documents with text-only PDF export",
+            "Registered remote office workers can open/export documents over authenticated HTTP bridge",
         ],
     }
 
@@ -527,6 +968,7 @@ def build_result_protocol(
     context: OfficeContext,
     document: dict[str, object] | None,
     export: dict[str, object] | None,
+    remote_bridge: dict[str, object] | None,
     finished_at: str,
     error: dict[str, object] | None,
     policy_context: CompatPolicyContext,
@@ -544,10 +986,13 @@ def build_result_protocol(
             "capability_id": context.capability_id,
             "path": context.source_path,
             "output_path": context.output_path,
+            "endpoint": context.endpoint,
+            "provider_ref": context.provider_ref,
             "preview_chars": context.preview_chars,
         },
         "document": document or build_document_info(),
         "export": export or build_export_info(),
+        "remote_bridge": remote_bridge,
         "policy": {
             "compat_permission_manifest": permission_manifest,
             "filesystem_access": capability.get("filesystem_access"),
@@ -582,6 +1027,7 @@ def build_success_payload(
     context: OfficeContext,
     document: dict[str, object],
     export: dict[str, object] | None,
+    remote_bridge: dict[str, object] | None,
     extra_payload: dict[str, object],
     audit_log: Path | None,
     policy_context: CompatPolicyContext,
@@ -592,6 +1038,7 @@ def build_success_payload(
         context=context,
         document=document,
         export=export,
+        remote_bridge=remote_bridge,
         finished_at=finished_at,
         error=None,
         policy_context=policy_context,
@@ -629,6 +1076,8 @@ def build_error_payload(
         capability_id=context.capability_id,
         source_path=source_path if isinstance(source_path, str) else context.source_path,
         output_path=export_path if isinstance(export_path, str) else context.output_path,
+        endpoint=context.endpoint,
+        provider_ref=context.provider_ref,
         preview_chars=context.preview_chars,
         started_at=context.started_at,
     )
@@ -637,6 +1086,11 @@ def build_error_payload(
         context=error_context,
         document=None,
         export=None,
+        remote_bridge=(
+            error.details.get("remote_bridge")
+            if isinstance(error.details.get("remote_bridge"), dict)
+            else None
+        ),
         finished_at=finished_at,
         error=error.to_payload(),
         policy_context=policy_context,
@@ -654,6 +1108,8 @@ def build_error_payload(
         "result_protocol": result_protocol,
         "finished_at": finished_at,
     }
+    if isinstance(error.details.get("remote_bridge"), dict):
+        payload["remote_bridge"] = error.details["remote_bridge"]
     payload["audit_id"] = append_audit_log(audit_log, payload, error_context, policy_context)
     payload["audit_log"] = str(audit_log) if audit_log is not None else None
     (payload.get("result_protocol") or {}).get("audit", {})["audit_id"] = payload["audit_id"]
@@ -676,6 +1132,11 @@ def append_audit_log(
     permission_manifest = load_compat_permission_manifest()
     capability = compat_capability(context.capability_id)
     error_payload = payload.get("error") if isinstance(payload.get("error"), dict) else {}
+    remote_bridge = (
+        payload.get("remote_bridge")
+        if isinstance(payload.get("remote_bridge"), dict)
+        else {}
+    )
     if error_payload.get("category") in {"invalid_request", "precondition_failed", "permission_denied"}:
         decision = "denied"
     else:
@@ -720,6 +1181,10 @@ def append_audit_log(
             "page_count": payload.get("page_count"),
             "bytes_written": payload.get("bytes_written"),
             "error_code": error_payload.get("error_code"),
+            "remote_provider_ref": remote_bridge.get("provider_ref"),
+            "remote_auth_mode": remote_bridge.get("auth_mode"),
+            "remote_endpoint": remote_bridge.get("endpoint"),
+            "remote_target_hash": remote_bridge.get("target_hash"),
             "policy_mode": policy_context.mode,
             "token_verified": policy_context.token_verified,
             "session_id": token_context.get("session_id"),
@@ -741,6 +1206,30 @@ def append_audit_log(
 
 def handle_health(audit_log: Path | None, policy_context: CompatPolicyContext) -> dict[str, object]:
     permission_manifest = load_compat_permission_manifest()
+    trust_policy = office_trust_policy()
+    registry_path, registrations = load_office_remote_registry()
+    fleet_ids = sorted(
+        {
+            registration.governance.fleet_id
+            for registration in registrations
+            if registration.governance is not None
+        }
+    )
+    governance_groups = sorted(
+        {
+            registration.governance.governance_group
+            for registration in registrations
+            if registration.governance is not None
+        }
+    )
+    attestation_modes = sorted(
+        {
+            registration.attestation.mode
+            for registration in registrations
+            if registration.attestation is not None
+        }
+    )
+    summary = remote_registration_summary(registrations)
     return {
         "status": "available",
         "provider_id": PROVIDER_ID,
@@ -751,7 +1240,7 @@ def handle_health(audit_log: Path | None, policy_context: CompatPolicyContext) -
         "compat_permission_schema_ref": COMPAT_PERMISSION_SCHEMA_REF,
         "compat_permission_manifest": permission_manifest,
         "result_protocol_schema_ref": RESULT_PROTOCOL_SCHEMA_REF,
-        "engine": "text-document-baseline",
+        "engine": "text-document+remote-office-bridge",
         "supported_suffixes": sorted(SUPPORTED_SUFFIXES),
         "audit_log_configured": audit_log is not None,
         "audit_log_path": str(audit_log) if audit_log is not None else None,
@@ -767,11 +1256,310 @@ def handle_health(audit_log: Path | None, policy_context: CompatPolicyContext) -
             else None
         ),
         "policy_mode": policy_context.mode,
+        "trust_policy": trust_policy,
+        "registered_remote_count": len(registrations),
+        "remote_registry_path": str(registry_path),
+        "remote_auth_modes": sorted({registration.auth_mode for registration in registrations}),
+        "remote_attestation_modes": attestation_modes,
+        "remote_fleet_ids": fleet_ids,
+        "remote_governance_groups": governance_groups,
+        "remote_status_counts": summary["counts"],
+        "remote_stale_provider_refs": summary["stale_provider_refs"],
+        "remote_revoked_provider_refs": summary["revoked_provider_refs"],
         "notes": [
             "Structured compat-office-document-v1 payloads are enabled",
             "Centralized policy/token verification is enabled when policyd_socket + execution_token are supplied",
-            "No native docx/xlsx/pptx bridge; intended as a governed fallback runtime",
+            "Registered remote office workers can open/export documents over authenticated HTTP bridge",
+            "Remote registrations carry attestation and fleet governance metadata for control-plane promotion",
         ],
+    }
+
+
+def handle_list_remotes(args: argparse.Namespace) -> dict[str, object]:
+    registry_path, registrations = load_office_remote_registry(args)
+    summary = remote_registration_summary(registrations)
+    return {
+        "provider_id": PROVIDER_ID,
+        "remote_registry": str(registry_path),
+        "registered_remote_count": len(registrations),
+        "remote_status_counts": summary["counts"],
+        "registered_remotes": [registration.to_payload() for registration in registrations],
+    }
+
+
+def handle_register_remote(args: argparse.Namespace) -> dict[str, object]:
+    invalid = [capability for capability in args.capabilities if capability not in DECLARED_CAPABILITIES]
+    if invalid:
+        raise OfficeCommandError(
+            category="invalid_request",
+            error_code="office_remote_capability_invalid",
+            message=f"unsupported office remote capability: {invalid[0]}",
+            retryable=False,
+            details={"declared_capabilities": DECLARED_CAPABILITIES},
+        )
+    registration = RemoteRegistration(
+        provider_ref=args.provider_ref,
+        endpoint=args.endpoint,
+        capabilities=sorted(set(args.capabilities)),
+        auth_mode=args.auth_mode,
+        auth_header_name=args.auth_header_name,
+        auth_secret_env=args.auth_secret_env,
+        target_hash=remote_target_hash(args.endpoint),
+        registered_at=utc_now(),
+        display_name=args.display_name,
+        registration_status="active",
+        last_heartbeat_at=utc_now(),
+        heartbeat_ttl_seconds=args.heartbeat_ttl_seconds,
+        attestation=office_remote_attestation(args),
+        governance=office_remote_governance(args),
+    )
+    registry_path, registrations = load_office_remote_registry(args)
+    updated = upsert_remote_registration(registrations, registration)
+    write_remote_registry(registry_path, updated)
+    return {
+        "provider_id": PROVIDER_ID,
+        "remote_registry": str(registry_path),
+        "registration": registration.to_payload(),
+        "registered_remote_count": len(updated),
+    }
+
+
+def handle_heartbeat_remote(args: argparse.Namespace) -> dict[str, object]:
+    registry_path, registrations = load_office_remote_registry(args)
+    index, registration = find_remote_registration(registrations, provider_ref=args.provider_ref)
+    if index is None or registration is None:
+        raise OfficeCommandError(
+            category="precondition_failed",
+            error_code="office_remote_provider_not_registered",
+            message=f"remote provider is not registered: {args.provider_ref}",
+            retryable=False,
+            details={"remote_registry": str(registry_path)},
+        )
+    updated_registration = touch_remote_registration(registration, timestamp=args.heartbeat_at)
+    updated = list(registrations)
+    updated[index] = updated_registration
+    write_remote_registry(registry_path, updated)
+    return {
+        "provider_id": PROVIDER_ID,
+        "remote_registry": str(registry_path),
+        "registration": updated_registration.to_payload(),
+        "registered_remote_count": len(updated),
+    }
+
+
+def handle_revoke_remote(args: argparse.Namespace) -> dict[str, object]:
+    registry_path, registrations = load_office_remote_registry(args)
+    index, registration = find_remote_registration(registrations, provider_ref=args.provider_ref)
+    if index is None or registration is None:
+        raise OfficeCommandError(
+            category="precondition_failed",
+            error_code="office_remote_provider_not_registered",
+            message=f"remote provider is not registered: {args.provider_ref}",
+            retryable=False,
+            details={"remote_registry": str(registry_path)},
+        )
+    updated_registration = revoke_remote_registration(
+        registration,
+        reason=args.reason,
+        timestamp=args.revoked_at,
+    )
+    updated = list(registrations)
+    updated[index] = updated_registration
+    write_remote_registry(registry_path, updated)
+    return {
+        "provider_id": PROVIDER_ID,
+        "remote_registry": str(registry_path),
+        "registration": updated_registration.to_payload(),
+        "registered_remote_count": len(updated),
+    }
+
+
+def handle_unregister_remote(args: argparse.Namespace) -> dict[str, object]:
+    registry_path, registrations = load_office_remote_registry(args)
+    updated, removed = remove_remote_registration(registrations, provider_ref=args.provider_ref)
+    if removed is None:
+        raise OfficeCommandError(
+            category="precondition_failed",
+            error_code="office_remote_provider_not_registered",
+            message=f"remote provider is not registered: {args.provider_ref}",
+            retryable=False,
+            details={"remote_registry": str(registry_path)},
+        )
+    write_remote_registry(registry_path, updated)
+    return {
+        "provider_id": PROVIDER_ID,
+        "remote_registry": str(registry_path),
+        "unregistered": True,
+        "registration": removed.to_payload(),
+        "registered_remote_count": len(updated),
+    }
+
+
+def build_control_plane_descriptor(
+    registration: RemoteRegistration,
+    *,
+    provider_id: str,
+    display_name: str | None,
+) -> dict[str, object]:
+    descriptor = json.loads(resolve_descriptor_path().read_text(encoding="utf-8"))
+    descriptor["provider_id"] = provider_id
+    descriptor["display_name"] = display_name or registration.display_name or registration.provider_ref
+    descriptor["execution_location"] = "attested_remote"
+    descriptor["trust_policy_modes"] = sorted({"registered-remote", registration.auth_mode})
+    descriptor["degradation_policy"] = "fallback-to-local-office-compat"
+    descriptor["audit_tags"] = sorted({*descriptor.get("audit_tags", []), "remote"})
+    descriptor["supported_targets"] = sorted({*descriptor.get("supported_targets", []), "registered-remote"})
+    descriptor["capabilities"] = [
+        capability
+        for capability in descriptor.get("capabilities", [])
+        if isinstance(capability, dict)
+        and capability.get("capability_id") in registration.capabilities
+    ]
+    compat_manifest = descriptor.get("compat_permission_manifest") or {}
+    if isinstance(compat_manifest, dict):
+        compat_manifest["provider_id"] = provider_id
+        compat_manifest["execution_location"] = "attested_remote"
+        compat_manifest["capabilities"] = [
+            capability
+            for capability in compat_manifest.get("capabilities", [])
+            if isinstance(capability, dict)
+            and capability.get("capability_id") in registration.capabilities
+        ]
+        descriptor["compat_permission_manifest"] = compat_manifest
+    descriptor["remote_registration"] = {
+        "source_provider_id": PROVIDER_ID,
+        "provider_ref": registration.provider_ref,
+        "endpoint": registration.endpoint,
+        "auth_mode": registration.auth_mode,
+        "auth_header_name": registration.auth_header_name,
+        "auth_secret_env": registration.auth_secret_env,
+        "target_hash": registration.target_hash,
+        "capabilities": registration.capabilities,
+        "registered_at": registration.registered_at,
+        "display_name": registration.display_name,
+        "control_plane_provider_id": provider_id,
+        "registration_status": remote_registration_status(registration),
+        "last_heartbeat_at": registration.last_heartbeat_at,
+        "heartbeat_ttl_seconds": registration.heartbeat_ttl_seconds,
+        "revoked_at": registration.revoked_at,
+        "revocation_reason": registration.revocation_reason,
+        "attestation": (
+            registration.attestation.to_payload()
+            if registration.attestation is not None
+            else None
+        ),
+        "governance": (
+            registration.governance.to_payload()
+            if registration.governance is not None
+            else None
+        ),
+    }
+    return descriptor
+
+
+def handle_register_control_plane(args: argparse.Namespace) -> dict[str, object]:
+    registry_path, registrations = load_office_remote_registry(args)
+    registration = next(
+        (item for item in registrations if item.provider_ref == args.provider_ref),
+        None,
+    )
+    if registration is None:
+        raise OfficeCommandError(
+            category="precondition_failed",
+            error_code="office_remote_provider_not_registered",
+            message=f"remote provider is not registered: {args.provider_ref}",
+            retryable=False,
+            details={"remote_registry": str(registry_path)},
+        )
+    ensure_remote_registration_usable(registration, registry_path=registry_path)
+    provider_id = args.provider_id or normalize_remote_provider_id(
+        "compat.office.remote",
+        registration.provider_ref,
+    )
+    descriptor = build_control_plane_descriptor(
+        registration,
+        provider_id=provider_id,
+        display_name=args.display_name,
+    )
+    try:
+        record = agentd_rpc(
+            agentd_socket_path(args.agentd_socket),
+            PROVIDER_REGISTER_METHOD,
+            {"descriptor": descriptor},
+            error_prefix="office",
+        )
+    except RemoteSupportError as exc:
+        raise OfficeCommandError(
+            category=exc.category,
+            error_code=exc.error_code,
+            message=exc.message,
+            retryable=exc.retryable,
+            details=exc.details or {},
+        ) from exc
+    updated_registrations = [
+        RemoteRegistration(
+            provider_ref=item.provider_ref,
+            endpoint=item.endpoint,
+            capabilities=item.capabilities,
+            auth_mode=item.auth_mode,
+            auth_header_name=item.auth_header_name,
+            auth_secret_env=item.auth_secret_env,
+            target_hash=item.target_hash,
+            registered_at=item.registered_at,
+            display_name=item.display_name,
+            control_plane_provider_id=provider_id if item.provider_ref == registration.provider_ref else item.control_plane_provider_id,
+            registration_status=item.registration_status,
+            last_heartbeat_at=item.last_heartbeat_at,
+            heartbeat_ttl_seconds=item.heartbeat_ttl_seconds,
+            revoked_at=item.revoked_at,
+            revocation_reason=item.revocation_reason,
+            attestation=item.attestation,
+            governance=item.governance,
+        )
+        for item in registrations
+    ]
+    write_remote_registry(registry_path, updated_registrations)
+    return {
+        "provider_id": PROVIDER_ID,
+        "remote_registry": str(registry_path),
+        "control_plane_provider_id": provider_id,
+        "agentd_socket": str(agentd_socket_path(args.agentd_socket)),
+        "record": record,
+    }
+
+
+def remote_bridge_payload(
+    *,
+    endpoint: str | None,
+    registration: RemoteRegistration | None,
+    registry_path: Path | None,
+    trust_policy: dict[str, object],
+    response_status: int | None = None,
+) -> dict[str, object]:
+    payload = remote_auth_description(registration, registry_path)
+    payload.update(
+        {
+            "endpoint": endpoint,
+            "trust_mode": trust_policy.get("mode"),
+            "trust_enforced": trust_policy.get("enforced"),
+            "response_status": response_status,
+        }
+    )
+    return payload
+
+
+def encode_document_payload(document: DocumentContent) -> dict[str, object]:
+    return {
+        "source_name": document.source_path.name,
+        "source_path": str(document.source_path),
+        "mime_type": document.mime_type,
+        "title": document.title,
+        "size_bytes": document.size_bytes,
+        "line_count": document.line_count,
+        "char_count": document.char_count,
+        "loaded_at": document.loaded_at,
+        "text_content": document.text_content,
+        "document_base64": base64.b64encode(document.source_path.read_bytes()).decode("ascii"),
     }
 
 
@@ -781,8 +1569,121 @@ def handle_open(
     preview_chars: int,
     audit_log: Path | None,
     policy_context: CompatPolicyContext,
+    args: argparse.Namespace,
 ) -> dict[str, object]:
     document = load_document(path)
+    if context.endpoint or context.provider_ref:
+        registry_path, registration = resolve_remote_registration(context, args)
+        endpoint = resolve_effective_endpoint(context, registration)
+        if endpoint is None:
+            raise OfficeCommandError(
+                category="internal",
+                error_code="office_remote_context_incomplete",
+                message="office remote open context is incomplete",
+                retryable=False,
+            )
+        trust_policy = office_trust_policy()
+        request_payload = {
+            "provider_id": PROVIDER_ID,
+            "worker_contract": WORKER_CONTRACT,
+            "operation": context.operation,
+            "request": {
+                "capability_id": context.capability_id,
+                "preview_chars": preview_chars,
+                "document": encode_document_payload(document),
+            },
+        }
+        headers = build_remote_auth_headers(
+            context=context,
+            registration=registration,
+            policy_context=policy_context,
+        )
+        try:
+            remote_result = post_json(
+                endpoint,
+                request_payload,
+                timeout_seconds=DEFAULT_TIMEOUT_SECONDS,
+                trust_policy=trust_policy,
+                error_prefix="office",
+                user_agent="AIOSOfficeCompat/0.3",
+                extra_headers=headers,
+            )
+        except RemoteSupportError as exc:
+            raise OfficeCommandError(
+                category=exc.category,
+                error_code=exc.error_code,
+                message=exc.message,
+                retryable=exc.retryable,
+                details={
+                    **(exc.details or {}),
+                    "remote_bridge": remote_bridge_payload(
+                        endpoint=endpoint,
+                        registration=registration,
+                        registry_path=registry_path,
+                        trust_policy=trust_policy,
+                    ),
+                },
+            ) from exc
+        response = remote_result.get("response")
+        if not isinstance(response, dict):
+            raise OfficeCommandError(
+                category="remote_error",
+                error_code="office_remote_response_invalid",
+                message="remote office worker returned a non-object response",
+                retryable=True,
+                details={
+                    "remote_bridge": remote_bridge_payload(
+                        endpoint=endpoint,
+                        registration=registration,
+                        registry_path=registry_path,
+                        trust_policy=trust_policy,
+                        response_status=int(remote_result.get("status_code") or 0),
+                    )
+                },
+            )
+        preview = str(response.get("preview") or document.text_content[:preview_chars])
+        document_payload = build_document_info(
+            document=document,
+            preview=preview,
+            supported_export_formats=["pdf"],
+        )
+        document_payload["title"] = response.get("title") or document_payload["title"]
+        document_payload["mime_type"] = response.get("mime_type") or document_payload["mime_type"]
+        document_payload["preview"] = preview
+        return build_success_payload(
+            status=str(response.get("status") or "ok"),
+            context=context,
+            document=document_payload,
+            export=None,
+            remote_bridge=remote_bridge_payload(
+                endpoint=endpoint,
+                registration=registration,
+                registry_path=registry_path,
+                trust_policy=trust_policy,
+                response_status=int(remote_result.get("status_code") or 200),
+            ),
+            extra_payload={
+                "path": str(document.source_path),
+                "title": document_payload["title"],
+                "mime_type": document_payload["mime_type"],
+                "size_bytes": document.size_bytes,
+                "line_count": document.line_count,
+                "char_count": document.char_count,
+                "preview": preview,
+                "loaded_at": document.loaded_at,
+                "supported_export_formats": ["pdf"],
+                "remote_bridge": remote_bridge_payload(
+                    endpoint=endpoint,
+                    registration=registration,
+                    registry_path=registry_path,
+                    trust_policy=trust_policy,
+                    response_status=int(remote_result.get("status_code") or 200),
+                ),
+                "remote_response": response,
+            },
+            audit_log=audit_log,
+            policy_context=policy_context,
+        )
     preview = document.text_content[:preview_chars]
     document_payload = build_document_info(
         document=document,
@@ -794,6 +1695,7 @@ def handle_open(
         context=context,
         document=document_payload,
         export=None,
+        remote_bridge=None,
         extra_payload={
             "path": str(document.source_path),
             "title": document.title,
@@ -816,8 +1718,144 @@ def handle_export_pdf(
     output_path: Path,
     audit_log: Path | None,
     policy_context: CompatPolicyContext,
+    args: argparse.Namespace,
 ) -> dict[str, object]:
     document = load_document(path)
+    if context.endpoint or context.provider_ref:
+        registry_path, registration = resolve_remote_registration(context, args)
+        endpoint = resolve_effective_endpoint(context, registration)
+        if endpoint is None:
+            raise OfficeCommandError(
+                category="internal",
+                error_code="office_remote_context_incomplete",
+                message="office remote export context is incomplete",
+                retryable=False,
+            )
+        trust_policy = office_trust_policy()
+        request_payload = {
+            "provider_id": PROVIDER_ID,
+            "worker_contract": WORKER_CONTRACT,
+            "operation": context.operation,
+            "request": {
+                "capability_id": context.capability_id,
+                "output_format": "pdf",
+                "document": encode_document_payload(document),
+            },
+        }
+        headers = build_remote_auth_headers(
+            context=context,
+            registration=registration,
+            policy_context=policy_context,
+        )
+        try:
+            remote_result = post_json(
+                endpoint,
+                request_payload,
+                timeout_seconds=DEFAULT_TIMEOUT_SECONDS,
+                trust_policy=trust_policy,
+                error_prefix="office",
+                user_agent="AIOSOfficeCompat/0.3",
+                extra_headers=headers,
+            )
+        except RemoteSupportError as exc:
+            raise OfficeCommandError(
+                category=exc.category,
+                error_code=exc.error_code,
+                message=exc.message,
+                retryable=exc.retryable,
+                details={
+                    **(exc.details or {}),
+                    "remote_bridge": remote_bridge_payload(
+                        endpoint=endpoint,
+                        registration=registration,
+                        registry_path=registry_path,
+                        trust_policy=trust_policy,
+                    ),
+                },
+            ) from exc
+        response = remote_result.get("response")
+        if not isinstance(response, dict):
+            raise OfficeCommandError(
+                category="remote_error",
+                error_code="office_remote_response_invalid",
+                message="remote office worker returned a non-object response",
+                retryable=True,
+                details={
+                    "remote_bridge": remote_bridge_payload(
+                        endpoint=endpoint,
+                        registration=registration,
+                        registry_path=registry_path,
+                        trust_policy=trust_policy,
+                        response_status=int(remote_result.get("status_code") or 0),
+                    )
+                },
+            )
+        pdf_base64 = response.get("pdf_base64")
+        if not isinstance(pdf_base64, str) or not pdf_base64:
+            raise OfficeCommandError(
+                category="remote_error",
+                error_code="office_remote_pdf_missing",
+                message="remote office worker did not return pdf_base64",
+                retryable=True,
+                details={
+                    "remote_bridge": remote_bridge_payload(
+                        endpoint=endpoint,
+                        registration=registration,
+                        registry_path=registry_path,
+                        trust_policy=trust_policy,
+                        response_status=int(remote_result.get("status_code") or 200),
+                    )
+                },
+            )
+        pdf_bytes = base64.b64decode(pdf_base64.encode("ascii"))
+        resolved_output = output_path.expanduser().resolve()
+        resolved_output.parent.mkdir(parents=True, exist_ok=True)
+        resolved_output.write_bytes(pdf_bytes)
+        exported_at = str(response.get("exported_at") or utc_now())
+        document_payload = build_document_info(
+            document=document,
+            preview=None,
+            supported_export_formats=["pdf"],
+        )
+        export_payload = build_export_info(
+            output_path=str(resolved_output),
+            mime_type=str(response.get("mime_type") or "application/pdf"),
+            page_count=int(response.get("page_count") or 1),
+            bytes_written=len(pdf_bytes),
+            exported_at=exported_at,
+        )
+        return build_success_payload(
+            status=str(response.get("status") or "ok"),
+            context=context,
+            document=document_payload,
+            export=export_payload,
+            remote_bridge=remote_bridge_payload(
+                endpoint=endpoint,
+                registration=registration,
+                registry_path=registry_path,
+                trust_policy=trust_policy,
+                response_status=int(remote_result.get("status_code") or 200),
+            ),
+            extra_payload={
+                "source_path": str(document.source_path),
+                "output_path": str(resolved_output),
+                "mime_type": export_payload["mime_type"],
+                "page_count": export_payload["page_count"],
+                "bytes_written": len(pdf_bytes),
+                "title": document.title,
+                "exported_at": exported_at,
+                "remote_bridge": remote_bridge_payload(
+                    endpoint=endpoint,
+                    registration=registration,
+                    registry_path=registry_path,
+                    trust_policy=trust_policy,
+                    response_status=int(remote_result.get("status_code") or 200),
+                ),
+                "remote_response": response,
+            },
+            audit_log=audit_log,
+            policy_context=policy_context,
+        )
     pdf_bytes, page_count = build_pdf(document.text_content)
     resolved_output = output_path.expanduser().resolve()
     resolved_output.parent.mkdir(parents=True, exist_ok=True)
@@ -836,6 +1874,7 @@ def handle_export_pdf(
         context=context,
         document=document_payload,
         export=export_payload,
+        remote_bridge=None,
         extra_payload={
             "source_path": str(document.source_path),
             "output_path": str(resolved_output),
@@ -870,6 +1909,18 @@ def main() -> int:
             payload = handle_health(audit_log, policy_context)
         elif args.command == "permissions":
             payload = load_compat_permission_manifest()
+        elif args.command == "list-remotes":
+            payload = handle_list_remotes(args)
+        elif args.command == "register-remote":
+            payload = handle_register_remote(args)
+        elif args.command == "heartbeat-remote":
+            payload = handle_heartbeat_remote(args)
+        elif args.command == "revoke-remote":
+            payload = handle_revoke_remote(args)
+        elif args.command == "unregister-remote":
+            payload = handle_unregister_remote(args)
+        elif args.command == "register-control-plane":
+            payload = handle_register_control_plane(args)
         elif args.command == "open":
             policy_context = resolve_policy_context(
                 args,
@@ -883,6 +1934,7 @@ def main() -> int:
                 args.preview_chars,
                 audit_log,
                 policy_context,
+                args,
             )
         elif args.command == "export-pdf":
             policy_context = resolve_policy_context(
@@ -897,6 +1949,7 @@ def main() -> int:
                 args.output_path,
                 audit_log,
                 policy_context,
+                args,
             )
         else:
             raise OfficeCommandError(

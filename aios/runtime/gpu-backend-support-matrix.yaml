@@ -1,5 +1,5 @@
 schema_version: "1.0.0"
-updated_at: "2026-03-14"
+updated_at: "2026-03-16"
 task_id: "P5-GPU-001"
 summary:
   default_backend_policy: "global-default-local-cpu"
@@ -30,6 +30,8 @@ backends:
       - "scripts/test-runtimed-backend-smoke.py"
       - "scripts/test-runtimed-hardware-profile-managed-worker-smoke.py"
       - "scripts/test-runtimed-jetson-platform-worker-smoke.py"
+      - "scripts/test-runtimed-jetson-platform-vendor-helper-smoke.py"
+      - "scripts/test-runtimed-jetson-platform-vendor-worker-smoke.py"
       - "scripts/test-runtimed-jetson-platform-worker-failure-smoke.py"
       - "scripts/test-runtime-local-inference-provider-smoke.py"
 platforms:
@@ -75,11 +77,15 @@ platforms:
     evidence:
       - "scripts/test-runtimed-hardware-profile-managed-worker-smoke.py"
       - "scripts/test-runtimed-jetson-platform-worker-smoke.py"
+      - "scripts/test-runtimed-jetson-platform-vendor-helper-smoke.py"
+      - "scripts/test-runtimed-jetson-platform-vendor-worker-smoke.py"
       - "scripts/test-runtimed-jetson-platform-worker-failure-smoke.py"
       - "scripts/test-image-delivery-smoke.py"
       - "scripts/test-platform-media-smoke.py"
     notes:
       - "Jetson runtime profile prefers local-gpu and routes local-gpu/local-npu through a managed worker bridge."
+      - "A shipped vendor helper now backs the default Jetson managed-worker path and records machine-readable evidence under the runtimed state dir."
+      - "A dedicated vendor-command smoke proves launch-managed-worker.sh can bridge local-gpu/local-npu into AIOS_JETSON_LOCAL_GPU_WORKER_COMMAND and AIOS_JETSON_LOCAL_NPU_WORKER_COMMAND."
       - "When no vendor bridge command is configured, runtimed must report launch-failed and degrade to local-cpu."
 evidence_docs:
   - "docs/system-development/15-runtime-profile-与-route-profile-规范.md"

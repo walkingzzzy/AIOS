@@ -2,11 +2,12 @@ component_id: approval-panel
 status: done
 role: shell-approval-surface
 integrates:
-  - aios-policyd
+  - aios-agentd
 features:
-  - approval.list
-  - approval.get
-  - approval.resolve
+  - agent.approval.list
+  - agent.approval.get
+  - agent.approval.create
+  - agent.approval.resolve
 entrypoint: client.py
 prototype_entrypoint: prototype.py
 panel_entrypoint: panel.py

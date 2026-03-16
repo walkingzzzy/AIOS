@@ -7,7 +7,7 @@ import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Iterator
 
 
 SYSTEM_HEALTH_GET = "system.health.get"
@@ -20,6 +20,15 @@ def _response(*, request_id: int | str | None, result: dict | None = None, error
     else:
         payload = {"jsonrpc": "2.0", "id": request_id, "result": result}
     return json.dumps(payload, ensure_ascii=False).encode("utf-8") + b"\n"
+
+
+def _mock_transport_payload(*, capture_status: str, service_id: str) -> dict[str, Any]:
+    return {
+        "transport": "mock-file",
+        "service_kind": "device-capture",
+        "service_id": service_id,
+        "capture_status": capture_status,
+    }
 
 
 def wait_for_socket(path: Path, timeout: float = 2.0) -> None:
@@ -38,6 +47,20 @@ def start_mock_deviced_server(
     service_id: str = "mock-deviced",
 ) -> tuple[threading.Event, threading.Thread]:
     stop_event = threading.Event()
+    socket_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if not hasattr(socket, "AF_UNIX"):
+        socket_path.write_text(
+            json.dumps(
+                _mock_transport_payload(capture_status=capture_status, service_id=service_id),
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        thread = threading.Thread(target=stop_event.wait, daemon=True)
+        thread.start()
+        wait_for_socket(socket_path)
+        return stop_event, thread
 
     def run() -> None:
         sequence = 0
@@ -130,6 +153,11 @@ def stop_mock_deviced_server(stop_event: threading.Event, thread: threading.Thre
     thread.join(timeout=2.0)
 
 
+def cleanup_mock_deviced(socket_path: Path) -> None:
+    if socket_path.exists() and socket_path.is_file():
+        socket_path.unlink()
+
+
 @contextmanager
 def managed_mock_deviced(
     socket_path: Path,
@@ -146,3 +174,4 @@ def managed_mock_deviced(
         yield socket_path
     finally:
         stop_mock_deviced_server(stop_event, thread)
+        cleanup_mock_deviced(socket_path)

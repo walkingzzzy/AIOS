@@ -3,18 +3,44 @@
   "$id": "aios/route-profile.schema.json",
   "title": "AIOS Route Profile",
   "type": "object",
-  "required": ["profile_id", "default_topology", "allowed_topologies", "router_stack"],
+  "required": [
+    "profile_id",
+    "default_topology",
+    "allowed_topologies",
+    "router_stack",
+    "semantic_router_enabled",
+    "llm_router_enabled",
+    "cost_router_enabled",
+    "provider_preference",
+    "prefer_local",
+    "prefer_structured_interface",
+    "allow_gui_fallback",
+    "iteration_cap",
+    "tool_call_cap",
+    "replan_cap",
+    "escalation_threshold",
+    "human_handoff_policy"
+  ],
   "properties": {
     "profile_id": { "type": "string" },
     "default_topology": { "enum": ["direct", "tool-calling", "supervisor", "plan-execute"] },
-    "allowed_topologies": { "type": "array", "items": { "type": "string" } },
+    "allowed_topologies": {
+      "type": "array",
+      "items": { "enum": ["direct", "tool-calling", "supervisor", "plan-execute"] }
+    },
     "router_stack": { "type": "array", "items": { "type": "string" } },
+    "semantic_router_enabled": { "type": "boolean" },
+    "llm_router_enabled": { "type": "boolean" },
+    "cost_router_enabled": { "type": "boolean" },
+    "provider_preference": { "type": "string" },
     "prefer_local": { "type": "boolean" },
     "prefer_structured_interface": { "type": "boolean" },
     "allow_gui_fallback": { "enum": ["disabled", "manual-only", "allowed-by-policy"] },
     "iteration_cap": { "type": "integer", "minimum": 0 },
     "tool_call_cap": { "type": "integer", "minimum": 0 },
-    "replan_cap": { "type": "integer", "minimum": 0 }
+    "replan_cap": { "type": "integer", "minimum": 0 },
+    "escalation_threshold": { "type": "string" },
+    "human_handoff_policy": { "type": "string" }
   },
   "additionalProperties": true
 }

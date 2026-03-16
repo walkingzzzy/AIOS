@@ -12,6 +12,8 @@ pub struct Config {
     pub runtimed_socket: PathBuf,
     pub provider_registry_state_dir: PathBuf,
     pub provider_descriptor_dirs: Vec<PathBuf>,
+    pub system_intent_provider_socket: PathBuf,
+    pub system_files_provider_socket: PathBuf,
 }
 
 impl Config {
@@ -41,6 +43,15 @@ impl Config {
             .filter(|entries| !entries.is_empty())
             .unwrap_or_else(default_provider_descriptor_dirs);
 
+        let system_intent_provider_socket =
+            aios_core::config::env_path_or("AIOS_AGENTD_SYSTEM_INTENT_PROVIDER_SOCKET", || {
+                PathBuf::from("/run/aios/system-intent-provider/system-intent-provider.sock")
+            });
+        let system_files_provider_socket =
+            aios_core::config::env_path_or("AIOS_AGENTD_SYSTEM_FILES_PROVIDER_SOCKET", || {
+                PathBuf::from("/run/aios/system-files-provider/system-files-provider.sock")
+            });
+
         Ok(Self {
             service_id: "aios-agentd".to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
@@ -50,6 +61,8 @@ impl Config {
             runtimed_socket,
             provider_registry_state_dir,
             provider_descriptor_dirs,
+            system_intent_provider_socket,
+            system_files_provider_socket,
         })
     }
 }

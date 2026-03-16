@@ -7,12 +7,12 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent.parent
 EXECUTOR = ROOT / "aios" / "compat" / "code-sandbox" / "runtime" / "aios_sandbox_executor.py"
+DEFAULT_WORK_ROOT = ROOT / "out" / "validation" / "code-sandbox-smoke"
 
 
 def parse_args() -> argparse.Namespace:
@@ -31,6 +31,17 @@ def run_json(command: list[str], *, env: dict[str, str] | None = None, check: bo
         env=env,
     )
     return completed.returncode, json.loads(completed.stdout)
+
+
+def resolve_work_root(output_dir: Path | None) -> Path:
+    if output_dir is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        return output_dir
+
+    if DEFAULT_WORK_ROOT.exists():
+        shutil.rmtree(DEFAULT_WORK_ROOT, ignore_errors=True)
+    DEFAULT_WORK_ROOT.mkdir(parents=True, exist_ok=True)
+    return DEFAULT_WORK_ROOT
 
 
 def main() -> int:
@@ -64,8 +75,7 @@ def main() -> int:
     if health.get("worker_contract") != "compat-sandbox-executor-v1":
         raise SystemExit("health worker contract mismatch")
 
-    temp_root = args.output_dir or Path(tempfile.mkdtemp(prefix="aios-sandbox-smoke-"))
-    temp_root.mkdir(parents=True, exist_ok=True)
+    temp_root = resolve_work_root(args.output_dir)
     failed = False
 
     try:

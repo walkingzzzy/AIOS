@@ -14,7 +14,7 @@ import textwrap
 import time
 from pathlib import Path
 
-from aios_cargo_bins import default_aios_bin_dir
+from aios_cargo_bins import default_aios_bin_dir, resolve_binary_path
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -32,10 +32,14 @@ def parse_args() -> argparse.Namespace:
 
 def resolve_binary(name: str, explicit: Path | None, bin_dir: Path | None) -> Path:
     if explicit is not None:
-        return explicit
+        return resolve_binary_path(explicit.parent, explicit.name)
     if bin_dir is not None:
-        return bin_dir / name
-    return default_aios_bin_dir(ROOT) / name
+        return resolve_binary_path(bin_dir, name)
+    return resolve_binary_path(default_aios_bin_dir(ROOT), name)
+
+
+def unix_rpc_supported() -> bool:
+    return hasattr(socket, "AF_UNIX") and os.name != "nt"
 
 
 def ensure_binary(path: Path, package: str) -> None:
@@ -133,6 +137,9 @@ def start_worker(backend: str, socket_path: Path) -> subprocess.Popen:
 
 def main() -> int:
     args = parse_args()
+    if not unix_rpc_supported():
+        print("runtimed worker contract smoke skipped: unix rpc transport unsupported on this platform")
+        return 0
     runtimed = resolve_binary("runtimed", args.runtimed, args.bin_dir)
     ensure_binary(runtimed, "aios-runtimed")
 

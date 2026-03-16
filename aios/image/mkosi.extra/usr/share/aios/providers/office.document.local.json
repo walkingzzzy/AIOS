@@ -6,6 +6,7 @@
   "owner": "aios-compat",
   "worker_contract": "compat-office-document-v1",
   "result_protocol_schema_ref": "aios/compat-office-result.schema.json",
+  "trust_policy_modes": ["registered-remote", "none", "bearer", "header", "execution-token"],
   "capabilities": [
     {
       "capability_id": "compat.document.open",
@@ -81,7 +82,7 @@
     "audit_tags": ["office", "compat", "sandbox"],
     "taint_behavior": "user-object-bound"
   },
-  "supported_targets": ["file", "export-target"],
+  "supported_targets": ["file", "export-target", "registered-remote"],
   "timeout_policy": "bounded-60s",
   "retry_policy": "no-retry",
   "healthcheck": {

@@ -2,13 +2,13 @@ component_id: launcher
 status: done
 role: shell-launcher
 integrates:
-  - aios-sessiond
+  - aios-agentd
 features:
-  - session.create
-  - session.list
-  - session.evidence.get
-  - session.resume
-  - task.create
+  - agent.session.create
+  - agent.session.list
+  - agent.session.evidence.get
+  - agent.session.resume
+  - agent.task.create
 entrypoint: client.py
 prototype_entrypoint: prototype.py
 panel_entrypoint: panel.py

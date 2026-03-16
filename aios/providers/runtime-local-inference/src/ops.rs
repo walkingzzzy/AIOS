@@ -1,12 +1,20 @@
 use std::collections::BTreeSet;
 
+use serde_json::json;
+
 use aios_contracts::{
-    methods, ExecutionToken, RuntimeEmbedRequest, RuntimeEmbedResponse, RuntimeEmbeddingRecord,
-    RuntimeInferRequest, RuntimeInferResponse, RuntimeQueueResponse, RuntimeRerankRequest,
-    RuntimeRerankResponse, RuntimeRerankResult,
+    methods, ExecutionToken, HealthResponse, RuntimeEmbedRequest, RuntimeEmbedResponse,
+    RuntimeEmbeddingRecord, RuntimeInferRequest, RuntimeInferResponse, RuntimeQueueResponse,
+    RuntimeRerankRequest, RuntimeRerankResponse, RuntimeRerankResult,
 };
 
 use crate::AppState;
+
+const DEFAULT_EMBEDDING_VECTOR_DIMENSION: u32 = 8;
+const EMBEDDING_ROUTE_STATE: &str = "provider-local-embedding";
+const RERANK_ROUTE_STATE: &str = "provider-local-rerank";
+const EMBEDDING_ALGORITHM: &str = "deterministic-embedding-v1";
+const RERANK_ALGORITHM: &str = "lexical-overlap-v1";
 
 pub fn infer(
     state: &AppState,
@@ -40,6 +48,9 @@ pub fn infer(
 
     match result {
         Ok(mut response) => {
+            let (_, _, runtime_dependency) =
+                provider_runtime_dependency_state(runtime_health.as_ref());
+            append_provider_operation_notes(&mut response.notes, "infer", runtime_dependency);
             attach_runtime_metadata(
                 state,
                 token,
@@ -54,6 +65,7 @@ pub fn infer(
             response.queue_saturated = queue_snapshot.as_ref().map(|item| item.saturated);
             response.runtime_budget = crate::clients::fetch_runtime_budget(state).ok();
             let _ = crate::clients::report_provider_health(state, "available", None);
+            emit_infer_trace(state, request, &response);
             Ok(response)
         }
         Err(error) => {
@@ -66,6 +78,9 @@ pub fn infer(
             );
 
             let mut notes = Vec::new();
+            let (_, _, runtime_dependency) =
+                provider_runtime_dependency_state(runtime_health.as_ref());
+            append_provider_operation_notes(&mut notes, "infer", runtime_dependency);
             attach_runtime_metadata(
                 state,
                 token,
@@ -74,7 +89,7 @@ pub fn infer(
                 runtime_health.as_ref().map(|item| item.service_id.clone()),
             );
 
-            Ok(RuntimeInferResponse {
+            let response = RuntimeInferResponse {
                 backend_id: request
                     .preferred_backend
                     .clone()
@@ -91,7 +106,9 @@ pub fn infer(
                 queue_saturated: queue_snapshot.as_ref().map(|item| item.saturated),
                 runtime_budget: None,
                 notes,
-            })
+            };
+            emit_infer_trace(state, request, &response);
+            Ok(response)
         }
     }
 }
@@ -128,23 +145,23 @@ pub fn embed(
     let queue_snapshot = crate::clients::fetch_runtime_queue(state).ok();
     let runtime_health = crate::clients::fetch_runtime_health(state).ok();
     let runtime_budget = crate::clients::fetch_runtime_budget(state).ok();
-    let vector_dimension = 8u32;
-    let embeddings = request
-        .inputs
-        .iter()
-        .enumerate()
-        .map(|(index, input)| RuntimeEmbeddingRecord {
-            input_index: index,
-            vector: deterministic_embedding(input, vector_dimension as usize),
-            text_length: input.chars().count(),
-        })
-        .collect::<Vec<_>>();
+    let (provider_status, degraded, runtime_dependency) =
+        provider_runtime_dependency_state(runtime_health.as_ref());
+    let vector_dimension = DEFAULT_EMBEDDING_VECTOR_DIMENSION;
+    let (backend_id, backend_source) = resolve_backend_id(
+        request.preferred_backend.as_ref(),
+        &state.config.embedding_backend,
+    );
+    let embeddings = build_embedding_records(&request.inputs, vector_dimension as usize);
 
-    let mut notes = vec![
-        "provider_operation=embedding-skeleton".to_string(),
-        format!("embedding_backend={}", state.config.embedding_backend),
-        format!("embedding_count={}", embeddings.len()),
-    ];
+    let mut notes = embedding_notes(
+        &backend_id,
+        backend_source,
+        vector_dimension,
+        embeddings.len(),
+        request.model.as_deref(),
+        runtime_dependency,
+    );
     attach_runtime_metadata(
         state,
         token,
@@ -153,28 +170,24 @@ pub fn embed(
         runtime_health.as_ref().map(|item| item.service_id.clone()),
     );
 
-    Ok(RuntimeEmbedResponse {
-        backend_id: request
-            .preferred_backend
-            .clone()
-            .unwrap_or_else(|| state.config.embedding_backend.clone()),
-        route_state: "provider-skeleton".to_string(),
+    let response = RuntimeEmbedResponse {
+        backend_id,
+        route_state: EMBEDDING_ROUTE_STATE.to_string(),
         vector_dimension,
         embeddings,
-        degraded: runtime_health.is_none(),
+        degraded,
         rejected: false,
         reason: None,
         provider_id: Some(state.config.provider_id.clone()),
         runtime_service_id: runtime_health.as_ref().map(|item| item.service_id.clone()),
-        provider_status: Some(if runtime_health.is_some() {
-            "available".to_string()
-        } else {
-            "degraded".to_string()
-        }),
+        provider_status: Some(provider_status.to_string()),
         queue_saturated: queue_snapshot.as_ref().map(|item| item.saturated),
         runtime_budget,
         notes,
-    })
+    };
+    emit_embedding_trace(state, request, &response);
+
+    Ok(response)
 }
 
 pub fn rerank(
@@ -194,6 +207,13 @@ pub fn rerank(
     if request.documents.is_empty() {
         anyhow::bail!("documents cannot be empty");
     }
+    if request
+        .documents
+        .iter()
+        .any(|value| value.trim().is_empty())
+    {
+        anyhow::bail!("documents cannot contain blank items");
+    }
 
     ensure_token_context(
         token,
@@ -209,31 +229,23 @@ pub fn rerank(
     let queue_snapshot = crate::clients::fetch_runtime_queue(state).ok();
     let runtime_health = crate::clients::fetch_runtime_health(state).ok();
     let runtime_budget = crate::clients::fetch_runtime_budget(state).ok();
-    let mut results = request
-        .documents
-        .iter()
-        .enumerate()
-        .map(|(index, document)| RuntimeRerankResult {
-            document_index: index,
-            score: lexical_rerank_score(&request.query, document),
-            document: document.clone(),
-        })
-        .collect::<Vec<_>>();
-    results.sort_by(|left, right| {
-        right
-            .score
-            .total_cmp(&left.score)
-            .then_with(|| left.document_index.cmp(&right.document_index))
-    });
-    if let Some(top_k) = request.top_k {
-        results.truncate(top_k.max(1) as usize);
-    }
+    let (provider_status, degraded, runtime_dependency) =
+        provider_runtime_dependency_state(runtime_health.as_ref());
+    let (backend_id, backend_source) = resolve_backend_id(
+        request.preferred_backend.as_ref(),
+        &state.config.rerank_backend,
+    );
+    let results = rank_documents(&request.query, &request.documents, request.top_k);
 
-    let mut notes = vec![
-        "provider_operation=rerank-skeleton".to_string(),
-        format!("rerank_backend={}", state.config.rerank_backend),
-        format!("document_count={}", request.documents.len()),
-    ];
+    let mut notes = rerank_notes(
+        &backend_id,
+        backend_source,
+        request.documents.len(),
+        results.len(),
+        request.top_k,
+        request.model.as_deref(),
+        runtime_dependency,
+    );
     attach_runtime_metadata(
         state,
         token,
@@ -242,27 +254,103 @@ pub fn rerank(
         runtime_health.as_ref().map(|item| item.service_id.clone()),
     );
 
-    Ok(RuntimeRerankResponse {
-        backend_id: request
-            .preferred_backend
-            .clone()
-            .unwrap_or_else(|| state.config.rerank_backend.clone()),
-        route_state: "provider-skeleton".to_string(),
+    let response = RuntimeRerankResponse {
+        backend_id,
+        route_state: RERANK_ROUTE_STATE.to_string(),
         results,
-        degraded: runtime_health.is_none(),
+        degraded,
         rejected: false,
         reason: None,
         provider_id: Some(state.config.provider_id.clone()),
         runtime_service_id: runtime_health.as_ref().map(|item| item.service_id.clone()),
-        provider_status: Some(if runtime_health.is_some() {
-            "available".to_string()
-        } else {
-            "degraded".to_string()
-        }),
+        provider_status: Some(provider_status.to_string()),
         queue_saturated: queue_snapshot.as_ref().map(|item| item.saturated),
         runtime_budget,
         notes,
-    })
+    };
+    emit_rerank_trace(state, request, &response);
+
+    Ok(response)
+}
+
+fn resolve_backend_id(
+    preferred_backend: Option<&String>,
+    configured_backend: &str,
+) -> (String, &'static str) {
+    preferred_backend
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(|value| (value.to_string(), "preferred-backend"))
+        .unwrap_or_else(|| (configured_backend.to_string(), "provider-config"))
+}
+
+fn provider_runtime_dependency_state(
+    runtime_health: Option<&HealthResponse>,
+) -> (&'static str, bool, &'static str) {
+    if runtime_health.is_some() {
+        ("available", false, "available")
+    } else {
+        ("degraded", true, "unavailable")
+    }
+}
+
+fn append_provider_operation_notes(
+    notes: &mut Vec<String>,
+    operation: &str,
+    runtime_dependency: &str,
+) {
+    notes.push(format!("provider_operation={operation}"));
+    notes.push(format!("runtime_dependency={runtime_dependency}"));
+}
+
+fn embedding_notes(
+    backend_id: &str,
+    backend_source: &str,
+    vector_dimension: u32,
+    embedding_count: usize,
+    model: Option<&str>,
+    runtime_dependency: &str,
+) -> Vec<String> {
+    let mut notes = vec![
+        "provider_operation=embedding".to_string(),
+        format!("provider_algorithm={EMBEDDING_ALGORITHM}"),
+        format!("embedding_backend={backend_id}"),
+        format!("backend_selection={backend_source}"),
+        format!("embedding_vector_dimension={vector_dimension}"),
+        format!("embedding_count={embedding_count}"),
+        format!("runtime_dependency={runtime_dependency}"),
+    ];
+    push_optional_note(&mut notes, "embedding_model", model);
+    notes
+}
+
+fn rerank_notes(
+    backend_id: &str,
+    backend_source: &str,
+    document_count: usize,
+    result_count: usize,
+    top_k: Option<u32>,
+    model: Option<&str>,
+    runtime_dependency: &str,
+) -> Vec<String> {
+    let mut notes = vec![
+        "provider_operation=rerank".to_string(),
+        format!("provider_algorithm={RERANK_ALGORITHM}"),
+        format!("rerank_backend={backend_id}"),
+        format!("backend_selection={backend_source}"),
+        format!("document_count={document_count}"),
+        format!("top_k_requested={}", top_k.unwrap_or(document_count as u32)),
+        format!("top_k_returned={result_count}"),
+        format!("runtime_dependency={runtime_dependency}"),
+    ];
+    push_optional_note(&mut notes, "rerank_model", model);
+    notes
+}
+
+fn push_optional_note(notes: &mut Vec<String>, key: &str, value: Option<&str>) {
+    if let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) {
+        notes.push(format!("{key}={value}"));
+    }
 }
 
 fn ensure_token_context(
@@ -326,6 +414,131 @@ fn attach_runtime_metadata(
     } else {
         notes.push("runtime_service_id=unavailable".to_string());
     }
+}
+
+fn build_embedding_records(inputs: &[String], dimension: usize) -> Vec<RuntimeEmbeddingRecord> {
+    inputs
+        .iter()
+        .enumerate()
+        .map(|(index, input)| RuntimeEmbeddingRecord {
+            input_index: index,
+            vector: deterministic_embedding(input, dimension),
+            text_length: input.chars().count(),
+        })
+        .collect()
+}
+
+fn rank_documents(
+    query: &str,
+    documents: &[String],
+    top_k: Option<u32>,
+) -> Vec<RuntimeRerankResult> {
+    let mut results = documents
+        .iter()
+        .enumerate()
+        .map(|(index, document)| RuntimeRerankResult {
+            document_index: index,
+            score: lexical_rerank_score(query, document),
+            document: document.clone(),
+        })
+        .collect::<Vec<_>>();
+    results.sort_by(|left, right| {
+        right
+            .score
+            .total_cmp(&left.score)
+            .then_with(|| left.document_index.cmp(&right.document_index))
+    });
+    if let Some(top_k) = top_k {
+        results.truncate(top_k.max(1) as usize);
+    }
+    results
+}
+
+fn emit_infer_trace(
+    state: &AppState,
+    request: &RuntimeInferRequest,
+    response: &RuntimeInferResponse,
+) {
+    crate::emit_trace(
+        state,
+        "provider.runtime.infer.result",
+        json!({
+            "capability_id": methods::RUNTIME_INFER_SUBMIT,
+            "session_id": request.session_id,
+            "task_id": request.task_id,
+            "requested_backend": request.preferred_backend,
+            "backend_id": response.backend_id,
+            "route_state": response.route_state,
+            "degraded": response.degraded,
+            "rejected": response.rejected,
+            "provider_status": response.provider_status,
+            "runtime_service_id": response.runtime_service_id,
+            "queue_saturated": response.queue_saturated,
+            "estimated_latency_ms": response.estimated_latency_ms,
+            "model": request.model,
+            "reason": response.reason,
+        }),
+        response.notes.clone(),
+    );
+}
+
+fn emit_embedding_trace(
+    state: &AppState,
+    request: &RuntimeEmbedRequest,
+    response: &RuntimeEmbedResponse,
+) {
+    crate::emit_trace(
+        state,
+        "provider.runtime.embed.result",
+        json!({
+            "capability_id": methods::RUNTIME_EMBED_VECTORIZE,
+            "session_id": request.session_id,
+            "task_id": request.task_id,
+            "requested_backend": request.preferred_backend,
+            "backend_id": response.backend_id,
+            "route_state": response.route_state,
+            "vector_dimension": response.vector_dimension,
+            "embedding_count": response.embeddings.len(),
+            "degraded": response.degraded,
+            "rejected": response.rejected,
+            "provider_status": response.provider_status,
+            "runtime_service_id": response.runtime_service_id,
+            "queue_saturated": response.queue_saturated,
+            "model": request.model,
+            "reason": response.reason,
+        }),
+        response.notes.clone(),
+    );
+}
+
+fn emit_rerank_trace(
+    state: &AppState,
+    request: &RuntimeRerankRequest,
+    response: &RuntimeRerankResponse,
+) {
+    crate::emit_trace(
+        state,
+        "provider.runtime.rerank.result",
+        json!({
+            "capability_id": methods::RUNTIME_RERANK_SCORE,
+            "session_id": request.session_id,
+            "task_id": request.task_id,
+            "requested_backend": request.preferred_backend,
+            "backend_id": response.backend_id,
+            "route_state": response.route_state,
+            "result_count": response.results.len(),
+            "top_document_index": response.results.first().map(|item| item.document_index),
+            "top_score": response.results.first().map(|item| item.score),
+            "degraded": response.degraded,
+            "rejected": response.rejected,
+            "provider_status": response.provider_status,
+            "runtime_service_id": response.runtime_service_id,
+            "queue_saturated": response.queue_saturated,
+            "model": request.model,
+            "reason": response.reason,
+        }),
+        response.notes.clone(),
+    );
 }
 
 fn deterministic_embedding(text: &str, dimension: usize) -> Vec<f32> {
@@ -454,5 +667,62 @@ mod tests {
         let weak = lexical_rerank_score("runtime provider health", "shell notification center");
 
         assert!(strong > weak);
+    }
+
+    #[test]
+    fn resolve_backend_id_prefers_non_empty_request_override() {
+        let (backend_id, source) =
+            resolve_backend_id(Some(&" custom-backend ".to_string()), "local-embedding");
+
+        assert_eq!(backend_id, "custom-backend");
+        assert_eq!(source, "preferred-backend");
+    }
+
+    #[test]
+    fn missing_runtime_health_marks_provider_as_degraded() {
+        let (provider_status, degraded, runtime_dependency) =
+            provider_runtime_dependency_state(None);
+
+        assert_eq!(provider_status, "degraded");
+        assert!(degraded);
+        assert_eq!(runtime_dependency, "unavailable");
+    }
+
+    #[test]
+    fn embedding_notes_use_formal_markers() {
+        let notes = embedding_notes(
+            "local-embedding",
+            "provider-config",
+            DEFAULT_EMBEDDING_VECTOR_DIMENSION,
+            2,
+            Some("smoke-embedding-model"),
+            "available",
+        );
+
+        assert!(notes
+            .iter()
+            .any(|note| note == "provider_operation=embedding"));
+        assert!(notes
+            .iter()
+            .any(|note| note == "provider_algorithm=deterministic-embedding-v1"));
+        assert!(notes
+            .iter()
+            .all(|note| !note.to_ascii_lowercase().contains("skeleton")));
+    }
+
+    #[test]
+    fn rank_documents_applies_top_k_and_stable_tie_breaks() {
+        let documents = vec![
+            "provider health summary with audit notes".to_string(),
+            "provider health summary with registry notes".to_string(),
+            "shell compositor backlog".to_string(),
+        ];
+
+        let results = rank_documents("provider health summary", &documents, Some(2));
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].document_index, 0);
+        assert_eq!(results[1].document_index, 1);
+        assert!(results[0].score >= results[1].score);
     }
 }

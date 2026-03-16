@@ -13,7 +13,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from aios_cargo_bins import default_aios_bin_dir
+from aios_cargo_bins import default_aios_bin_dir, resolve_binary_path
 
 
 def parse_args() -> argparse.Namespace:
@@ -33,10 +33,10 @@ def repo_root() -> Path:
 
 def resolve_binary(name: str, explicit: Path | None, bin_dir: Path | None) -> Path:
     if explicit is not None:
-        return explicit
+        return resolve_binary_path(explicit.parent, explicit.name)
     if bin_dir is not None:
-        return bin_dir / name
-    return default_aios_bin_dir(repo_root()) / name
+        return resolve_binary_path(bin_dir, name)
+    return resolve_binary_path(default_aios_bin_dir(repo_root()), name)
 
 
 def resolve_provider(explicit: Path | None) -> Path:
@@ -52,6 +52,9 @@ def ensure_paths(paths: dict[str, Path]) -> None:
         for item in missing:
             print(f"  - {item}")
         raise SystemExit(2)
+
+def unix_rpc_supported() -> bool:
+    return hasattr(socket, "AF_UNIX") and os.name != "nt"
 
 
 def rpc_call(socket_path: Path, method: str, params: dict, timeout: float) -> dict:
@@ -175,6 +178,9 @@ def write_jsonl_record(path: Path, payload: dict) -> None:
 
 def main() -> int:
     args = parse_args()
+    if not unix_rpc_supported():
+        print("shell provider smoke skipped: unix rpc transport unsupported on this platform")
+        return 0
     binaries = {
         "policyd": resolve_binary("policyd", args.policyd, args.bin_dir),
         "provider": resolve_provider(args.provider),
@@ -208,9 +214,13 @@ def main() -> int:
         screen_evidence,
         {
             "modality": "screen",
-            "baseline": "formal-native-helper-or-probe",
+            "baseline": "os-native-backend",
             "execution_path": "native-live",
             "source": "provider-smoke",
+            "release_grade_backend_id": "xdg-desktop-portal-screencast",
+            "release_grade_backend_origin": "os-native",
+            "release_grade_backend_stack": "portal+pipewire",
+            "contract_kind": "release-grade-runtime-helper",
             "state_refs": ["/tmp/provider-screen-state.json"],
         },
     )
@@ -546,6 +556,10 @@ def main() -> int:
             "shell.notification.open did not include backend evidence summary",
         )
         require(
+            "xdg-desktop-portal-screencast" in (((notification_result.get("model") or {}).get("meta") or {}).get("backend_evidence_backend_ids") or []),
+            "shell.notification.open did not expose release-grade backend ids",
+        )
+        require(
             ((notification_result.get("model") or {}).get("meta") or {}).get("remote_governance_issue_count", 0) >= 2,
             "shell.notification.open did not include remote governance summary",
         )
@@ -802,3 +816,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+

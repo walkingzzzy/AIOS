@@ -170,7 +170,7 @@ fn truncate(value: &str) -> String {
     format!("{truncated}...")
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::{

@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -22,6 +23,14 @@ AIOS_DIR = ROOT / 'aios'
 PYTHON = sys.executable
 DEFAULT_OUTPUT_PREFIX = ROOT / 'out' / 'validation' / 'full-regression-report'
 REGRESSION_REPORT_SCHEMA = ROOT / 'aios' / 'observability' / 'schemas' / 'full-regression-report.schema.json'
+SYSTEM_VALIDATION_LINUX_ONLY_STEPS = {
+    'Build system image',
+    'Build recovery image',
+    'Build installer image',
+    'Run full system delivery validation',
+    'Build governance evidence index',
+    'Run release gate',
+}
 
 PY_COMPILE_TARGETS = [
     'scripts/aios_cargo_bins.py', 'scripts/test-aios-cargo-bins.py',
@@ -35,8 +44,16 @@ PY_COMPILE_TARGETS = [
     'scripts/test-gpu-backend-support-matrix-smoke.py',
     'scripts/test-tier1-machine-nominations-smoke.py',
     'scripts/build-default-hardware-evidence-index.py',
+    'scripts/test-release-gate-smoke.py',
+    'scripts/collect-aios-device-validation.py',
+    'scripts/render-aios-hardware-validation-report.py',
+    'scripts/build-aios-platform-media.py',
+    'scripts/test-device-validation-collector-smoke.py',
+    'scripts/test-hardware-validation-report-smoke.py',
+    'scripts/test-platform-media-smoke.py',
     'scripts/test-image-build-strategy-smoke.py',
     'scripts/test-ci-artifact-governance-smoke.py',
+    'scripts/test-compat-registration-contract-smoke.py',
     'scripts/sync-aios-task-metadata.py', 'scripts/build-aios-delivery.py', 'scripts/test-image-delivery-smoke.py',
     'scripts/test-firstboot-hygiene-smoke.py', 'scripts/test-boot-qemu-smoke.py', 'scripts/test-boot-qemu-bringup.py',
     'scripts/test-ipc-smoke.py', 'scripts/test-code-sandbox-smoke.py', 'scripts/test-compat-runtime-smoke.py',
@@ -48,7 +65,7 @@ PY_COMPILE_TARGETS = [
     'scripts/test-installer-ux-smoke.py',
     'scripts/test-vendor-firmware-hook-smoke.py', 'scripts/test-build-container-native-smoke.py',
     'scripts/test-shell-provider-smoke.py', 'scripts/test-shell-chooser-smoke.py', 'scripts/test-portal-flow-smoke.py', 'scripts/test-portal-capture-chain-smoke.py', 'scripts/test-shell-release-profile-smoke.py', 'scripts/test-shellctl-smoke.py', 'scripts/test-shell-panel-bridge-service-smoke.py', 'scripts/test-shell-panel-clients-smoke.py', 'scripts/test-shell-panel-embedding-live-smoke.py', 'scripts/test-shell-compositor-acceptance-smoke.py', 'scripts/test-shell-acceptance-smoke.py', 'scripts/test-shell-stability-smoke.py', 'scripts/test-screen-capture-provider-smoke.py',
-    'scripts/test-runtimed-backend-smoke.py', 'scripts/test-runtimed-worker-contract-smoke.py', 'scripts/test-runtimed-managed-worker-smoke.py', 'scripts/test-runtimed-hardware-profile-managed-worker-smoke.py', 'scripts/test-runtimed-jetson-platform-worker-smoke.py', 'scripts/test-runtimed-jetson-platform-worker-failure-smoke.py', 'scripts/test-shell-desktop-smoke.py', 'scripts/test-shell-session-smoke.py', 'scripts/test-deviced-smoke.py',
+    'scripts/test-runtimed-backend-smoke.py', 'scripts/test-runtimed-worker-contract-smoke.py', 'scripts/test-runtimed-managed-worker-smoke.py', 'scripts/test-runtimed-managed-worker-restart-smoke.py', 'scripts/test-runtimed-managed-worker-restart-exhausted-smoke.py', 'scripts/test-runtimed-events-smoke.py', 'scripts/test-runtimed-hardware-profile-managed-worker-smoke.py', 'scripts/test-runtimed-jetson-platform-worker-smoke.py', 'scripts/test-runtimed-jetson-platform-vendor-helper-smoke.py', 'scripts/test-runtimed-jetson-platform-vendor-worker-smoke.py', 'scripts/test-runtimed-jetson-platform-worker-failure-smoke.py', 'scripts/test-shell-desktop-smoke.py', 'scripts/test-shell-session-smoke.py', 'scripts/test-deviced-smoke.py',
     'scripts/test-deviced-readiness-matrix-smoke.py', 'scripts/test-deviced-continuous-native-smoke.py',
     'aios/compat/browser/runtime/browser_provider.py', 'aios/compat/office/runtime/office_provider.py',
     'aios/compat/mcp-bridge/runtime/mcp_bridge_provider.py', 'aios/compat/code-sandbox/runtime/aios_sandbox_executor.py',
@@ -99,6 +116,39 @@ def require_tools(names: list[str]) -> None:
         raise SystemExit(f"Missing required tools for requested stage: {', '.join(missing)}")
 
 
+
+def platform_supports_unix_socket_smokes() -> bool:
+    return hasattr(socket, 'AF_UNIX') and os.name != 'nt'
+
+def step_script_path(step: Step) -> Path | None:
+    if not step.command or step.command[0] != PYTHON or len(step.command) < 2:
+        return None
+    script_path = Path(step.command[1])
+    if script_path.suffix != '.py':
+        return None
+    if script_path.is_absolute():
+        return script_path
+    return ROOT / script_path
+
+def step_requires_unix_socket_support(step: Step) -> bool:
+    script_path = step_script_path(step)
+    if script_path is None or not script_path.exists():
+        return False
+    try:
+        content = script_path.read_text(encoding='utf-8')
+    except UnicodeDecodeError:
+        return False
+    return 'socket.AF_UNIX' in content
+
+def platform_skip_detail(step: Step) -> str | None:
+    if os.name == 'nt' and step.name in SYSTEM_VALIDATION_LINUX_ONLY_STEPS:
+        return 'skipped on this host: system image validation requires Linux host tooling and QEMU'
+    if platform_supports_unix_socket_smokes():
+        return None
+    if step_requires_unix_socket_support(step):
+        return 'skipped on this host: requires POSIX Unix domain socket support'
+    return None
+
 def validate_steps(host_target: str, bin_dir: str) -> list[Step]:
     return [
         Step('Validate task metadata', [PYTHON, 'scripts/sync-aios-task-metadata.py', '--check']),
@@ -109,6 +159,10 @@ def validate_steps(host_target: str, bin_dir: str) -> list[Step]:
         Step('GPU backend support matrix smoke', [PYTHON, 'scripts/test-gpu-backend-support-matrix-smoke.py']),
         Step('Tier1 machine nominations smoke', [PYTHON, 'scripts/test-tier1-machine-nominations-smoke.py']),
         Step('Build default Tier1 hardware evidence', [PYTHON, 'scripts/build-default-hardware-evidence-index.py']),
+        Step('Release gate vendor runtime smoke', [PYTHON, 'scripts/test-release-gate-smoke.py']),
+        Step('Device validation collector smoke', [PYTHON, 'scripts/test-device-validation-collector-smoke.py']),
+        Step('Hardware validation report smoke', [PYTHON, 'scripts/test-hardware-validation-report-smoke.py']),
+        Step('Platform media smoke', [PYTHON, 'scripts/test-platform-media-smoke.py']),
         Step('Image build strategy smoke', [PYTHON, 'scripts/test-image-build-strategy-smoke.py']),
         Step('CI artifact governance smoke', [PYTHON, 'scripts/test-ci-artifact-governance-smoke.py']),
         Step('Cargo bin-dir helper tests', [PYTHON, 'scripts/test-aios-cargo-bins.py']),
@@ -118,6 +172,7 @@ def validate_steps(host_target: str, bin_dir: str) -> list[Step]:
         Step('Portal file-handle smoke', [PYTHON, 'scripts/test-portal-file-handle-smoke.py', '--bin-dir', bin_dir]),
         Step('Policyd audit-store smoke', [PYTHON, 'scripts/test-policyd-audit-store-smoke.py', '--bin-dir', bin_dir]),
         Step('Provider registry smoke', [PYTHON, 'scripts/test-provider-registry-smoke.py', '--bin-dir', bin_dir]),
+        Step('Compat registration contract smoke', [PYTHON, 'scripts/test-compat-registration-contract-smoke.py']),
         Step('Device metadata provider smoke', [PYTHON, 'scripts/test-device-metadata-provider-smoke.py', '--bin-dir', bin_dir]),
         Step('System intent provider smoke', [PYTHON, 'scripts/test-system-intent-provider-smoke.py', '--bin-dir', bin_dir]),
         Step('Runtime local inference provider smoke', [PYTHON, 'scripts/test-runtime-local-inference-provider-smoke.py', '--bin-dir', bin_dir]),
@@ -126,10 +181,15 @@ def validate_steps(host_target: str, bin_dir: str) -> list[Step]:
         Step('Runtimed backend smoke', [PYTHON, 'scripts/test-runtimed-backend-smoke.py', '--bin-dir', bin_dir]),
         Step('Runtimed worker contract smoke', [PYTHON, 'scripts/test-runtimed-worker-contract-smoke.py', '--bin-dir', bin_dir]),
         Step('Runtimed managed worker smoke', [PYTHON, 'scripts/test-runtimed-managed-worker-smoke.py', '--bin-dir', bin_dir]),
+        Step('Runtimed managed worker restart smoke', [PYTHON, 'scripts/test-runtimed-managed-worker-restart-smoke.py', '--bin-dir', bin_dir]),
+        Step('Runtimed managed worker restart exhausted smoke', [PYTHON, 'scripts/test-runtimed-managed-worker-restart-exhausted-smoke.py', '--bin-dir', bin_dir]),
+        Step('Runtimed events smoke', [PYTHON, 'scripts/test-runtimed-events-smoke.py', '--bin-dir', bin_dir]),
         Step('Observability correlation smoke', [PYTHON, 'scripts/test-observability-correlation-smoke.py', '--bin-dir', bin_dir]),
         Step('Audit evidence export smoke', [PYTHON, 'scripts/test-audit-evidence-export-smoke.py', '--bin-dir', bin_dir]),
         Step('Runtimed hardware-profile managed worker smoke', [PYTHON, 'scripts/test-runtimed-hardware-profile-managed-worker-smoke.py', '--bin-dir', bin_dir]),
         Step('Runtimed Jetson platform worker smoke', [PYTHON, 'scripts/test-runtimed-jetson-platform-worker-smoke.py', '--bin-dir', bin_dir]),
+        Step('Runtimed Jetson platform vendor helper smoke', [PYTHON, 'scripts/test-runtimed-jetson-platform-vendor-helper-smoke.py', '--bin-dir', bin_dir]),
+        Step('Runtimed Jetson platform vendor worker smoke', [PYTHON, 'scripts/test-runtimed-jetson-platform-vendor-worker-smoke.py', '--bin-dir', bin_dir]),
         Step('Runtimed Jetson platform worker failure smoke', [PYTHON, 'scripts/test-runtimed-jetson-platform-worker-failure-smoke.py', '--bin-dir', bin_dir]),
         Step('Filesystem provider smoke', [PYTHON, 'scripts/test-provider-fs-smoke.py', '--bin-dir', bin_dir], env={'TMPDIR': '/tmp'}),
         Step('Updated restart smoke', [PYTHON, 'scripts/test-updated-restart-smoke.py', '--bin-dir', bin_dir]),
@@ -157,7 +217,7 @@ def validate_steps(host_target: str, bin_dir: str) -> list[Step]:
         Step('MCP bridge provider smoke', [PYTHON, 'scripts/test-mcp-bridge-provider-smoke.py']),
         Step('Code sandbox smoke', [PYTHON, 'scripts/test-code-sandbox-smoke.py']),
         Step('Compat runtime smoke', [PYTHON, 'scripts/test-compat-runtime-smoke.py', '--bin-dir', bin_dir]),
-        Step('Build system delivery bundle', [PYTHON, 'scripts/build-aios-delivery.py', '--no-archive', '--bin-dir', bin_dir, '--cargo-target', host_target]),
+        Step('Build system delivery bundle', [PYTHON, 'scripts/build-aios-delivery.py', '--no-archive', '--bin-dir', bin_dir, '--cargo-target', host_target, '--sync-overlay', 'aios/image/mkosi.extra']),
         Step('Cross-service health smoke', [PYTHON, 'scripts/test-cross-service-health-smoke.py', '--bin-dir', bin_dir, '--delivery-manifest', 'out/aios-system-delivery/manifest.json']),
         Step('Delivery smoke', [PYTHON, 'scripts/test-image-delivery-smoke.py', '--bundle-dir', 'out/aios-system-delivery']),
         Step('Firstboot hygiene smoke', [PYTHON, 'scripts/test-firstboot-hygiene-smoke.py', '--bundle-dir', 'out/aios-system-delivery']),
@@ -173,7 +233,7 @@ def validate_steps(host_target: str, bin_dir: str) -> list[Step]:
 def system_validation_steps(host_target: str, bin_dir: str) -> list[Step]:
     return [
         Step('Build AIOS binaries', ['cargo', 'build', '--target', host_target, '-p', 'aios-agentd', '-p', 'aios-sessiond', '-p', 'aios-policyd', '-p', 'aios-runtimed', '-p', 'aios-deviced', '-p', 'aios-updated', '-p', 'aios-device-metadata-provider', '-p', 'aios-runtime-local-inference-provider', '-p', 'aios-system-intent-provider', '-p', 'aios-system-files-provider'], cwd=AIOS_DIR),
-        Step('Build system delivery bundle', [PYTHON, 'scripts/build-aios-delivery.py', '--no-archive', '--bin-dir', bin_dir, '--cargo-target', host_target]),
+        Step('Build system delivery bundle', [PYTHON, 'scripts/build-aios-delivery.py', '--no-archive', '--bin-dir', bin_dir, '--cargo-target', host_target, '--sync-overlay', 'aios/image/mkosi.extra']),
         Step('Cross-service health smoke', [PYTHON, 'scripts/test-cross-service-health-smoke.py', '--bin-dir', bin_dir, '--delivery-manifest', 'out/aios-system-delivery/manifest.json']),
         Step('Build system image', ['bash', 'scripts/build-aios-image.sh']),
         Step('Build recovery image', ['bash', 'scripts/build-aios-recovery-image.sh']),
@@ -389,8 +449,6 @@ def main() -> int:
 
     if not args.dry_run:
         require_tools(['cargo', 'bash', 'rustc'])
-        if args.stage in {'system-validation', 'full'}:
-            require_tools(['qemu-system-x86_64', 'qemu-img'])
 
     steps = steps_for(args.stage, host_target, bin_dir)
     results: list[dict[str, Any]] = []
@@ -398,6 +456,12 @@ def main() -> int:
     started = time.monotonic()
 
     for index, step in enumerate(steps, start=1):
+        if not args.dry_run:
+            skip_detail = platform_skip_detail(step)
+            if skip_detail is not None:
+                results.append(make_skipped_result(step, skip_detail))
+                continue
+
         result = run_step(step, args.dry_run, None if args.dry_run else logs_dir, index)
         results.append(result)
         if result['status'] == 'failed' and not args.keep_going:
@@ -428,3 +492,4 @@ def main() -> int:
 
 if __name__ == '__main__':
     raise SystemExit(main())
+

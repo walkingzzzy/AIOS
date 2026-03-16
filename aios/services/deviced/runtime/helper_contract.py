@@ -74,6 +74,10 @@ def apply_helper_contract(
     *,
     modality: str,
     release_grade_backend: str,
+    release_grade_backend_id: str | None = None,
+    release_grade_backend_origin: str | None = None,
+    release_grade_backend_stack: str | None = None,
+    contract_kind: str = "release-grade-runtime-helper",
     adapter_hint: str,
     collector: str,
     transport: dict[str, object],
@@ -83,25 +87,55 @@ def apply_helper_contract(
     session_id = request_binding.get("session_id") or "anonymous-session"
     task_id = request_binding.get("task_id") or "ad-hoc-task"
     request_ref = f"{session_id}:{task_id}:{modality}"
+    backend_id = release_grade_backend_id or release_grade_backend
+
+    payload["release_grade_backend"] = release_grade_backend
+    payload["release_grade_backend_id"] = backend_id
+    payload["release_grade_contract_kind"] = contract_kind
+    if release_grade_backend_origin is not None:
+        payload["release_grade_backend_origin"] = release_grade_backend_origin
+    if release_grade_backend_stack is not None:
+        payload["release_grade_backend_stack"] = release_grade_backend_stack
+
     payload["request_binding"] = request_binding
     payload["session_contract"] = {
         "contract_version": "1.0.0",
-        "contract_kind": "release-grade-native-helper",
+        "contract_kind": contract_kind,
         "request_ref": request_ref,
         "lease_id": f"{adapter_hint}:{request_ref}",
         "negotiated_at": utc_now(),
         "collector": collector,
         "release_grade_backend": release_grade_backend,
+        "release_grade_backend_id": backend_id,
         "adapter_hint": adapter_hint,
     }
+    if release_grade_backend_origin is not None:
+        payload["session_contract"]["release_grade_backend_origin"] = (
+            release_grade_backend_origin
+        )
+    if release_grade_backend_stack is not None:
+        payload["session_contract"]["release_grade_backend_stack"] = (
+            release_grade_backend_stack
+        )
+
     payload["transport"] = transport
     payload["evidence"] = evidence
     payload["media_pipeline"] = {
         "pipeline_class": "native-helper-evidence",
         "release_grade_backend": release_grade_backend,
+        "release_grade_backend_id": backend_id,
         "adapter_hint": adapter_hint,
         "collector": collector,
         "continuous": request_binding["continuous"],
         "transport_kind": transport.get("kind"),
     }
+    if release_grade_backend_origin is not None:
+        payload["media_pipeline"]["release_grade_backend_origin"] = (
+            release_grade_backend_origin
+        )
+    if release_grade_backend_stack is not None:
+        payload["media_pipeline"]["release_grade_backend_stack"] = (
+            release_grade_backend_stack
+        )
+
     return payload

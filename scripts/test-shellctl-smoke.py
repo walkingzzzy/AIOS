@@ -4,11 +4,20 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
+import uuid
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent.parent
+TEMP_ROOT_DIR = ROOT / "out" / "tmp"
+
+
+def make_temp_dir(prefix: str) -> Path:
+    TEMP_ROOT_DIR.mkdir(parents=True, exist_ok=True)
+    path = TEMP_ROOT_DIR / f"{prefix}{uuid.uuid4().hex}"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
 
 
 def require(condition: bool, message: str) -> None:
@@ -27,7 +36,7 @@ def run_python(script: Path, *args: str) -> str:
 
 
 def main() -> int:
-    temp_root = Path(tempfile.mkdtemp(prefix="aios-shellctl-"))
+    temp_root = make_temp_dir("aios-shellctl-")
     failed = False
     try:
         recovery_surface = temp_root / "recovery-surface.json"
@@ -82,6 +91,10 @@ def main() -> int:
                     "artifact_path": str(screen_evidence),
                     "execution_path": "builtin-preview",
                     "source": "shellctl-smoke",
+                    "release_grade_backend_id": "xdg-desktop-portal-screencast",
+                    "release_grade_backend_origin": "runtime-helper",
+                    "release_grade_backend_stack": "portal+pipewire",
+                    "contract_kind": "release-grade-runtime-helper",
                     "state_refs": ["/tmp/fixture-screen-state.json"],
                 },
                 indent=2,
@@ -93,10 +106,14 @@ def main() -> int:
             json.dumps(
                 {
                     "modality": "audio",
-                    "baseline": "formal-native-helper-or-probe",
+                    "baseline": "os-native-backend",
                     "artifact_path": str(audio_evidence),
                     "execution_path": "native-live",
                     "source": "shellctl-smoke",
+                    "release_grade_backend_id": "pipewire",
+                    "release_grade_backend_origin": "os-native",
+                    "release_grade_backend_stack": "pipewire",
+                    "contract_kind": "release-grade-runtime-helper",
                     "state_refs": ["/tmp/fixture-audio-state.json"],
                 },
                 indent=2,
@@ -815,6 +832,11 @@ def main() -> int:
             "shellctl notification panel backend evidence mismatch",
         )
         require(
+            sorted(notification_panel["meta"]["backend_evidence_backend_ids"])
+            == ["pipewire", "xdg-desktop-portal-screencast"],
+            "shellctl notification panel release-grade backend ids mismatch",
+        )
+        require(
             notification_panel["meta"]["remote_governance_issue_count"] >= 2,
             "shellctl notification panel remote governance mismatch",
         )
@@ -867,6 +889,10 @@ def main() -> int:
         require(backend_panel["meta"]["ui_tree_available"] is True, "shellctl backend panel missing ui_tree snapshot")
         require(backend_panel["meta"]["ui_tree_capture_mode"] == "native-live", "shellctl backend panel ui_tree mode mismatch")
         require(backend_panel["meta"]["evidence_artifact_count"] == 1, "shellctl backend evidence count mismatch")
+        require(
+            backend_panel["meta"]["release_grade_backend_ids"] == ["xdg-desktop-portal-screencast"],
+            "shellctl backend release-grade backend ids mismatch",
+        )
 
         output = run_python(
             ROOT / "aios/shell/shellctl.py",

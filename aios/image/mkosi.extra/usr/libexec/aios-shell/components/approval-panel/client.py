@@ -3,7 +3,7 @@ import argparse
 import json
 from pathlib import Path
 
-from prototype import default_socket, fixture_call, print_list, rpc_call
+from prototype import default_agent_socket, default_socket, fixture_call, print_list, rpc_call
 
 
 def build_summary(result: dict) -> dict:
@@ -36,6 +36,7 @@ def main() -> int:
         choices=["list", "get", "create", "resolve", "summary"],
     )
     parser.add_argument("--socket", type=Path, default=default_socket())
+    parser.add_argument("--agent-socket", type=Path, default=default_agent_socket())
     parser.add_argument("--fixture", type=Path)
     parser.add_argument("--approval-ref")
     parser.add_argument("--user-id", default="local-user")
@@ -56,16 +57,16 @@ def main() -> int:
         result = fixture_call(args.fixture, effective_command, args)
     elif effective_command == "list":
         result = rpc_call(
-            args.socket,
-            "approval.list",
+            args.agent_socket,
+            "agent.approval.list",
             {"session_id": args.session_id, "task_id": args.task_id, "status": args.status},
         )
     elif effective_command == "create":
         if not args.session_id or not args.task_id:
             raise SystemExit("--session-id and --task-id are required for create")
         result = rpc_call(
-            args.socket,
-            "approval.create",
+            args.agent_socket,
+            "agent.approval.create",
             {
                 "user_id": args.user_id,
                 "session_id": args.session_id,
@@ -79,13 +80,13 @@ def main() -> int:
     elif effective_command == "get":
         if not args.approval_ref:
             raise SystemExit("--approval-ref is required for get")
-        result = rpc_call(args.socket, "approval.get", {"approval_ref": args.approval_ref})
+        result = rpc_call(args.agent_socket, "agent.approval.get", {"approval_ref": args.approval_ref})
     else:
         if not args.approval_ref:
             raise SystemExit("--approval-ref is required for resolve")
         result = rpc_call(
-            args.socket,
-            "approval.resolve",
+            args.agent_socket,
+            "agent.approval.resolve",
             {
                 "approval_ref": args.approval_ref,
                 "status": args.status or "approved",

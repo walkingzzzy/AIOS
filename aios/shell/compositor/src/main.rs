@@ -53,7 +53,7 @@ fn parse_args() -> Result<Cli, String> {
 }
 
 fn print_help() {
-    println!("AIOS shell compositor skeleton");
+    println!("AIOS shell compositor service");
     println!("  --config <path>   Load compositor config");
     println!("  --once            Run one lifecycle tick and exit");
     println!("  --ticks <n>       Run n lifecycle ticks and exit");

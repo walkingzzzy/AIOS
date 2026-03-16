@@ -1138,12 +1138,27 @@ struct CommandExecution {
     stderr: String,
 }
 
+fn spawn_shell(command: &str) -> Command {
+    if cfg!(windows) {
+        let mut shell = Command::new("powershell.exe");
+        shell
+            .arg("-NoProfile")
+            .arg("-NonInteractive")
+            .arg("-Command")
+            .arg(command);
+        shell
+    } else {
+        let mut shell = Command::new("/bin/sh");
+        shell.arg("-lc").arg(command);
+        shell
+    }
+}
+
 fn execute_command(
     command: &str,
     environment: &[(String, String)],
 ) -> anyhow::Result<CommandExecution> {
-    let mut shell = Command::new("/bin/sh");
-    shell.arg("-lc").arg(command);
+    let mut shell = spawn_shell(command);
     for (key, value) in environment {
         shell.env(key, value);
     }
@@ -1242,6 +1257,24 @@ mod tests {
             rollback_command: None,
         })
         .expect("create deployment store")
+    }
+
+    fn apply_ok_command() -> String {
+        if cfg!(windows) {
+            "Write-Output 'apply ok'".to_string()
+        } else {
+            "printf 'apply ok'".to_string()
+        }
+    }
+
+    fn apply_context_command() -> String {
+        if cfg!(windows) {
+            r#"Write-Output "$env:AIOS_UPDATED_OPERATION|$env:AIOS_UPDATED_REQUEST_TARGET_VERSION|$env:AIOS_UPDATED_REQUEST_REASON|$env:AIOS_UPDATED_RECOVERY_ID""#
+                .to_string()
+        } else {
+            r#"printf '%s' "$AIOS_UPDATED_OPERATION|$AIOS_UPDATED_REQUEST_TARGET_VERSION|$AIOS_UPDATED_REQUEST_REASON|$AIOS_UPDATED_RECOVERY_ID""#
+                .to_string()
+        }
     }
 
     #[test]
@@ -1448,9 +1481,7 @@ mod tests {
             current_version: "0.1.0".to_string(),
             target_version_hint: Some("0.1.1".to_string()),
             sysupdate_check_command: None,
-            sysupdate_apply_command: Some(
-                "printf '%s' \"$AIOS_UPDATED_OPERATION|$AIOS_UPDATED_REQUEST_TARGET_VERSION|$AIOS_UPDATED_REQUEST_REASON|$AIOS_UPDATED_RECOVERY_ID\"".to_string(),
-            ),
+            sysupdate_apply_command: Some(apply_context_command()),
             rollback_command: None,
         })
         .expect("create store");
@@ -1511,7 +1542,7 @@ mod tests {
             current_version: "0.1.0".to_string(),
             target_version_hint: Some("0.1.1".to_string()),
             sysupdate_check_command: None,
-            sysupdate_apply_command: Some("printf 'apply ok'".to_string()),
+            sysupdate_apply_command: Some(apply_ok_command()),
             rollback_command: None,
         })
         .expect("create store");

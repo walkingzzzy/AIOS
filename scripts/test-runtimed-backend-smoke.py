@@ -15,7 +15,7 @@ import threading
 import time
 from pathlib import Path
 
-from aios_cargo_bins import default_aios_bin_dir
+from aios_cargo_bins import default_aios_bin_dir, resolve_binary_path
 
 
 def parse_args() -> argparse.Namespace:
@@ -33,10 +33,14 @@ def repo_root() -> Path:
 
 def resolve_binary(name: str, explicit: Path | None, bin_dir: Path | None) -> Path:
     if explicit is not None:
-        return explicit
+        return resolve_binary_path(explicit.parent, explicit.name)
     if bin_dir is not None:
-        return bin_dir / name
-    return default_aios_bin_dir(repo_root()) / name
+        return resolve_binary_path(bin_dir, name)
+    return resolve_binary_path(default_aios_bin_dir(repo_root()), name)
+
+
+def unix_rpc_supported() -> bool:
+    return hasattr(socket, "AF_UNIX") and os.name != "nt"
 
 
 def rpc_call(socket_path: Path, method: str, params: dict, timeout: float) -> dict:
@@ -167,6 +171,9 @@ def start_gpu_worker(socket_path: Path) -> tuple[threading.Event, threading.Thre
 
 def main() -> int:
     args = parse_args()
+    if not unix_rpc_supported():
+        print("runtimed backend smoke skipped: unix rpc transport unsupported on this platform")
+        return 0
     runtimed = resolve_binary("runtimed", args.runtimed, args.bin_dir)
     if not runtimed.exists():
         print(f"Missing runtimed binary: {runtimed}")

@@ -4,9 +4,9 @@ use serde::{de::DeserializeOwned, Serialize};
 use serde_json::{json as json_value, Value};
 
 use aios_contracts::{
-    methods, ExecutionToken, RuntimeInferRequest, RuntimeInferResponse, RuntimeQueueResponse,
-    RuntimeRouteResolveRequest, RuntimeRouteResolveResponse, ServiceContractResponse,
-    TraceQueryRequest,
+    methods, ExecutionToken, RuntimeBackendEventPayload, RuntimeInferRequest, RuntimeInferResponse,
+    RuntimeQueueResponse, RuntimeRouteResolveRequest, RuntimeRouteResolveResponse,
+    ServiceContractResponse, TraceQueryRequest,
 };
 use aios_rpc::{RpcError, RpcResult, RpcRouter};
 
@@ -30,7 +30,7 @@ pub fn build_router(state: AppState) -> Arc<RpcRouter> {
 
     let backend_state = state.clone();
     router.register_method(methods::RUNTIME_BACKEND_LIST, move |_| {
-        json(backend_state.scheduler.backends())
+        json(backend_state.runtime_backends())
     });
 
     let route_state = state.clone();
@@ -86,15 +86,18 @@ pub fn build_router(state: AppState) -> Arc<RpcRouter> {
                         Some(error.reason.clone()),
                         None,
                     );
-                    infer_state.events.record(
+                    let event_payload = response_event_payload(
+                        &infer_state,
+                        "rejected",
+                        &request,
+                        &route,
+                        &response,
+                    );
+                    record_runtime_event(
+                        &infer_state,
                         "runtime.infer.rejected",
-                        Some(&request.session_id),
-                        Some(&request.task_id),
-                        json_value!({
-                            "backend_id": response.backend_id,
-                            "route_state": response.route_state,
-                            "reason": response.reason,
-                        }),
+                        &request,
+                        event_payload,
                     );
                     infer_state
                         .remote_audit
@@ -136,17 +139,15 @@ pub fn build_router(state: AppState) -> Arc<RpcRouter> {
                     )),
                     None,
                 );
-                infer_state.events.record(
+                let mut event_payload =
+                    response_event_payload(&infer_state, "rejected", &request, &route, &response);
+                event_payload.pending_queue = Some(pending);
+                event_payload.queue_saturated = Some(true);
+                record_runtime_event(
+                    &infer_state,
                     "runtime.infer.rejected",
-                    Some(&request.session_id),
-                    Some(&request.task_id),
-                    json_value!({
-                        "backend_id": response.backend_id,
-                        "route_state": response.route_state,
-                        "reason": response.reason,
-                        "pending": pending,
-                        "max_concurrency": infer_state.budget.max_concurrency,
-                    }),
+                    &request,
+                    event_payload,
                 );
                 append_remote_audit_result(
                     &infer_state,
@@ -170,16 +171,13 @@ pub fn build_router(state: AppState) -> Arc<RpcRouter> {
             Err(error) => {
                 let response =
                     reject_response(&route, "budget-rejected", Some(error.to_string()), None);
-                infer_state.events.record(
+                let event_payload =
+                    response_event_payload(&infer_state, "rejected", &request, &route, &response);
+                record_runtime_event(
+                    &infer_state,
                     "runtime.infer.rejected",
-                    Some(&request.session_id),
-                    Some(&request.task_id),
-                    json_value!({
-                        "backend_id": response.backend_id,
-                        "route_state": response.route_state,
-                        "reason": response.reason,
-                        "model": request.model,
-                    }),
+                    &request,
+                    event_payload,
                 );
                 append_remote_audit_result(
                     &infer_state,
@@ -200,7 +198,7 @@ pub fn build_router(state: AppState) -> Arc<RpcRouter> {
         record_started_event(&infer_state, &request, &route);
 
         let response = infer_state.scheduler.infer_on_route(&request, &route);
-        record_terminal_events(&infer_state, &request, &response);
+        record_terminal_events(&infer_state, &request, &route, &response);
         append_remote_audit_result(
             &infer_state,
             remote_token.as_ref(),
@@ -295,17 +293,11 @@ fn record_submit_event(
     request: &RuntimeInferRequest,
     route: &RuntimeRouteResolveResponse,
 ) {
-    state.events.record(
+    record_runtime_event(
+        state,
         "runtime.infer.submit",
-        Some(&request.session_id),
-        Some(&request.task_id),
-        json_value!({
-            "selected_backend": route.selected_backend,
-            "route_state": route.route_state,
-            "degraded": route.degraded,
-            "reason": route.reason,
-            "model": request.model,
-        }),
+        request,
+        route_event_payload(state, "submit", request, route),
     );
 }
 
@@ -314,17 +306,10 @@ fn record_admitted_event(
     request: &RuntimeInferRequest,
     route: &RuntimeRouteResolveResponse,
 ) {
-    state.events.record(
-        "runtime.infer.admitted",
-        Some(&request.session_id),
-        Some(&request.task_id),
-        json_value!({
-            "selected_backend": route.selected_backend,
-            "route_state": route.route_state,
-            "pending": state.queue.snapshot(),
-            "active_requests": state.budget.snapshot().active_requests,
-        }),
-    );
+    let mut payload = route_event_payload(state, "admitted", request, route);
+    payload.pending_queue = Some(state.queue.snapshot());
+    payload.active_requests = Some(state.budget.snapshot().active_requests);
+    record_runtime_event(state, "runtime.infer.admitted", request, payload);
 }
 
 fn record_started_event(
@@ -332,57 +317,38 @@ fn record_started_event(
     request: &RuntimeInferRequest,
     route: &RuntimeRouteResolveResponse,
 ) {
-    state.events.record(
+    record_runtime_event(
+        state,
         "runtime.infer.started",
-        Some(&request.session_id),
-        Some(&request.task_id),
-        json_value!({
-            "selected_backend": route.selected_backend,
-            "route_state": route.route_state,
-            "model": request.model,
-        }),
+        request,
+        route_event_payload(state, "started", request, route),
     );
 }
 
 fn record_terminal_events(
     state: &AppState,
     request: &RuntimeInferRequest,
+    route: &RuntimeRouteResolveResponse,
     response: &RuntimeInferResponse,
 ) {
-    let payload = json_value!({
-        "backend_id": response.backend_id,
-        "route_state": response.route_state,
-        "degraded": response.degraded,
-        "rejected": response.rejected,
-        "reason": response.reason,
-        "estimated_latency_ms": response.estimated_latency_ms,
-    });
+    let payload = response_event_payload(state, "completed", request, route, response);
 
     if response.route_state.contains("timeout") {
-        state.events.record(
-            "runtime.infer.timeout",
-            Some(&request.session_id),
-            Some(&request.task_id),
-            payload.clone(),
-        );
+        let mut timeout_payload = payload.clone();
+        timeout_payload.event_phase = "timeout".to_string();
+        record_runtime_event(state, "runtime.infer.timeout", request, timeout_payload);
     }
 
     if response.route_state.contains("fallback") {
-        state.events.record(
-            "runtime.infer.fallback",
-            Some(&request.session_id),
-            Some(&request.task_id),
-            payload.clone(),
-        );
+        let mut fallback_payload = payload.clone();
+        fallback_payload.event_phase = "fallback".to_string();
+        record_runtime_event(state, "runtime.infer.fallback", request, fallback_payload);
     }
 
     if response.rejected {
-        state.events.record(
-            "runtime.infer.rejected",
-            Some(&request.session_id),
-            Some(&request.task_id),
-            payload.clone(),
-        );
+        let mut rejected_payload = payload.clone();
+        rejected_payload.event_phase = "rejected".to_string();
+        record_runtime_event(state, "runtime.infer.rejected", request, rejected_payload);
         return;
     }
 
@@ -390,28 +356,110 @@ fn record_terminal_events(
         || response.route_state.contains("unreachable")
         || response.route_state.contains("invalid-response")
     {
-        state.events.record(
-            "runtime.infer.failed",
-            Some(&request.session_id),
-            Some(&request.task_id),
-            payload.clone(),
-        );
+        let mut failed_payload = payload.clone();
+        failed_payload.event_phase = "failed".to_string();
+        record_runtime_event(state, "runtime.infer.failed", request, failed_payload);
         return;
     }
 
-    state.events.record(
-        "runtime.infer.completed",
-        Some(&request.session_id),
-        Some(&request.task_id),
-        payload.clone(),
-    );
+    record_runtime_event(state, "runtime.infer.completed", request, payload.clone());
 
     if response.degraded {
-        state.events.record(
-            "runtime.infer.degraded",
-            Some(&request.session_id),
-            Some(&request.task_id),
-            payload,
-        );
+        let mut degraded_payload = payload;
+        degraded_payload.event_phase = "degraded".to_string();
+        record_runtime_event(state, "runtime.infer.degraded", request, degraded_payload);
+    }
+}
+
+fn record_runtime_event(
+    state: &AppState,
+    kind: &str,
+    request: &RuntimeInferRequest,
+    payload: RuntimeBackendEventPayload,
+) {
+    let event_payload = serde_json::to_value(&payload).unwrap_or_else(|error| {
+        json_value!({
+            "event_phase": payload.event_phase,
+            "backend_id": payload.backend_id,
+            "resolved_backend": payload.resolved_backend,
+            "route_state": payload.route_state,
+            "reason": format!("failed to serialize runtime event payload: {error}"),
+        })
+    });
+    state.events.record(
+        kind,
+        Some(&request.session_id),
+        Some(&request.task_id),
+        event_payload,
+    );
+}
+
+fn response_note_value(response: &RuntimeInferResponse, prefix: &str) -> Option<String> {
+    response
+        .notes
+        .iter()
+        .find_map(|note| note.strip_prefix(prefix).map(str::to_string))
+}
+
+fn route_event_payload(
+    state: &AppState,
+    event_phase: &str,
+    request: &RuntimeInferRequest,
+    route: &RuntimeRouteResolveResponse,
+) -> RuntimeBackendEventPayload {
+    RuntimeBackendEventPayload {
+        event_phase: event_phase.to_string(),
+        backend_id: route.selected_backend.clone(),
+        resolved_backend: route.selected_backend.clone(),
+        route_state: route.route_state.clone(),
+        degraded: route.degraded,
+        rejected: false,
+        requested_backend: request.preferred_backend.clone(),
+        fallback_backend: None,
+        reason: Some(route.reason.clone()),
+        model: request.model.clone(),
+        estimated_latency_ms: None,
+        pending_queue: Some(state.queue.snapshot()),
+        active_requests: None,
+        queue_saturated: Some(state.queue.is_saturated(state.budget.max_concurrency)),
+        provider_id: None,
+        runtime_service_id: None,
+        provider_status: None,
+        artifact_path: None,
+    }
+}
+
+fn response_event_payload(
+    state: &AppState,
+    event_phase: &str,
+    request: &RuntimeInferRequest,
+    route: &RuntimeRouteResolveResponse,
+    response: &RuntimeInferResponse,
+) -> RuntimeBackendEventPayload {
+    RuntimeBackendEventPayload {
+        event_phase: event_phase.to_string(),
+        backend_id: response.backend_id.clone(),
+        resolved_backend: route.selected_backend.clone(),
+        route_state: response.route_state.clone(),
+        degraded: response.degraded,
+        rejected: response.rejected,
+        requested_backend: request.preferred_backend.clone(),
+        fallback_backend: if response.backend_id != route.selected_backend {
+            Some(response.backend_id.clone())
+        } else {
+            None
+        },
+        reason: response.reason.clone(),
+        model: request.model.clone(),
+        estimated_latency_ms: response.estimated_latency_ms,
+        pending_queue: Some(state.queue.snapshot()),
+        active_requests: Some(state.budget.snapshot().active_requests),
+        queue_saturated: response
+            .queue_saturated
+            .or(Some(state.queue.is_saturated(state.budget.max_concurrency))),
+        provider_id: response.provider_id.clone(),
+        runtime_service_id: response.runtime_service_id.clone(),
+        provider_status: response.provider_status.clone(),
+        artifact_path: response_note_value(response, "vendor_evidence_path="),
     }
 }

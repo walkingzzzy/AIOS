@@ -398,10 +398,12 @@ fn match_context_field(
 
 fn constraint_within_scope(approved: &Value, requested: &Value) -> bool {
     match (approved, requested) {
-        (Value::Number(approved), Value::Number(requested)) => match (approved.as_f64(), requested.as_f64()) {
-            (Some(approved), Some(requested)) => requested <= approved,
-            _ => false,
-        },
+        (Value::Number(approved), Value::Number(requested)) => {
+            match (approved.as_f64(), requested.as_f64()) {
+                (Some(approved), Some(requested)) => requested <= approved,
+                _ => false,
+            }
+        }
         _ => approved == requested,
     }
 }

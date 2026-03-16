@@ -23,6 +23,8 @@ COMPONENT_CLIENTS = {
     "approval-panel": ROOT / "components" / "approval-panel" / "client.py",
     "recovery-surface": ROOT / "components" / "recovery-surface" / "client.py",
     "notification-center": ROOT / "components" / "notification-center" / "client.py",
+    "operator-audit": ROOT / "components" / "operator-audit" / "client.py",
+    "remote-governance": ROOT / "components" / "remote-governance" / "client.py",
     "portal-chooser": ROOT / "components" / "portal-chooser" / "client.py",
     "capture-indicators": ROOT / "components" / "capture-indicators" / "client.py",
     "device-backend-status": ROOT / "components" / "device-backend-status" / "client.py",
@@ -34,6 +36,8 @@ COMPONENT_PANELS = {
     "approval-panel": ROOT / "components" / "approval-panel" / "panel.py",
     "recovery-surface": ROOT / "components" / "recovery-surface" / "panel.py",
     "notification-center": ROOT / "components" / "notification-center" / "panel.py",
+    "operator-audit": ROOT / "components" / "operator-audit" / "panel.py",
+    "remote-governance": ROOT / "components" / "remote-governance" / "panel.py",
     "portal-chooser": ROOT / "components" / "portal-chooser" / "panel.py",
     "capture-indicators": ROOT / "components" / "capture-indicators" / "panel.py",
     "device-backend-status": ROOT / "components" / "device-backend-status" / "panel.py",
@@ -49,6 +53,8 @@ PROFILE_COMPONENT_KEYS = {
     "approval-panel": "approval_panel",
     "recovery-surface": "recovery_surface",
     "notification-center": "notification_center",
+    "operator-audit": "operator_audit",
+    "remote-governance": "remote_governance",
     "portal-chooser": "portal_chooser",
     "capture-indicators": "capture_indicators",
     "device-backend-status": "device_backend_status",
@@ -68,6 +74,8 @@ DEFAULT_SCREEN_CAPTURE_PROVIDER_SOCKET = Path(
 STATUS_COMPONENTS = [
     "recovery-surface",
     "notification-center",
+    "operator-audit",
+    "remote-governance",
     "device-backend-status",
     "capture-indicators",
 ]
@@ -178,16 +186,31 @@ def component_base_args(profile: dict, component: str) -> list[str]:
     paths = profile.get("paths", {})
     compositor = profile.get("compositor", {}) or {}
     if component == "launcher":
-        return ["--socket", paths.get("sessiond_socket", "/run/aios/sessiond/sessiond.sock")]
-    if component == "task-surface":
         return [
             "--socket",
             paths.get("sessiond_socket", "/run/aios/sessiond/sessiond.sock"),
             "--agent-socket",
             paths.get("agentd_socket", str(agentd_socket(profile))),
         ]
+    if component == "task-surface":
+        command = [
+            "--socket",
+            paths.get("sessiond_socket", "/run/aios/sessiond/sessiond.sock"),
+            "--agent-socket",
+            paths.get("agentd_socket", str(agentd_socket(profile))),
+        ]
+        if compositor.get("runtime_state_path"):
+            command.extend(["--compositor-runtime-state", compositor["runtime_state_path"]])
+        if compositor.get("window_state_path"):
+            command.extend(["--compositor-window-state", compositor["window_state_path"]])
+        return command
     if component == "approval-panel":
-        return ["--socket", paths.get("policyd_socket", "/run/aios/policyd/policyd.sock")]
+        return [
+            "--socket",
+            paths.get("policyd_socket", "/run/aios/policyd/policyd.sock"),
+            "--agent-socket",
+            paths.get("agentd_socket", str(agentd_socket(profile))),
+        ]
     if component == "recovery-surface":
         return [
             "--socket",
@@ -207,6 +230,8 @@ def component_base_args(profile: dict, component: str) -> list[str]:
             paths.get("device_backend_state", "/var/lib/aios/deviced/backend-state.json"),
             "--deviced-socket",
             paths.get("deviced_socket", "/run/aios/deviced/deviced.sock"),
+            "--agent-socket",
+            paths.get("agentd_socket", str(agentd_socket(profile))),
             "--policy-socket",
             paths.get("policyd_socket", "/run/aios/policyd/policyd.sock"),
         ]
@@ -215,11 +240,55 @@ def component_base_args(profile: dict, component: str) -> list[str]:
         )
         if panel_action_log_path:
             command.extend(["--panel-action-log", panel_action_log_path])
+        for flag, key in (
+            ("--policy-audit-log", "policy_audit_log"),
+            ("--runtime-events-log", "runtime_events_log"),
+            ("--remote-audit-log", "remote_audit_log"),
+            ("--compat-observability-log", "compat_observability_log"),
+            ("--browser-remote-registry", "browser_remote_registry"),
+            ("--office-remote-registry", "office_remote_registry"),
+            ("--provider-registry-state-dir", "provider_registry_state_dir"),
+        ):
+            value = paths.get(key)
+            if value:
+                command.extend([flag, value])
+        if compositor.get("runtime_state_path"):
+            command.extend(["--compositor-runtime-state", compositor["runtime_state_path"]])
+        if compositor.get("window_state_path"):
+            command.extend(["--compositor-window-state", compositor["window_state_path"]])
+        return command
+    if component == "operator-audit":
+        command: list[str] = []
+        for flag, key in (
+            ("--policy-audit-log", "policy_audit_log"),
+            ("--runtime-events-log", "runtime_events_log"),
+            ("--remote-audit-log", "remote_audit_log"),
+            ("--compat-observability-log", "compat_observability_log"),
+            ("--browser-remote-registry", "browser_remote_registry"),
+            ("--office-remote-registry", "office_remote_registry"),
+            ("--provider-registry-state-dir", "provider_registry_state_dir"),
+        ):
+            value = paths.get(key)
+            if value:
+                command.extend([flag, value])
+        return command
+    if component == "remote-governance":
+        command: list[str] = []
+        for flag, key in (
+            ("--browser-remote-registry", "browser_remote_registry"),
+            ("--office-remote-registry", "office_remote_registry"),
+            ("--provider-registry-state-dir", "provider_registry_state_dir"),
+        ):
+            value = paths.get(key)
+            if value:
+                command.extend([flag, value])
         return command
     if component == "portal-chooser":
         return [
             "--socket",
             paths.get("sessiond_socket", "/run/aios/sessiond/sessiond.sock"),
+            "--agent-socket",
+            paths.get("agentd_socket", str(agentd_socket(profile))),
             "--policy-socket",
             paths.get("policyd_socket", str(policyd_socket(profile))),
             "--deviced-socket",
@@ -340,6 +409,10 @@ def component_status(profile: dict, component: str) -> dict:
         return run_component(profile, component, ["summary", "--json"], expect_json=True)
     if component == "notification-center":
         return run_component(profile, component, ["summary", "--json"], expect_json=True)
+    if component == "operator-audit":
+        return run_component(profile, component, ["summary", "--json"], expect_json=True)
+    if component == "remote-governance":
+        return run_component(profile, component, ["summary", "--json"], expect_json=True)
     if component == "device-backend-status":
         return run_component(profile, component, ["attention", "--json"], expect_json=True)
     if component == "capture-indicators":
@@ -444,6 +517,35 @@ def print_control_result(command: str, result: dict) -> None:
             print(f"panel_id: {model.get('panel_id')}")
         return
 
+    if command == "operator-audit-open":
+        print(f"provider_id: {result.get('provider_id')}")
+        print(f"status: {result.get('status')}")
+        print(f"issue_count: {result.get('issue_count', 0)}")
+        print(f"record_count: {result.get('record_count', 0)}")
+        print(f"matched_record_count: {result.get('matched_record_count', 0)}")
+        print(f"remote_governance_issue_count: {result.get('remote_governance_issue_count', 0)}")
+        print(f"remote_governance_matched_entry_count: {result.get('remote_governance_matched_entry_count', 0)}")
+        print(f"filters: {json.dumps(result.get('filters') or {}, ensure_ascii=False, sort_keys=True)}")
+        print(f"report_path: {result.get('report_path') or '-'}")
+        model = result.get("model") or {}
+        if model:
+            print(f"panel_id: {model.get('panel_id')}")
+        return
+
+    if command == "remote-governance-open":
+        print(f"provider_id: {result.get('provider_id')}")
+        print(f"status: {result.get('status')}")
+        print(f"entry_count: {result.get('entry_count', 0)}")
+        print(f"matched_entry_count: {result.get('matched_entry_count', 0)}")
+        print(f"issue_count: {result.get('issue_count', 0)}")
+        print(f"fleet_count: {result.get('fleet_count', 0)}")
+        print(f"filters: {json.dumps(result.get('filters') or {}, ensure_ascii=False, sort_keys=True)}")
+        print(f"report_path: {result.get('report_path') or '-'}")
+        model = result.get("model") or {}
+        if model:
+            print(f"panel_id: {model.get('panel_id')}")
+        return
+
     if command == "window-focus":
         print(f"provider_id: {result.get('provider_id')}")
         print(f"status: {result.get('status')}")
@@ -493,6 +595,69 @@ def command_control(profile: dict, args: argparse.Namespace, as_json: bool) -> i
             params={
                 "target": args.target,
                 "reason": args.reason,
+            },
+        )
+    elif args.control_command == "operator-audit-open":
+        result = shell_control_request(
+            profile,
+            provider_socket=provider_socket,
+            user_id=args.user_id,
+            session_id=args.session_id,
+            task_id=args.task_id,
+            capability_id="shell.operator-audit.open",
+            params={
+                "include_model": args.include_model,
+                "issue_only": args.issue_only,
+                "limit": args.limit,
+                "source": args.source,
+                "query_source": args.audit_source,
+                "severity": args.severity,
+                "provider_id": args.provider_id,
+                "provider_ref": args.provider_ref,
+                "capability_id": args.capability_id,
+                "decision": args.decision,
+                "status": args.status,
+                "session_id": args.filter_session_id,
+                "task_id": args.filter_task_id,
+                "approval_id": args.approval_id,
+                "approval_ref": args.approval_ref,
+                "audit_id": args.audit_id,
+                "error_code": args.error_code,
+                "text": args.text,
+                "since": args.since,
+                "until": args.until,
+                "fleet_id": args.fleet_id,
+                "governance_group": args.governance_group,
+                "attestation_mode": args.attestation_mode,
+                "control_plane_status": args.control_plane_status,
+                "report_path": args.report_path,
+            },
+        )
+    elif args.control_command == "remote-governance-open":
+        result = shell_control_request(
+            profile,
+            provider_socket=provider_socket,
+            user_id=args.user_id,
+            session_id=args.session_id,
+            task_id=args.task_id,
+            capability_id="shell.remote-governance.open",
+            params={
+                "include_model": args.include_model,
+                "issue_only": args.issue_only,
+                "limit": args.limit,
+                "source": args.source,
+                "query_source": args.query_source,
+                "severity": args.severity,
+                "fleet_id": args.fleet_id,
+                "governance_group": args.governance_group,
+                "status": args.status,
+                "provider_ref": args.provider_ref,
+                "provider_id": args.provider_id,
+                "attestation_mode": args.attestation_mode,
+                "control_plane_status": args.control_plane_status,
+                "approval_ref": args.approval_ref,
+                "text": args.text,
+                "report_path": args.report_path,
             },
         )
     else:
@@ -555,7 +720,7 @@ def main() -> int:
     component_parser.add_argument("--allow-disabled", action="store_true")
     component_parser.add_argument("args", nargs=argparse.REMAINDER)
 
-    panel_parser = subparsers.add_parser("panel", help="Run a shell panel skeleton entrypoint")
+    panel_parser = subparsers.add_parser("panel", help="Run a shell formal panel entrypoint")
     panel_parser.add_argument("name")
     panel_parser.add_argument("--allow-disabled", action="store_true")
     panel_parser.add_argument("args", nargs=argparse.REMAINDER)
@@ -577,6 +742,63 @@ def main() -> int:
     notification_parser.add_argument("--task-id", required=True)
     notification_parser.add_argument("--source", default="shellctl")
     notification_parser.add_argument("--include-model", action="store_true")
+
+    operator_audit_parser = control_subparsers.add_parser(
+        "operator-audit-open",
+        help="Open operator audit through shell.control.local",
+    )
+    operator_audit_parser.add_argument("--user-id", default="local-user")
+    operator_audit_parser.add_argument("--session-id", required=True)
+    operator_audit_parser.add_argument("--task-id", required=True)
+    operator_audit_parser.add_argument("--source", default="shellctl")
+    operator_audit_parser.add_argument("--audit-source")
+    operator_audit_parser.add_argument("--include-model", action="store_true")
+    operator_audit_parser.add_argument("--issue-only", action="store_true")
+    operator_audit_parser.add_argument("--limit", type=int)
+    operator_audit_parser.add_argument("--severity")
+    operator_audit_parser.add_argument("--provider-id")
+    operator_audit_parser.add_argument("--provider-ref")
+    operator_audit_parser.add_argument("--capability-id")
+    operator_audit_parser.add_argument("--decision")
+    operator_audit_parser.add_argument("--status")
+    operator_audit_parser.add_argument("--filter-session-id")
+    operator_audit_parser.add_argument("--filter-task-id")
+    operator_audit_parser.add_argument("--approval-id")
+    operator_audit_parser.add_argument("--approval-ref")
+    operator_audit_parser.add_argument("--audit-id")
+    operator_audit_parser.add_argument("--error-code")
+    operator_audit_parser.add_argument("--text")
+    operator_audit_parser.add_argument("--since")
+    operator_audit_parser.add_argument("--until")
+    operator_audit_parser.add_argument("--fleet-id")
+    operator_audit_parser.add_argument("--governance-group")
+    operator_audit_parser.add_argument("--attestation-mode")
+    operator_audit_parser.add_argument("--control-plane-status")
+    operator_audit_parser.add_argument("--report-path", type=Path)
+
+    remote_governance_parser = control_subparsers.add_parser(
+        "remote-governance-open",
+        help="Open compat remote governance through shell.control.local",
+    )
+    remote_governance_parser.add_argument("--user-id", default="local-user")
+    remote_governance_parser.add_argument("--session-id", required=True)
+    remote_governance_parser.add_argument("--task-id", required=True)
+    remote_governance_parser.add_argument("--source", default="shellctl")
+    remote_governance_parser.add_argument("--query-source")
+    remote_governance_parser.add_argument("--include-model", action="store_true")
+    remote_governance_parser.add_argument("--issue-only", action="store_true")
+    remote_governance_parser.add_argument("--limit", type=int)
+    remote_governance_parser.add_argument("--severity")
+    remote_governance_parser.add_argument("--fleet-id")
+    remote_governance_parser.add_argument("--governance-group")
+    remote_governance_parser.add_argument("--status")
+    remote_governance_parser.add_argument("--provider-ref")
+    remote_governance_parser.add_argument("--provider-id")
+    remote_governance_parser.add_argument("--attestation-mode")
+    remote_governance_parser.add_argument("--control-plane-status")
+    remote_governance_parser.add_argument("--approval-ref")
+    remote_governance_parser.add_argument("--text")
+    remote_governance_parser.add_argument("--report-path", type=Path)
 
     focus_parser = control_subparsers.add_parser(
         "window-focus",
@@ -633,3 +855,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

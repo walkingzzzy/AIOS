@@ -107,9 +107,7 @@ impl TokenUsageStore {
         let mut hasher = Sha256::new();
         hasher.update(signature.as_bytes());
         let digest = hasher.finalize();
-        Ok(self
-            .dir
-            .join(format!("{}.json", hex_digest(&digest))))
+        Ok(self.dir.join(format!("{}.json", hex_digest(&digest))))
     }
 }
 
@@ -142,11 +140,11 @@ fn ensure_secure_dir(path: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn tighten_file_permissions(path: &Path) -> anyhow::Result<()> {
+fn tighten_file_permissions(_path: &Path) -> anyhow::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+        fs::set_permissions(_path, fs::Permissions::from_mode(0o600))?;
     }
 
     Ok(())

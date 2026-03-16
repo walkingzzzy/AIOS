@@ -11,6 +11,7 @@ from typing import Any
 
 from panel import (
     build_model,
+    default_agent_socket,
     default_sessiond_socket,
     list_handles_with_request,
     perform_action,
@@ -22,6 +23,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="AIOS portal chooser standalone host")
     parser.add_argument("command", nargs="?", default="snapshot", choices=["snapshot", "serve", "action", "export"])
     parser.add_argument("--socket", type=Path, default=default_sessiond_socket())
+    parser.add_argument("--agent-socket", type=Path, default=default_agent_socket())
     parser.add_argument("--session-id")
     parser.add_argument("--task-id")
     parser.add_argument("--user-id", default="local-user")
@@ -40,8 +42,13 @@ def parse_args() -> argparse.Namespace:
 
 
 def load_state(args: argparse.Namespace) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
-    handles, request = list_handles_with_request(args.socket, args.session_id, args.handle_fixture)
-    model = build_model(handles, args.session_id, request)
+    handles, request, data_source_error = list_handles_with_request(
+        args.socket,
+        args.agent_socket,
+        args.session_id,
+        args.handle_fixture,
+    )
+    model = build_model(handles, args.session_id, request, data_source_error)
     return handles, request, model
 
 
@@ -295,6 +302,7 @@ def run_tk_gui(args: argparse.Namespace) -> int:
         nonlocal current_handle_id
         result = perform_action(
             args.socket,
+            args.agent_socket,
             args.session_id,
             args.handle_fixture,
             action_id,
@@ -367,6 +375,7 @@ def main() -> int:
             raise SystemExit("--action is required for action")
         result = perform_action(
             args.socket,
+            args.agent_socket,
             args.session_id,
             args.handle_fixture,
             args.action,
@@ -411,3 +420,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

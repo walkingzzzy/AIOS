@@ -6,7 +6,7 @@
   "owner": "aios-compat",
   "worker_contract": "compat-mcp-bridge-v1",
   "result_protocol_schema_ref": "aios/compat-mcp-bridge-result.schema.json",
-  "trust_policy_modes": ["permissive", "allowlist", "deny"],
+  "trust_policy_modes": ["registered-remote", "none", "bearer", "header", "execution-token"],
   "capabilities": [
     {
       "capability_id": "compat.mcp.call",
@@ -83,7 +83,7 @@
     "audit_tags": ["bridge", "compat", "remote"],
     "taint_behavior": "remote-tainted"
   },
-  "supported_targets": ["mcp-server", "remote-agent"],
+  "supported_targets": ["mcp-server", "remote-agent", "registered-remote"],
   "timeout_policy": "bounded-20s",
   "retry_policy": "retry-once",
   "healthcheck": {

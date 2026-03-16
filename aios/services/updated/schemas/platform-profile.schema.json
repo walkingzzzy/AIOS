@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aios/updated/platform-profile.schema.json",
+  "title": "AIOS Updated Platform Profile",
+  "type": "object",
+  "required": [
+    "profile_id",
+    "update_stack",
+    "sysupdate_binary",
+    "sysupdate_definitions_dir",
+    "boot_backend",
+    "bootctl_binary",
+    "firmwarectl_binary",
+    "health_probe_command",
+    "boot_cmdline_path",
+    "boot_entry_state_dir",
+    "boot_success_marker_path",
+    "current_channel",
+    "current_slot"
+  ],
+  "properties": {
+    "profile_id": { "type": "string", "minLength": 1 },
+    "deployment_state_path": { "type": "string", "minLength": 1 },
+    "sysupdate_dir": { "type": "string", "minLength": 1 },
+    "sysupdate_definitions_dir": { "type": "string", "minLength": 1 },
+    "sysupdate_root": { "type": "string", "minLength": 1 },
+    "sysupdate_component": { "type": "string", "minLength": 1 },
+    "sysupdate_extra_args": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "diagnostics_dir": { "type": "string", "minLength": 1 },
+    "recovery_dir": { "type": "string", "minLength": 1 },
+    "health_probe_path": { "type": "string", "minLength": 1 },
+    "recovery_surface_path": { "type": "string", "minLength": 1 },
+    "boot_state_path": { "type": "string", "minLength": 1 },
+    "boot_backend": {
+      "type": "string",
+      "enum": ["state-file", "bootctl", "firmware"]
+    },
+    "bootctl_binary": { "type": "string", "minLength": 1 },
+    "firmwarectl_binary": { "type": "string", "minLength": 1 },
+    "boot_cmdline_path": { "type": "string", "minLength": 1 },
+    "boot_entry_state_dir": { "type": "string", "minLength": 1 },
+    "boot_success_marker_path": { "type": "string", "minLength": 1 },
+    "health_probe_command": { "type": "string", "minLength": 1 },
+    "sysupdate_check_command": { "type": "string", "minLength": 1 },
+    "sysupdate_apply_command": { "type": "string", "minLength": 1 },
+    "rollback_command": { "type": "string", "minLength": 1 },
+    "boot_slot_command": { "type": "string", "minLength": 1 },
+    "boot_switch_command": { "type": "string", "minLength": 1 },
+    "boot_success_command": { "type": "string", "minLength": 1 },
+    "sysupdate_binary": { "type": "string", "minLength": 1 },
+    "update_stack": {
+      "type": "string",
+      "enum": ["systemd-sysupdate"]
+    },
+    "current_channel": { "type": "string", "minLength": 1 },
+    "current_version": { "type": "string", "minLength": 1 },
+    "current_slot": {
+      "type": "string",
+      "enum": ["a", "b"]
+    },
+    "target_version_hint": { "type": "string", "minLength": 1 }
+  },
+  "additionalProperties": false
+}

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -14,6 +15,10 @@ def require(condition: bool, message: str) -> None:
 
 
 def main() -> int:
+    if os.name == "nt":
+        print("container-native build smoke skipped: container-native delivery preflight is validated on Linux hosts")
+        return 0
+
     script = ROOT / "scripts" / "build-aios-delivery-container.sh"
     dockerfile = ROOT / "docker" / "aios-delivery.Dockerfile"
     require(script.exists(), f"missing container build script: {script}")

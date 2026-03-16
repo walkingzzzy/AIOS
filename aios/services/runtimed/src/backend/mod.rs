@@ -120,6 +120,19 @@ pub fn descriptors(
                 backend_id: backend.clone(),
                 availability: "unknown".to_string(),
                 activation: "not-modeled-yet".to_string(),
+                health_state: "unknown".to_string(),
+                reason: "runtime backend is not modeled yet".to_string(),
+                managed: false,
+                fallback_backend: if backend == "local-cpu" {
+                    None
+                } else {
+                    Some("local-cpu".to_string())
+                },
+                worker_contract: None,
+                worker_state: None,
+                command_source: None,
+                detail: None,
+                socket_path: None,
             },
         })
         .collect()
@@ -166,6 +179,18 @@ mod tests {
         }
     }
 
+    fn configured_wrapper_command() -> String {
+        #[cfg(windows)]
+        {
+            "Write-Output '{\"content\":\"gpu-ok\",\"route_state\":\"local-wrapper\"}'".to_string()
+        }
+
+        #[cfg(not(windows))]
+        {
+            r#"printf '%s' '{"content":"gpu-ok","route_state":"local-wrapper"}'"#.to_string()
+        }
+    }
+
     #[test]
     fn descriptors_resolve_through_runtime_backend_trait() {
         let descriptors = descriptors(
@@ -196,10 +221,7 @@ mod tests {
             42,
             1_000,
             &BackendCommands {
-                local_gpu: Some(
-                    r#"printf '%s' '{"content":"gpu-ok","route_state":"local-wrapper"}'"#
-                        .to_string(),
-                ),
+                local_gpu: Some(configured_wrapper_command()),
                 ..BackendCommands::default()
             },
         )

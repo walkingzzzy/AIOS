@@ -17,3 +17,10 @@
 - 仍依赖 `deviced` 的 backend snapshot，而不是直接接 PipeWire / libinput / camera driver
 - 尚未接入 `agentd` 的正式 intent 执行闭环
 - 设备 readiness 的 release-grade 完成度仍受 `deviced` 原生 backend 与 `ui_tree` 支持矩阵成熟度限制
+
+## 联调约定
+
+- `device.metadata.get` 直接透传 `deviced` 的 `backend_summary`，不在 provider 内重复推导 backend 整体状态
+- metadata `notes` 会稳定暴露 `backend_overall_status`、`backend_available_status_count`、`backend_attention_count`
+- provider `system.health.get` 会稳定暴露 `device_backend_overall_status`、`device_backend_available_status_count`、`device_backend_attention_count`
+- `ui_tree_support_matrix` 与 `backend_summary.ui_tree_capture_mode` 共同作为 shell / hardware / provider 的统一 UI 树能力描述

@@ -12,7 +12,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from aios_cargo_bins import default_aios_bin_dir
+from aios_cargo_bins import default_aios_bin_dir, resolve_binary_path
 
 
 EXPECTED_BUILTIN_PROVIDERS = {
@@ -62,10 +62,10 @@ def repo_root() -> Path:
 
 def resolve_binary(name: str, explicit: Path | None, bin_dir: Path | None) -> Path:
     if explicit is not None:
-        return explicit
+        return resolve_binary_path(explicit.parent, explicit.name)
     if bin_dir is not None:
-        return bin_dir / name
-    return default_aios_bin_dir(repo_root()) / name
+        return resolve_binary_path(bin_dir, name)
+    return resolve_binary_path(default_aios_bin_dir(repo_root()), name)
 
 
 def ensure_binaries(paths: dict[str, Path]) -> None:
@@ -104,6 +104,9 @@ def rpc_request(socket_path: Path, method: str, params: dict, timeout: float) ->
             data += chunk
     return json.loads(data.decode("utf-8"))
 
+
+def unix_rpc_supported() -> bool:
+    return hasattr(socket, "AF_UNIX") and os.name != "nt"
 
 def wait_for_socket(path: Path, timeout: float) -> None:
     deadline = time.time() + timeout
@@ -334,6 +337,9 @@ def allocate_temp_root() -> Path:
 
 def main() -> int:
     args = parse_args()
+    if not unix_rpc_supported():
+        print("provider registry smoke skipped: unix rpc transport unsupported on this platform")
+        return 0
     binaries = {
         "agentd": resolve_binary("agentd", args.agentd, args.bin_dir),
     }
@@ -352,14 +358,14 @@ def main() -> int:
         health = wait_for_health(socket_path, args.timeout)
         print(f"agentd ready: {health['status']} @ {health['socket_path']}")
 
-        all_providers = rpc_call(socket_path, "provider.discover", {}, timeout=args.timeout)
+        all_providers = rpc_call(socket_path, "agent.provider.discover", {}, timeout=args.timeout)
         discovered_builtin_providers = provider_ids(all_providers)
         require(
             EXPECTED_BUILTIN_PROVIDERS.issubset(discovered_builtin_providers),
             f"missing builtin providers: {sorted(EXPECTED_BUILTIN_PROVIDERS - discovered_builtin_providers)}",
         )
 
-        health_result = rpc_call(socket_path, "provider.health.get", {}, timeout=args.timeout)
+        health_result = rpc_call(socket_path, "agent.provider.health.get", {}, timeout=args.timeout)
         builtin_health = provider_health_map(health_result)
         require(
             EXPECTED_BUILTIN_PROVIDERS.issubset(set(builtin_health)),
@@ -368,7 +374,7 @@ def main() -> int:
 
         descriptor = rpc_call(
             socket_path,
-            "provider.get_descriptor",
+            "agent.provider.get_descriptor",
             {"provider_id": "compat.code.sandbox.local"},
             timeout=args.timeout,
         )
@@ -381,7 +387,7 @@ def main() -> int:
         for capability_id, provider_id in EXPECTED_RESOLUTIONS.items():
             resolved = rpc_call(
                 socket_path,
-                "provider.resolve_capability",
+                "agent.provider.resolve_capability",
                 {
                     "capability_id": capability_id,
                     "require_healthy": True,
@@ -398,7 +404,7 @@ def main() -> int:
 
         reported_unavailable = rpc_call(
             socket_path,
-            "provider.health.report",
+            "agent.provider.health.report",
             {
                 "provider_id": "system.files.local",
                 "status": "unavailable",
@@ -411,7 +417,7 @@ def main() -> int:
 
         unavailable_resolution = rpc_call(
             socket_path,
-            "provider.resolve_capability",
+            "agent.provider.resolve_capability",
             {
                 "capability_id": "provider.fs.open",
                 "preferred_execution_location": "local",
@@ -427,7 +433,7 @@ def main() -> int:
 
         reported_available = rpc_call(
             socket_path,
-            "provider.health.report",
+            "agent.provider.health.report",
             {
                 "provider_id": "system.files.local",
                 "status": "available",
@@ -439,7 +445,7 @@ def main() -> int:
 
         rehealthy_resolution = rpc_call(
             socket_path,
-            "provider.resolve_capability",
+            "agent.provider.resolve_capability",
             {
                 "capability_id": "provider.fs.open",
                 "preferred_execution_location": "local",
@@ -455,7 +461,7 @@ def main() -> int:
 
         disabled = rpc_call(
             socket_path,
-            "provider.disable",
+            "agent.provider.disable",
             {
                 "provider_id": "compat.code.sandbox.local",
                 "reason": "registry-smoke",
@@ -467,7 +473,7 @@ def main() -> int:
 
         disabled_discovery = rpc_call(
             socket_path,
-            "provider.discover",
+            "agent.provider.discover",
             {
                 "capability_id": "compat.code.execute",
                 "include_disabled": False,
@@ -481,7 +487,7 @@ def main() -> int:
 
         disabled_resolution = rpc_call(
             socket_path,
-            "provider.resolve_capability",
+            "agent.provider.resolve_capability",
             {
                 "capability_id": "compat.code.execute",
                 "require_healthy": True,
@@ -496,7 +502,7 @@ def main() -> int:
 
         disabled_inclusive = rpc_call(
             socket_path,
-            "provider.discover",
+            "agent.provider.discover",
             {
                 "capability_id": "compat.code.execute",
                 "include_disabled": True,
@@ -509,7 +515,7 @@ def main() -> int:
 
         enabled = rpc_call(
             socket_path,
-            "provider.enable",
+            "agent.provider.enable",
             {
                 "provider_id": "compat.code.sandbox.local",
             },
@@ -520,7 +526,7 @@ def main() -> int:
 
         reenabled_resolution = rpc_call(
             socket_path,
-            "provider.resolve_capability",
+            "agent.provider.resolve_capability",
             {
                 "capability_id": "compat.code.execute",
                 "require_healthy": True,
@@ -537,7 +543,7 @@ def main() -> int:
         dynamic_provider_id = dynamic_descriptor["provider_id"]
         register_result = rpc_call(
             socket_path,
-            "provider.register",
+            "agent.provider.register",
             {"descriptor": dynamic_descriptor},
             timeout=args.timeout,
         )
@@ -551,7 +557,7 @@ def main() -> int:
 
         dynamic_discovery = rpc_call(
             socket_path,
-            "provider.discover",
+            "agent.provider.discover",
             {
                 "capability_id": "compat.test.ping",
                 "include_disabled": False,
@@ -565,7 +571,7 @@ def main() -> int:
 
         dynamic_descriptor_result = rpc_call(
             socket_path,
-            "provider.get_descriptor",
+            "agent.provider.get_descriptor",
             {"provider_id": dynamic_provider_id},
             timeout=args.timeout,
         )
@@ -576,7 +582,7 @@ def main() -> int:
 
         dynamic_resolution = rpc_call(
             socket_path,
-            "provider.resolve_capability",
+            "agent.provider.resolve_capability",
             {
                 "capability_id": "compat.test.ping",
                 "preferred_kind": "compat-provider",
@@ -595,7 +601,7 @@ def main() -> int:
         remote_provider_id = remote_descriptor["provider_id"]
         remote_register_result = rpc_call(
             socket_path,
-            "provider.register",
+            "agent.provider.register",
             {"descriptor": remote_descriptor},
             timeout=args.timeout,
         )
@@ -606,7 +612,7 @@ def main() -> int:
 
         remote_descriptor_result = rpc_call(
             socket_path,
-            "provider.get_descriptor",
+            "agent.provider.get_descriptor",
             {"provider_id": remote_provider_id},
             timeout=args.timeout,
         )
@@ -630,7 +636,7 @@ def main() -> int:
 
         remote_discovery = rpc_call(
             socket_path,
-            "provider.discover",
+            "agent.provider.discover",
             {
                 "capability_id": "compat.browser.navigate",
                 "execution_location": "attested_remote",
@@ -662,7 +668,7 @@ def main() -> int:
 
         remote_resolution = rpc_call(
             socket_path,
-            "provider.resolve_capability",
+            "agent.provider.resolve_capability",
             {
                 "capability_id": "compat.browser.navigate",
                 "preferred_execution_location": "attested_remote",
@@ -683,7 +689,7 @@ def main() -> int:
 
         disallowed_remote_response = rpc_request(
             socket_path,
-            "provider.register",
+            "agent.provider.register",
             {"descriptor": build_disallowed_remote_descriptor()},
             timeout=args.timeout,
         )
@@ -695,7 +701,7 @@ def main() -> int:
 
         unregister_result = rpc_call(
             socket_path,
-            "provider.unregister",
+            "agent.provider.unregister",
             {"provider_id": dynamic_provider_id},
             timeout=args.timeout,
         )
@@ -705,7 +711,7 @@ def main() -> int:
 
         post_unregister = rpc_call(
             socket_path,
-            "provider.get_descriptor",
+            "agent.provider.get_descriptor",
             {"provider_id": dynamic_provider_id},
             timeout=args.timeout,
         )
@@ -713,7 +719,7 @@ def main() -> int:
 
         remote_unregister_result = rpc_call(
             socket_path,
-            "provider.unregister",
+            "agent.provider.unregister",
             {"provider_id": remote_provider_id},
             timeout=args.timeout,
         )

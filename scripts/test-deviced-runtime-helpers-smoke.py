@@ -13,7 +13,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from aios_cargo_bins import default_aios_bin_dir
+from aios_cargo_bins import default_aios_bin_dir, resolve_binary_path
 
 
 def parse_args() -> argparse.Namespace:
@@ -29,12 +29,17 @@ def repo_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+
 def resolve_binary(name: str, explicit: Path | None, bin_dir: Path | None) -> Path:
     if explicit is not None:
-        return explicit
+        return resolve_binary_path(explicit.parent, explicit.name)
     if bin_dir is not None:
-        return bin_dir / name
-    return default_aios_bin_dir(repo_root()) / name
+        return resolve_binary_path(bin_dir, name)
+    return resolve_binary_path(default_aios_bin_dir(repo_root()), name)
+
+
+def unix_rpc_supported() -> bool:
+    return hasattr(socket, "AF_UNIX") and os.name != "nt"
 
 
 def ensure_binary(path: Path) -> None:
@@ -80,6 +85,15 @@ def wait_for_health(socket_path: Path, timeout: float) -> dict:
     raise TimeoutError("timed out waiting for deviced health")
 
 
+def stop_process(process: subprocess.Popen | None) -> None:
+    if process is None or process.poll() is not None:
+        return
+    if os.name == "nt":
+        process.terminate()
+    else:
+        process.send_signal(signal.SIGINT)
+
+
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise RuntimeError(message)
@@ -87,6 +101,9 @@ def require(condition: bool, message: str) -> None:
 
 def main() -> int:
     args = parse_args()
+    if not unix_rpc_supported():
+        print("deviced runtime helpers smoke skipped: unix rpc transport unsupported on this platform")
+        return 0
     deviced = resolve_binary("deviced", args.deviced, args.bin_dir)
     ensure_binary(deviced)
 
@@ -229,25 +246,59 @@ def main() -> int:
         )
 
         require(
-            screen_capture["preview_object"]["release_grade_backend"] == "portal-screen-helper",
-            "screen runtime helper marker mismatch",
+            screen_capture["preview_object"]["release_grade_backend"]
+            == "xdg-desktop-portal-screencast",
+            "screen runtime helper backend mismatch",
         )
         require(
-            audio_capture["preview_object"]["release_grade_backend"] == "pipewire-audio-helper",
-            "audio runtime helper marker mismatch",
+            screen_capture["preview_object"]["release_grade_backend_origin"]
+            == "runtime-helper",
+            "screen runtime helper origin mismatch",
+        )
+        require(
+            screen_capture["preview_object"]["release_grade_backend_stack"]
+            == "portal+pipewire",
+            "screen runtime helper stack mismatch",
+        )
+        require(
+            audio_capture["preview_object"]["release_grade_backend"] == "pipewire",
+            "audio runtime helper backend mismatch",
+        )
+        require(
+            audio_capture["preview_object"]["release_grade_backend_origin"] == "os-native",
+            "audio runtime helper origin mismatch",
+        )
+        require(
+            input_capture["preview_object"]["release_grade_backend"] == "libinput",
+            "input runtime helper backend mismatch",
+        )
+        require(
+            input_capture["preview_object"]["release_grade_backend_origin"]
+            == "state-enumeration",
+            "input runtime helper origin mismatch",
         )
         require(
             input_capture["preview_object"]["collector"] == "libinput-live",
             "input runtime helper collector mismatch",
         )
         require(
-            camera_capture["preview_object"]["release_grade_backend"] == "camera-v4l-helper",
-            "camera runtime helper marker mismatch",
+            camera_capture["preview_object"]["release_grade_backend"] == "v4l2",
+            "camera runtime helper backend mismatch",
+        )
+        require(
+            camera_capture["preview_object"]["release_grade_backend_origin"]
+            == "state-enumeration",
+            "camera runtime helper origin mismatch",
         )
         require(
             screen_capture["preview_object"]["session_contract"]["contract_kind"]
-            == "release-grade-native-helper",
-            "screen helper should expose session contract",
+            == "release-grade-runtime-helper",
+            "screen helper should expose runtime helper contract",
+        )
+        require(
+            screen_capture["preview_object"]["release_grade_contract_kind"]
+            == "release-grade-runtime-helper",
+            "screen helper contract kind mismatch",
         )
         require(
             screen_capture["preview_object"]["request_binding"]["task_id"] == "task-screen",
@@ -295,12 +346,17 @@ def main() -> int:
             json.dumps(
                 {
                     "screen_backend": screen_capture["preview_object"]["release_grade_backend"],
+                    "screen_origin": screen_capture["preview_object"]["release_grade_backend_origin"],
                     "screen_contract": screen_capture["preview_object"]["session_contract"]["contract_kind"],
                     "audio_backend": audio_capture["preview_object"]["release_grade_backend"],
+                    "audio_origin": audio_capture["preview_object"]["release_grade_backend_origin"],
                     "audio_transport": audio_capture["preview_object"]["transport"]["kind"],
+                    "input_backend": input_capture["preview_object"]["release_grade_backend"],
+                    "input_origin": input_capture["preview_object"]["release_grade_backend_origin"],
                     "input_collector": input_capture["preview_object"]["collector"],
                     "input_evidence": input_capture["preview_object"]["evidence"]["state_ref"],
                     "camera_backend": camera_capture["preview_object"]["release_grade_backend"],
+                    "camera_origin": camera_capture["preview_object"]["release_grade_backend_origin"],
                     "camera_stream_ref": camera_capture["preview_object"]["transport"]["stream_ref"],
                     "backend_state_path": str(backend_state_path),
                 },
@@ -314,7 +370,7 @@ def main() -> int:
         raise
     finally:
         if process.poll() is None:
-            process.send_signal(signal.SIGINT)
+            stop_process(process)
             try:
                 process.wait(timeout=5)
             except subprocess.TimeoutExpired:
@@ -329,3 +385,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

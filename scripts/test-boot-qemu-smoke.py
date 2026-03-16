@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -20,6 +21,10 @@ def run_preflight(script: Path) -> dict:
 
 
 def main() -> int:
+    if os.name == "nt":
+        print("boot qemu smoke skipped: image/qemu preflight is validated on Linux hosts")
+        return 0
+
     image = run_preflight(ROOT / "scripts" / "build-aios-image.sh")
     qemu = run_preflight(ROOT / "scripts" / "boot-qemu.sh")
     summary = {

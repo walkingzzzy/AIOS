@@ -30,6 +30,12 @@ SOURCE_KINDS = {
     "evidence-index",
 }
 COMPONENT_KINDS = {"service", "provider", "runtime", "shell", "device", "update", "platform", "hardware"}
+EVENT_SUMMARY_FIELDS = {
+    "provider_ids": "provider_id",
+    "runtime_service_ids": "runtime_service_id",
+    "provider_statuses": "provider_status",
+    "backend_ids": "backend_id",
+}
 DEFAULT_REQUIRED_DELIVERY_KEYS = [
     "generated_at",
     "schema_version",
@@ -171,6 +177,14 @@ def parse_note_map(notes: list[str]) -> dict[str, str]:
     return mapping
 
 
+def provider_registry_rpc_method(source: dict[str, Any]) -> str:
+    configured = source.get("rpc_method")
+    if isinstance(configured, str) and configured.strip():
+        return configured.strip()
+    if str(source.get("service_id") or "").strip() == "aios-agentd":
+        return "agent.provider.health.get"
+    return "provider.health.get"
+
 def ensure_source_spec(source: dict[str, Any]) -> None:
     required_fields = ["source_id", "kind", "component_kind"]
     for field in required_fields:
@@ -270,6 +284,75 @@ def artifact_hint(source: dict[str, Any]) -> str | None:
     return None
 
 
+def unique_sorted_strings(values: list[str]) -> list[str]:
+    return sorted(unique_strings(values))
+
+
+def first_or_none(values: list[str]) -> str | None:
+    return values[0] if len(values) == 1 else None
+
+
+def collect_event_strings(events: list[dict[str, Any]], field: str) -> list[str]:
+    values: list[str] = []
+    for event in events:
+        value = event.get(field)
+        if isinstance(value, str) and value:
+            values.append(value)
+        elif isinstance(value, list):
+            values.extend(str(item) for item in value if str(item).strip())
+    return unique_sorted_strings(values)
+
+
+def collect_event_summary_strings(
+    events: list[dict[str, Any]],
+    plural_field: str,
+    singular_field: str | None = None,
+) -> list[str]:
+    values = collect_event_strings(events, plural_field)
+    if singular_field:
+        values = unique_sorted_strings(values + collect_event_strings(events, singular_field))
+    return values
+
+
+def evidence_index_vendor_runtime_metadata(payload: dict[str, Any]) -> dict[str, Any]:
+    metadata = {
+        "provider_ids": [],
+        "runtime_service_ids": [],
+        "provider_statuses": [],
+        "backend_ids": [],
+        "artifact_paths": [],
+        "vendor_runtime_signoff_status": None,
+        "evidence_count": None,
+    }
+    device_runtime = payload.get("device_runtime")
+    vendor_runtime = device_runtime.get("vendor_runtime") if isinstance(device_runtime, dict) else None
+    if not isinstance(vendor_runtime, dict):
+        artifacts = payload.get("artifacts")
+        if isinstance(artifacts, dict):
+            metadata["artifact_paths"] = unique_sorted_strings(
+                as_string_list(artifacts.get("vendor_runtime_evidence"))
+            )
+        return metadata
+
+    metadata["provider_ids"] = unique_sorted_strings(as_string_list(vendor_runtime.get("provider_ids")))
+    metadata["runtime_service_ids"] = unique_sorted_strings(as_string_list(vendor_runtime.get("runtime_service_ids")))
+    metadata["provider_statuses"] = unique_sorted_strings(as_string_list(vendor_runtime.get("provider_statuses")))
+    metadata["backend_ids"] = unique_sorted_strings(as_string_list(vendor_runtime.get("backend_ids")))
+    metadata["artifact_paths"] = unique_sorted_strings(
+        as_string_list(vendor_runtime.get("evidence_paths"))
+        + as_string_list((payload.get("artifacts") or {}).get("vendor_runtime_evidence") if isinstance(payload.get("artifacts"), dict) else None)
+    )
+    signoff_status = vendor_runtime.get("vendor_runtime_signoff_status")
+    if isinstance(signoff_status, str) and signoff_status:
+        metadata["vendor_runtime_signoff_status"] = signoff_status
+    evidence_count = vendor_runtime.get("evidence_count")
+    if isinstance(evidence_count, int):
+        metadata["evidence_count"] = evidence_count
+    elif metadata["artifact_paths"]:
+        metadata["evidence_count"] = len(metadata["artifact_paths"])
+    return metadata
+
+
 def base_event(source: dict[str, Any], service_id: str, component_id: str | None = None) -> dict[str, Any]:
     event = {
         "schema_version": CURRENT_SCHEMA_VERSION,
@@ -344,9 +427,10 @@ def event_artifact_paths(events: list[dict[str, Any]]) -> list[str]:
         hint = event.get("artifact_path")
         if isinstance(hint, str) and hint:
             artifact_paths.append(hint)
+        artifact_paths.extend(as_string_list(event.get("artifact_paths")))
         artifact_paths.extend(as_string_list(event.get("recovery_points")))
         artifact_paths.extend(as_string_list(event.get("diagnostic_bundles")))
-    return unique_strings(artifact_paths)
+    return unique_sorted_strings(artifact_paths)
 
 
 def collect_rpc_service(source: dict[str, Any], timeout: float) -> tuple[list[dict[str, Any]], str, list[str]]:
@@ -449,7 +533,7 @@ def provider_event(
             "overall_status": normalized,
             "readiness": readiness_for_status(normalized),
             "last_check_at": provider_payload.get("last_checked_at"),
-            "summary": f"provider.health.get status={provider_payload.get('status', '<missing>')}",
+            "summary": f"{provider_registry_rpc_method(source)} status={provider_payload.get('status', '<missing>')}",
             "artifact_path": str(source.get("artifact_path") or socket_path),
         }
     )
@@ -467,32 +551,32 @@ def provider_event(
 def collect_provider_registry(source: dict[str, Any], timeout: float) -> tuple[list[dict[str, Any]], str, list[str]]:
     socket_path = Path(source["socket_path"])
     provider_ids = as_string_list(source.get("provider_ids"))
+    method = provider_registry_rpc_method(source)
     warnings: list[str] = []
     events: list[dict[str, Any]] = []
 
     if provider_ids:
         for index, provider_id in enumerate(provider_ids, start=1):
-            payload = rpc_call(socket_path, "provider.health.get", {"provider_id": provider_id}, timeout)
+            payload = rpc_call(socket_path, method, {"provider_id": provider_id}, timeout)
             providers = payload.get("providers")
             if not isinstance(providers, list) or not providers:
-                raise RuntimeError(f"provider.health.get missing provider `{provider_id}`")
+                raise RuntimeError(f"{method} missing provider `{provider_id}`")
             provider_payload = providers[0]
             if not isinstance(provider_payload, dict):
-                raise RuntimeError(f"provider.health.get returned malformed record for `{provider_id}`")
+                raise RuntimeError(f"{method} returned malformed record for `{provider_id}`")
             events.append(provider_event(source, socket_path, provider_payload, index))
-        return events, "queried provider.health.get for required providers", warnings
+        return events, f"queried {method} for required providers", warnings
 
-    payload = rpc_call(socket_path, "provider.health.get", {}, timeout)
+    payload = rpc_call(socket_path, method, {}, timeout)
     providers = payload.get("providers")
     if not isinstance(providers, list) or not providers:
-        raise RuntimeError("provider.health.get returned no providers")
+        raise RuntimeError(f"{method} returned no providers")
     for index, provider_payload in enumerate(providers, start=1):
         if not isinstance(provider_payload, dict):
-            raise RuntimeError("provider.health.get returned malformed provider record")
+            raise RuntimeError(f"{method} returned malformed provider record")
         events.append(provider_event(source, socket_path, provider_payload, index))
     warnings.append("provider-registry source exported every registered provider")
-    return events, "queried provider.health.get", warnings
-
+    return events, f"queried {method}", warnings
 
 def collect_command_health(source: dict[str, Any], timeout: float) -> tuple[list[dict[str, Any]], str, list[str]]:
     command_value = source["command"]
@@ -609,6 +693,8 @@ def collect_evidence_index(source: dict[str, Any], _timeout: float) -> tuple[lis
         if raw_status not in (None, "")
         else "evidence index status missing"
     )
+    vendor_runtime = evidence_index_vendor_runtime_metadata(payload)
+    related_artifact_paths = unique_sorted_strings([str(index_path), *vendor_runtime["artifact_paths"]])
     event.update(
         {
             "overall_status": normalized,
@@ -616,8 +702,33 @@ def collect_evidence_index(source: dict[str, Any], _timeout: float) -> tuple[lis
             "last_check_at": payload.get("generated_at") or payload.get("evaluated_at"),
             "summary": summary,
             "artifact_path": str(index_path),
+            "artifact_paths": related_artifact_paths,
         }
     )
+    if vendor_runtime["provider_ids"]:
+        event["provider_ids"] = vendor_runtime["provider_ids"]
+        provider_id = first_or_none(vendor_runtime["provider_ids"])
+        if provider_id:
+            event["provider_id"] = provider_id
+    if vendor_runtime["runtime_service_ids"]:
+        event["runtime_service_ids"] = vendor_runtime["runtime_service_ids"]
+        runtime_service_id = first_or_none(vendor_runtime["runtime_service_ids"])
+        if runtime_service_id:
+            event["runtime_service_id"] = runtime_service_id
+    if vendor_runtime["provider_statuses"]:
+        event["provider_statuses"] = vendor_runtime["provider_statuses"]
+        provider_status = first_or_none(vendor_runtime["provider_statuses"])
+        if provider_status:
+            event["provider_status"] = provider_status
+    if vendor_runtime["backend_ids"]:
+        event["backend_ids"] = vendor_runtime["backend_ids"]
+        backend_id = first_or_none(vendor_runtime["backend_ids"])
+        if backend_id:
+            event["backend_id"] = backend_id
+    if vendor_runtime["vendor_runtime_signoff_status"]:
+        event["vendor_runtime_signoff_status"] = vendor_runtime["vendor_runtime_signoff_status"]
+    if vendor_runtime["evidence_count"] is not None:
+        event["evidence_count"] = vendor_runtime["evidence_count"]
 
     notes = as_string_list(payload.get("notes"))
     for key in ("validation_kind", "validation_status", "overall_status", "status", "platform_id", "index_id"):
@@ -629,6 +740,18 @@ def collect_evidence_index(source: dict[str, Any], _timeout: float) -> tuple[lis
         for artifact_name, artifact_value in artifacts.items():
             if artifact_value not in (None, ""):
                 notes.append(f"artifact_{artifact_name}={artifact_value}")
+    if vendor_runtime["vendor_runtime_signoff_status"]:
+        notes.append(f"vendor_runtime_signoff_status={vendor_runtime['vendor_runtime_signoff_status']}")
+    if vendor_runtime["evidence_count"] is not None:
+        notes.append(f"vendor_runtime_evidence_count={vendor_runtime['evidence_count']}")
+    if vendor_runtime["provider_ids"]:
+        notes.append(f"vendor_runtime_provider_ids={','.join(vendor_runtime['provider_ids'])}")
+    if vendor_runtime["runtime_service_ids"]:
+        notes.append(f"vendor_runtime_service_ids={','.join(vendor_runtime['runtime_service_ids'])}")
+    if vendor_runtime["provider_statuses"]:
+        notes.append(f"vendor_runtime_statuses={','.join(vendor_runtime['provider_statuses'])}")
+    if vendor_runtime["backend_ids"]:
+        notes.append(f"vendor_runtime_backend_ids={','.join(vendor_runtime['backend_ids'])}")
     return [finalize_event(source, event, 1, extra_notes=notes)], summary, []
 
 
@@ -642,7 +765,7 @@ def summarize_check(
     health_statuses = sorted({str(event.get("overall_status")) for event in events if event.get("overall_status")})
     failed_statuses = sorted(status for status in health_statuses if status in fail_on_statuses(source))
     status = "failed" if force_failed or failed_statuses else "passed"
-    return {
+    summary = {
         "check_id": source["source_id"],
         "summary": str(source.get("summary") or f"{source['kind']} export for {source['source_id']}"),
         "status": status,
@@ -656,6 +779,9 @@ def summarize_check(
         "detail": detail,
         "notes": unique_strings(warnings),
     }
+    for field, singular_field in EVENT_SUMMARY_FIELDS.items():
+        summary[field] = collect_event_summary_strings(events, field, singular_field)
+    return summary
 
 
 def target_label(source: dict[str, Any]) -> str:
@@ -664,7 +790,7 @@ def target_label(source: dict[str, Any]) -> str:
     if source["kind"] == "rpc-update":
         return f"system.health.get + update.health.get via {source['socket_path']}"
     if source["kind"] == "provider-registry":
-        return f"provider.health.get via {source['socket_path']}"
+        return f"{provider_registry_rpc_method(source)} via {source['socket_path']}"
     if source["kind"] == "command-health":
         command_value = source["command"]
         command = (
@@ -730,22 +856,27 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- Events: `{report['summary']['event_count']}`",
         f"- Component kinds: `{', '.join(report['summary']['component_kinds']) or '-'}`",
         f"- Services: `{', '.join(report['summary']['service_ids']) or '-'}`",
+        f"- Providers: `{', '.join(report['summary'].get('provider_ids', [])) or '-'}`",
+        f"- Runtime services: `{', '.join(report['summary'].get('runtime_service_ids', [])) or '-'}`",
+        f"- Provider statuses: `{', '.join(report['summary'].get('provider_statuses', [])) or '-'}`",
+        f"- Backend ids: `{', '.join(report['summary'].get('backend_ids', [])) or '-'}`",
         f"- Health statuses: `{', '.join(report['summary']['overall_statuses']) or '-'}`",
         "",
         "## Checks",
         "",
-        "| Check | Status | Kind | Component | Events | Health | Detail |",
-        "|-------|--------|------|-----------|--------|--------|--------|",
+        "| Check | Status | Kind | Component | Events | Health | Providers | Detail |",
+        "|-------|--------|------|-----------|--------|--------|-----------|--------|",
     ]
     for item in report["checks"]:
         lines.append(
-            "| `{check_id}` | `{status}` | `{source_kind}` | `{component_kind}` | `{event_count}` | `{health}` | {detail} |".format(
+            "| `{check_id}` | `{status}` | `{source_kind}` | `{component_kind}` | `{event_count}` | `{health}` | `{providers}` | {detail} |".format(
                 check_id=item["check_id"],
                 status=item["status"],
                 source_kind=item["source_kind"],
                 component_kind=item["component_kind"],
                 event_count=item["event_count"],
                 health=", ".join(item["health_statuses"]) or "-",
+                providers=", ".join(item.get("provider_ids", [])) or "-",
                 detail=item["detail"],
             )
         )
@@ -755,16 +886,19 @@ def render_markdown(report: dict[str, Any]) -> str:
             "",
             "## Events",
             "",
-            "| Service | Component | Status | Artifact |",
-            "|---------|-----------|--------|----------|",
+            "| Service | Component | Status | Provider | Runtime Service | Backend | Artifact |",
+            "|---------|-----------|--------|----------|-----------------|---------|----------|",
         ]
     )
     for event in report["events"]:
         lines.append(
-            "| `{service_id}` | `{component}` | `{status}` | `{artifact}` |".format(
+            "| `{service_id}` | `{component}` | `{status}` | `{provider}` | `{runtime_service}` | `{backend}` | `{artifact}` |".format(
                 service_id=event.get("service_id", "<missing>"),
                 component=event.get("component_kind", "<missing>"),
                 status=event.get("overall_status", "<missing>"),
+                provider=event.get("provider_id") or ", ".join(as_string_list(event.get("provider_ids"))) or "-",
+                runtime_service=event.get("runtime_service_id") or ", ".join(as_string_list(event.get("runtime_service_ids"))) or "-",
+                backend=event.get("backend_id") or ", ".join(as_string_list(event.get("backend_ids"))) or "-",
                 artifact=event.get("artifact_path", "-"),
             )
         )
@@ -823,6 +957,10 @@ def main() -> int:
             "event_count": len(events),
             "component_kinds": sorted({item["component_kind"] for item in checks}),
             "service_ids": sorted({str(event.get("service_id")) for event in events if event.get("service_id")}),
+            "provider_ids": collect_event_summary_strings(events, "provider_ids", "provider_id"),
+            "runtime_service_ids": collect_event_summary_strings(events, "runtime_service_ids", "runtime_service_id"),
+            "provider_statuses": collect_event_summary_strings(events, "provider_statuses", "provider_status"),
+            "backend_ids": collect_event_summary_strings(events, "backend_ids", "backend_id"),
             "overall_statuses": sorted({str(event.get("overall_status")) for event in events if event.get("overall_status")}),
             "failed_checks": failed_checks,
             "artifact_paths": event_artifact_paths(events),

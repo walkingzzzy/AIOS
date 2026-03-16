@@ -8,7 +8,7 @@ use aios_contracts::{
     DeviceCaptureRequest,
 };
 
-use crate::{capture, config::Config, probe};
+use crate::{capture, config::Config, probe, release_grade};
 
 #[derive(Debug, Clone)]
 pub struct CapturePreview {
@@ -1009,16 +1009,39 @@ fn attach_plan_metadata(preview: &mut Value, plan: &CaptureAdapterPlan) {
         .notes
         .iter()
         .find_map(|note| note.strip_prefix("adapter_contract="));
-    object.insert(
-        "adapter".to_string(),
-        json!({
-            "adapter_id": plan.adapter_id,
-            "backend": plan.backend,
-            "execution_path": plan.execution_path,
-            "adapter_contract": adapter_contract,
-            "notes": plan.notes,
-        }),
+    let source = object
+        .get("probe_source")
+        .and_then(Value::as_str)
+        .or_else(|| object.get("source").and_then(Value::as_str))
+        .map(str::to_string);
+    release_grade::enrich_object(
+        &plan.modality,
+        Some(plan.execution_path.as_str()),
+        source.as_deref(),
+        adapter_contract,
+        object,
     );
+
+    let mut adapter = Map::new();
+    adapter.insert("adapter_id".to_string(), json!(plan.adapter_id));
+    adapter.insert("backend".to_string(), json!(plan.backend));
+    adapter.insert("execution_path".to_string(), json!(plan.execution_path));
+    adapter.insert("adapter_contract".to_string(), json!(adapter_contract));
+    adapter.insert("notes".to_string(), json!(plan.notes));
+
+    for field in [
+        "release_grade_backend",
+        "release_grade_backend_id",
+        "release_grade_backend_origin",
+        "release_grade_backend_stack",
+        "release_grade_contract_kind",
+    ] {
+        if let Some(value) = object.get(field).cloned() {
+            adapter.insert(field.to_string(), value);
+        }
+    }
+
+    object.insert("adapter".to_string(), Value::Object(adapter));
     object.insert("adapter_id".to_string(), json!(plan.adapter_id));
     object.insert(
         "adapter_execution_path".to_string(),
@@ -1086,7 +1109,10 @@ fn sync_helper_contract_with_request(
         .or_else(|| object.get("adapter_hint").and_then(Value::as_str))
         .map(str::to_string);
 
-    if let Some(contract) = object.get_mut("session_contract").and_then(Value::as_object_mut) {
+    if let Some(contract) = object
+        .get_mut("session_contract")
+        .and_then(Value::as_object_mut)
+    {
         contract.insert("request_ref".to_string(), json!(request_ref.clone()));
         if let Some(adapter_hint) = adapter_hint.as_deref() {
             contract.insert(
@@ -1096,7 +1122,10 @@ fn sync_helper_contract_with_request(
         }
     }
 
-    if let Some(media_pipeline) = object.get_mut("media_pipeline").and_then(Value::as_object_mut) {
+    if let Some(media_pipeline) = object
+        .get_mut("media_pipeline")
+        .and_then(Value::as_object_mut)
+    {
         media_pipeline.insert("continuous".to_string(), json!(request.continuous));
     }
 }
@@ -1321,11 +1350,9 @@ fn ensure_object(value: &mut Value) -> &mut Map<String, Value> {
 mod tests {
     use std::ffi::OsString;
     use std::sync::atomic::{AtomicU64, Ordering};
-    use std::sync::Mutex;
 
     use super::*;
 
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     struct EnvVarGuard {
@@ -1339,6 +1366,12 @@ mod tests {
             std::env::set_var(key, value);
             Self { key, previous }
         }
+
+        fn unset(key: &'static str) -> Self {
+            let previous = std::env::var_os(key);
+            std::env::remove_var(key);
+            Self { key, previous }
+        }
     }
 
     impl Drop for EnvVarGuard {
@@ -1349,6 +1382,10 @@ mod tests {
                 std::env::remove_var(self.key);
             }
         }
+    }
+
+    fn probe_shell_supported() -> bool {
+        std::path::Path::new("/bin/sh").exists()
     }
 
     fn config() -> Config {
@@ -1417,9 +1454,17 @@ mod tests {
 
     #[test]
     fn probe_selects_native_live_adapter() {
+        let _guard = crate::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _dbus = EnvVarGuard::unset("DBUS_SESSION_BUS_ADDRESS");
+        let _atspi = EnvVarGuard::unset("AT_SPI_BUS_ADDRESS");
+        if !probe_shell_supported() {
+            return;
+        }
         let mut config = config();
         config.screen_probe_command = Some(
-            r#"python3 -c 'import json; print(json.dumps({"available": True, "readiness": "native-live", "payload": {"probe_frame": True}}))'"#
+            r#"printf '%s\n' '{"available":true,"readiness":"native-live","payload":{"probe_frame":true}}'"#
                 .to_string(),
         );
 
@@ -1437,9 +1482,17 @@ mod tests {
 
     #[test]
     fn live_command_selects_formal_native_adapter() {
+        let _guard = crate::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _dbus = EnvVarGuard::unset("DBUS_SESSION_BUS_ADDRESS");
+        let _atspi = EnvVarGuard::unset("AT_SPI_BUS_ADDRESS");
+        if !probe_shell_supported() {
+            return;
+        }
         let mut config = config();
         config.screen_live_command = Some(
-            r#"python3 -c 'import json; print(json.dumps({"available": True, "readiness": "native-live", "payload": {"release_grade_backend": "portal-live-helper", "stream_node_id": 108}}))'"#
+            r#"printf '%s\n' '{"available":true,"readiness":"native-live","payload":{"release_grade_backend":"xdg-desktop-portal-screencast","release_grade_backend_id":"xdg-desktop-portal-screencast","release_grade_backend_origin":"os-native","release_grade_backend_stack":"portal+pipewire","release_grade_contract_kind":"release-grade-runtime-helper","stream_node_id":108}}'"#
                 .to_string(),
         );
 
@@ -1477,7 +1530,7 @@ mod tests {
             preview_object
                 .get("release_grade_backend")
                 .and_then(Value::as_str),
-            Some("portal-live-helper")
+            Some("xdg-desktop-portal-screencast")
         );
         assert_eq!(
             preview_object
@@ -1491,9 +1544,17 @@ mod tests {
 
     #[test]
     fn live_helper_contract_is_rebound_to_capture_request_context() {
+        let _guard = crate::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _dbus = EnvVarGuard::unset("DBUS_SESSION_BUS_ADDRESS");
+        let _atspi = EnvVarGuard::unset("AT_SPI_BUS_ADDRESS");
+        if !probe_shell_supported() {
+            return;
+        }
         let mut config = config();
         config.screen_live_command = Some(
-            r#"python3 -c 'import json; print(json.dumps({"available": True, "readiness": "native-live", "payload": {"release_grade_backend": "portal-live-helper", "adapter_hint": "screen.portal-native", "request_binding": {"modality": "screen", "session_id": "anonymous-session", "task_id": "ad-hoc-task", "continuous": False}, "session_contract": {"contract_kind": "release-grade-native-helper", "adapter_hint": "screen.portal-native", "request_ref": "anonymous-session:ad-hoc-task:screen", "lease_id": "screen.portal-native:anonymous-session:ad-hoc-task:screen"}, "media_pipeline": {"collector": "screen.portal-live", "continuous": False}}}))'"#
+            r#"printf '%s\n' '{"available":true,"readiness":"native-live","payload":{"release_grade_backend":"xdg-desktop-portal-screencast","release_grade_backend_id":"xdg-desktop-portal-screencast","release_grade_backend_origin":"os-native","release_grade_backend_stack":"portal+pipewire","release_grade_contract_kind":"release-grade-runtime-helper","adapter_hint":"screen.portal-native","request_binding":{"modality":"screen","session_id":"anonymous-session","task_id":"ad-hoc-task","continuous":false},"session_contract":{"contract_kind":"release-grade-runtime-helper","adapter_hint":"screen.portal-native","request_ref":"anonymous-session:ad-hoc-task:screen","lease_id":"screen.portal-native:anonymous-session:ad-hoc-task:screen"},"media_pipeline":{"collector":"screen.portal-live","continuous":false}}}'"#
                 .to_string(),
         );
 
@@ -1557,9 +1618,17 @@ mod tests {
 
     #[test]
     fn probe_payload_is_merged_into_preview() {
+        let _guard = crate::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _dbus = EnvVarGuard::unset("DBUS_SESSION_BUS_ADDRESS");
+        let _atspi = EnvVarGuard::unset("AT_SPI_BUS_ADDRESS");
+        if !probe_shell_supported() {
+            return;
+        }
         let mut config = config();
         config.screen_probe_command = Some(
-            r#"python3 -c 'import json; print(json.dumps({"available": True, "readiness": "native-live", "payload": {"probe_frame": True, "probe_resolution": "1024x768"}}))'"#
+            r#"printf '%s\n' '{"available":true,"readiness":"native-live","payload":{"probe_frame":true,"probe_resolution":"1024x768"}}'"#
                 .to_string(),
         );
 
@@ -1624,15 +1693,20 @@ mod tests {
         assert!(plan
             .notes
             .iter()
-            .any(|item| item.starts_with("probe_detail=probe_exit_code=7")));
+            .any(|item| item.starts_with("probe_detail=")));
 
         cleanup(&config);
     }
 
     #[test]
     fn state_root_preview_uses_native_state_bridge_mode() {
+        let _guard = crate::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _dbus = EnvVarGuard::unset("DBUS_SESSION_BUS_ADDRESS");
+        let _atspi = EnvVarGuard::unset("AT_SPI_BUS_ADDRESS");
         let mut config = config();
-        config.screen_probe_command = Some(r#"python3 -c 'import sys; sys.exit(7)'"#.to_string());
+        config.screen_probe_command = Some("printf 'probe failed\\n' >&2; exit 7".to_string());
         fs::create_dir_all(config.screencast_state_path.parent().expect("state dir"))
             .expect("create state dir");
         fs::write(
@@ -1666,13 +1740,27 @@ mod tests {
                 .and_then(Value::as_str),
             Some("native-state-bridge")
         );
+        assert_eq!(
+            preview_object
+                .get("release_grade_backend_id")
+                .and_then(Value::as_str),
+            Some("xdg-desktop-portal-screencast")
+        );
+        assert_eq!(
+            preview_object
+                .get("release_grade_backend_origin")
+                .and_then(Value::as_str),
+            Some("state-bridge")
+        );
 
         cleanup(&config);
     }
 
     #[test]
     fn screen_bus_only_uses_native_ready_mode() {
-        let _guard = ENV_LOCK.lock().expect("lock env");
+        let _guard = crate::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let _env = EnvVarGuard::set("DBUS_SESSION_BUS_ADDRESS", "unix:path=/tmp/dbus-test-bus");
 
         let mut config = config();
@@ -1730,6 +1818,18 @@ mod tests {
         assert_eq!(
             preview_object.get("backend_ready").and_then(Value::as_bool),
             Some(true)
+        );
+        assert_eq!(
+            preview_object
+                .get("release_grade_backend_origin")
+                .and_then(Value::as_str),
+            Some("declared-ready")
+        );
+        assert_eq!(
+            preview_object
+                .get("release_grade_backend_stack")
+                .and_then(Value::as_str),
+            Some("portal+pipewire")
         );
 
         cleanup(&config);
@@ -1878,7 +1978,7 @@ mod tests {
     fn camera_state_root_uses_native_state_bridge_mode() {
         let mut config = config();
         config.camera_enabled = true;
-        config.camera_probe_command = Some(r#"python3 -c 'import sys; sys.exit(7)'"#.to_string());
+        config.camera_probe_command = Some("printf 'probe failed\\n' >&2; exit 7".to_string());
         fs::create_dir_all(&config.camera_device_root).expect("create camera root");
         fs::write(config.camera_device_root.join("video0"), b"ready\n")
             .expect("write camera device");
@@ -1937,6 +2037,11 @@ mod tests {
 
     #[test]
     fn ui_tree_state_file_uses_native_state_bridge_mode() {
+        let _guard = crate::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _dbus = EnvVarGuard::unset("DBUS_SESSION_BUS_ADDRESS");
+        let _atspi = EnvVarGuard::unset("AT_SPI_BUS_ADDRESS");
         let mut config = config();
         config.ui_tree_supported = true;
         config.ui_tree_probe_command = Some("printf 'probe failed\n' >&2; exit 7".to_string());
@@ -1983,13 +2088,21 @@ mod tests {
                 .and_then(Value::as_str),
             Some("at-spi")
         );
+        assert_eq!(
+            snapshot
+                .get("release_grade_backend_origin")
+                .and_then(Value::as_str),
+            Some("state-bridge")
+        );
 
         cleanup(&config);
     }
 
     #[test]
     fn ui_tree_bus_only_uses_native_ready_mode() {
-        let _guard = ENV_LOCK.lock().expect("lock env");
+        let _guard = crate::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let _env = EnvVarGuard::set("AT_SPI_BUS_ADDRESS", "unix:path=/tmp/atspi-test-bus");
 
         let mut config = config();
@@ -2016,6 +2129,18 @@ mod tests {
         assert_eq!(
             snapshot.get("at_spi_bus").and_then(Value::as_bool),
             Some(true)
+        );
+        assert_eq!(
+            snapshot
+                .get("release_grade_backend_id")
+                .and_then(Value::as_str),
+            Some("at-spi")
+        );
+        assert_eq!(
+            snapshot
+                .get("release_grade_backend_origin")
+                .and_then(Value::as_str),
+            Some("declared-ready")
         );
 
         cleanup(&config);

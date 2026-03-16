@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import socket
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,10 +11,16 @@ from typing import Any
 
 
 def default_sessiond_socket() -> Path:
-    return Path("/run/aios/sessiond/sessiond.sock")
+    return Path(os.environ.get("AIOS_SESSIOND_SOCKET_PATH", "/run/aios/sessiond/sessiond.sock"))
+
+
+def default_agent_socket() -> Path:
+    return Path(os.environ.get("AIOS_AGENTD_SOCKET_PATH", "/run/aios/agentd/agentd.sock"))
 
 
 def rpc_call(socket_path: Path, method: str, params: dict) -> dict:
+    if not hasattr(socket, "AF_UNIX"):
+        raise RuntimeError(f"unix-domain-socket-unavailable:{socket_path}")
     payload = {
         "jsonrpc": "2.0",
         "id": 1,
@@ -35,22 +42,53 @@ def rpc_call(socket_path: Path, method: str, params: dict) -> dict:
     return response["result"]
 
 
-def load_payload(socket_path: Path, session_id: str | None, fixture: Path | None) -> dict[str, Any]:
+def load_payload(
+    socket_path: Path,
+    agent_socket_path: Path | None,
+    session_id: str | None,
+    fixture: Path | None,
+) -> dict[str, Any]:
     if fixture is not None and fixture.exists():
         payload = json.loads(fixture.read_text() or "{}")
         return payload if isinstance(payload, dict) else {}
     if not session_id:
         return {"handles": []}
-    result = rpc_call(socket_path, "portal.handle.list", {"session_id": session_id})
-    return {"handles": result.get("handles", [])}
+    effective_socket = agent_socket_path or socket_path
+    method = "agent.portal.handle.list" if agent_socket_path is not None else "portal.handle.list"
+    try:
+        result = rpc_call(effective_socket, method, {"session_id": session_id})
+    except Exception as error:
+        message = str(error)
+        return {
+            "handles": [],
+            "request": {
+                "status": "failed",
+                "error_message": message,
+                "source_error": message,
+            },
+        }
+    return {
+        "handles": result.get("handles", []),
+        "request": result.get("request") or {},
+    }
 
 
-def load_handles(socket_path: Path, session_id: str | None, fixture: Path | None) -> list[dict]:
-    return load_payload(socket_path, session_id, fixture).get("handles", [])
+def load_handles(
+    socket_path: Path,
+    agent_socket_path: Path | None,
+    session_id: str | None,
+    fixture: Path | None,
+) -> list[dict]:
+    return load_payload(socket_path, agent_socket_path, session_id, fixture).get("handles", [])
 
 
-def load_request(socket_path: Path, session_id: str | None, fixture: Path | None) -> dict[str, Any]:
-    return load_payload(socket_path, session_id, fixture).get("request") or {}
+def load_request(
+    socket_path: Path,
+    agent_socket_path: Path | None,
+    session_id: str | None,
+    fixture: Path | None,
+) -> dict[str, Any]:
+    return load_payload(socket_path, agent_socket_path, session_id, fixture).get("request") or {}
 
 
 def parse_timestamp(value: str | None) -> datetime | None:
@@ -183,12 +221,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="AIOS portal chooser prototype")
     parser.add_argument("command", nargs="?", default="list", choices=["list", "summary"])
     parser.add_argument("--socket", type=Path, default=default_sessiond_socket())
+    parser.add_argument("--agent-socket", type=Path, default=default_agent_socket())
     parser.add_argument("--session-id")
     parser.add_argument("--handle-fixture", type=Path)
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
-    payload = load_payload(args.socket, args.session_id, args.handle_fixture)
+    payload = load_payload(args.socket, args.agent_socket, args.session_id, args.handle_fixture)
     handles = payload.get("handles", [])
     request = payload.get("request") or {}
     if args.command == "summary":

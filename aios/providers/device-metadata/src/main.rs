@@ -39,6 +39,18 @@ impl AppState {
             ),
             format!("device_overall_status={}", metadata.summary.overall_status),
             format!(
+                "device_backend_overall_status={}",
+                metadata.backend_summary.overall_status
+            ),
+            format!(
+                "device_backend_available_status_count={}",
+                metadata.backend_summary.available_status_count
+            ),
+            format!(
+                "device_backend_attention_count={}",
+                metadata.backend_summary.attention_count
+            ),
+            format!(
                 "device_available_modalities={}",
                 format_modalities_note(&metadata.summary.available_modalities)
             ),
@@ -56,6 +68,37 @@ impl AppState {
                 metadata.ui_tree_support_matrix.len()
             ),
         ];
+        if let Some(capture_mode) = &metadata.backend_summary.ui_tree_capture_mode {
+            notes.push(format!(
+                "device_backend_ui_tree_capture_mode={capture_mode}"
+            ));
+        }
+        for (metadata_key, health_key) in [
+            (
+                "release_grade_backend_ids",
+                "device_release_grade_backend_ids",
+            ),
+            (
+                "release_grade_backend_origins",
+                "device_release_grade_backend_origins",
+            ),
+            (
+                "release_grade_backend_stacks",
+                "device_release_grade_backend_stacks",
+            ),
+            (
+                "release_grade_contract_kinds",
+                "device_release_grade_contract_kinds",
+            ),
+        ] {
+            if let Some(value) = metadata
+                .notes
+                .iter()
+                .find_map(|note| note.strip_prefix(&format!("{metadata_key}=")))
+            {
+                notes.push(format!("{health_key}={value}"));
+            }
+        }
         notes.extend(self.registry_sync.health_notes());
 
         if dependency_unavailable {
@@ -102,7 +145,11 @@ fn emit_trace(state: &AppState, kind: &str, payload: serde_json::Value, notes: V
         payload,
         notes,
     ) {
-        tracing::debug!(?error, kind, "failed to append provider observability trace event");
+        tracing::debug!(
+            ?error,
+            kind,
+            "failed to append provider observability trace event"
+        );
     }
 }
 
@@ -120,7 +167,12 @@ fn emit_health_event(
         Some(&state.config.paths.socket_path),
         notes,
     ) {
-        tracing::debug!(?error, source, status, "failed to append provider health event");
+        tracing::debug!(
+            ?error,
+            source,
+            status,
+            "failed to append provider health event"
+        );
     }
 }
 
@@ -228,9 +280,7 @@ async fn report_registry_health(
                         format!("registry_status={status}"),
                         format!(
                             "last_error={}",
-                            last_error
-                                .clone()
-                                .unwrap_or_else(|| "<none>".to_string())
+                            last_error.clone().unwrap_or_else(|| "<none>".to_string())
                         ),
                     ],
                 );
@@ -355,9 +405,7 @@ async fn sync_registry_state_once(state: &AppState, registration_succeeded: &mut
                     format!("registry_status={status}"),
                     format!(
                         "last_error={}",
-                        last_error
-                            .clone()
-                            .unwrap_or_else(|| "<none>".to_string())
+                        last_error.clone().unwrap_or_else(|| "<none>".to_string())
                     ),
                 ],
             );

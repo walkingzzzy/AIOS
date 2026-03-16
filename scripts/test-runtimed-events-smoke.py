@@ -16,7 +16,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from aios_cargo_bins import default_aios_bin_dir
+from aios_cargo_bins import default_aios_bin_dir, resolve_binary_path
 
 
 def parse_args() -> argparse.Namespace:
@@ -35,10 +35,14 @@ def repo_root() -> Path:
 
 def resolve_binary(name: str, explicit: Path | None, bin_dir: Path | None) -> Path:
     if explicit is not None:
-        return explicit
+        return resolve_binary_path(explicit.parent, explicit.name)
     if bin_dir is not None:
-        return bin_dir / name
-    return default_aios_bin_dir(repo_root()) / name
+        return resolve_binary_path(bin_dir, name)
+    return resolve_binary_path(default_aios_bin_dir(repo_root()), name)
+
+
+def unix_rpc_supported() -> bool:
+    return hasattr(socket, "AF_UNIX") and os.name != "nt"
 
 
 def rpc_call(socket_path: Path, method: str, params: dict, timeout: float) -> dict:
@@ -193,6 +197,9 @@ def submit_missing_token_request(runtimed_socket: Path, task_id: str, timeout: f
 
 def main() -> int:
     args = parse_args()
+    if not unix_rpc_supported():
+        print("runtimed events smoke skipped: unix rpc transport unsupported on this platform")
+        return 0
     runtimed = resolve_binary("runtimed", args.runtimed, args.bin_dir)
     policyd = resolve_binary("policyd", args.policyd, args.bin_dir)
     if not runtimed.exists():
@@ -282,10 +289,12 @@ def main() -> int:
             "AIOS_RUNTIMED_ROUTE_PROFILE": str(route_profile),
             "AIOS_RUNTIMED_ATTESTED_REMOTE_COMMAND": endpoint,
             "AIOS_RUNTIMED_POLICYD_SOCKET": str(policyd_socket),
+            "AIOS_RUNTIMED_OBSERVABILITY_LOG": str(state_root / "runtimed" / "observability.jsonl"),
         }
     )
     runtimed_socket = Path(runtimed_env["AIOS_RUNTIMED_SOCKET_PATH"])
     remote_audit_log = Path(runtimed_env["AIOS_RUNTIMED_STATE_DIR"]) / "attested-remote-audit.jsonl"
+    observability_log = Path(runtimed_env["AIOS_RUNTIMED_OBSERVABILITY_LOG"])
     runtimed_process = None
     failed = False
 
@@ -302,6 +311,36 @@ def main() -> int:
         require(remote_descriptor.get("availability") == "available", "attested-remote should be available")
         require(remote_descriptor.get("activation") == "configured-remote-endpoint", "attested-remote activation mismatch")
 
+        backend_health_events = rpc_call(
+            runtimed_socket,
+            "runtime.events.get",
+            {"kind": "runtime.backend.health", "limit": 10, "reverse": False},
+            timeout=args.timeout,
+        )
+        backend_health_entries = backend_health_events.get("entries", [])
+        require(
+            len(backend_health_entries) == len(backends),
+            "runtime backend health event count mismatch",
+        )
+        backend_health_by_backend = {
+            entry.get("payload", {}).get("backend_id"): entry.get("payload", {})
+            for entry in backend_health_entries
+        }
+        for backend in backends:
+            backend_payload = backend_health_by_backend.get(backend.get("backend_id"))
+            require(backend_payload is not None, f"missing backend health event for {backend.get('backend_id')}")
+            require(
+                backend_payload.get("availability") == backend.get("availability"),
+                f"backend availability mismatch for {backend.get('backend_id')}",
+            )
+            require(
+                backend_payload.get("activation") == backend.get("activation"),
+                f"backend activation mismatch for {backend.get('backend_id')}",
+            )
+            require(
+                backend_payload.get("health_state") == backend.get("health_state"),
+                f"backend health_state mismatch for {backend.get('backend_id')}",
+            )
         missing_token = submit_missing_token_request(
             runtimed_socket,
             "task-remote-missing-token",
@@ -460,6 +499,40 @@ def main() -> int:
         require("task-remote-fallback" in task_ids, "remote audit missing task-remote-fallback entry")
         require("task-remote-missing-token" in task_ids, "remote audit missing missing-token entry")
 
+        wait_for_file(observability_log, args.timeout)
+        observability_entries = [
+            json.loads(line)
+            for line in observability_log.read_text().splitlines()
+            if line.strip()
+        ]
+        backend_observability_entry = next(
+            entry
+            for entry in observability_entries
+            if entry.get("kind") == "runtime.backend.health"
+            and entry.get("backend_id") == "attested-remote"
+        )
+        require(
+            backend_observability_entry.get("health_state") == remote_descriptor.get("health_state"),
+            "observability backend health_state mismatch",
+        )
+        fallback_observability_entry = next(
+            entry
+            for entry in observability_entries
+            if entry.get("kind") == "runtime.infer.fallback"
+            and entry.get("task_id") == "task-remote-fallback"
+        )
+        require(
+            fallback_observability_entry.get("backend_id") == "local-cpu",
+            "observability fallback backend mismatch",
+        )
+        require(
+            fallback_observability_entry.get("resolved_backend") == "attested-remote",
+            "observability resolved_backend mismatch",
+        )
+        require(
+            fallback_observability_entry.get("route_state") == "backend-fallback-local-cpu",
+            "observability fallback route_state mismatch",
+        )
         first_runtimed_log = terminate(runtimed_process)
         runtimed_process = None
 

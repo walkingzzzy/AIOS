@@ -30,3 +30,4 @@ observability_level: standard
 notes:
   - Jetson-oriented runtime baseline prefers the local GPU when available.
   - Platform runtime profile routes managed worker launch through the Jetson worker bridge.
+  - The default Jetson managed-worker path now falls through to the shipped vendor helper when reference mode is disabled.

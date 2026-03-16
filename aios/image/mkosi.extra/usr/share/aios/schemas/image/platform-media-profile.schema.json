@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aios/image/platform-media-profile.schema.json",
+  "title": "AIOS Platform Media Profile",
+  "type": "object",
+  "required": ["platform_id", "arch", "boot_mode", "installer", "recovery", "artifacts"],
+  "properties": {
+    "platform_id": { "type": "string", "minLength": 1 },
+    "arch": { "type": "string", "minLength": 1 },
+    "boot_mode": { "type": "string", "minLength": 1 },
+    "installer": {
+      "type": "object",
+      "required": [
+        "platform_label",
+        "media_mode",
+        "default_target",
+        "source_payload_path",
+        "target_overlay_dir",
+        "updated_platform_env_path",
+        "runtime_platform_env_path",
+        "runtime_profile_path",
+        "updated_platform_profile",
+        "vendor_id",
+        "hardware_profile_id",
+        "guided_ui",
+        "partition_strategy",
+        "firmware_hooks"
+      ],
+      "properties": {
+        "platform_label": { "type": "string", "minLength": 1 },
+        "media_mode": { "type": "string", "minLength": 1 },
+        "default_target": { "type": "string", "minLength": 1 },
+        "source_payload_path": { "type": "string", "minLength": 1 },
+        "target_overlay_dir": { "type": "string", "minLength": 1 },
+        "updated_platform_env_path": { "type": "string", "minLength": 1 },
+        "runtime_platform_env_path": { "type": "string", "minLength": 1 },
+        "runtime_profile_path": { "type": "string", "minLength": 1 },
+        "updated_platform_profile": { "type": "string", "minLength": 1 },
+        "vendor_id": { "type": "string", "minLength": 1 },
+        "hardware_profile_id": { "type": "string", "minLength": 1 },
+        "guided_ui": {
+          "type": "object",
+          "required": ["mode", "auto_confirm_seconds"],
+          "properties": {
+            "mode": { "type": "string", "minLength": 1 },
+            "auto_confirm_seconds": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": false
+        },
+        "partition_strategy": {
+          "type": "object",
+          "required": [
+            "esp_partlabel",
+            "root_partlabel",
+            "var_partlabel",
+            "esp_partition_index",
+            "root_partition_index",
+            "var_partition_index"
+          ],
+          "properties": {
+            "esp_partlabel": { "type": "string", "minLength": 1 },
+            "root_partlabel": { "type": "string", "minLength": 1 },
+            "var_partlabel": { "type": "string", "minLength": 1 },
+            "esp_partition_index": { "type": "integer", "minimum": 1 },
+            "root_partition_index": { "type": "integer", "minimum": 1 },
+            "var_partition_index": { "type": "integer", "minimum": 1 }
+          },
+          "additionalProperties": false
+        },
+        "firmware_hooks": {
+          "type": "object",
+          "required": ["pre_install", "post_install"],
+          "properties": {
+            "pre_install": { "type": "string", "minLength": 1 },
+            "post_install": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "recovery": {
+      "type": "object",
+      "required": [
+        "default_target",
+        "updated_platform_env_path",
+        "runtime_platform_env_path",
+        "runtime_profile_path",
+        "updated_platform_profile"
+      ],
+      "properties": {
+        "default_target": { "type": "string", "minLength": 1 },
+        "updated_platform_env_path": { "type": "string", "minLength": 1 },
+        "runtime_platform_env_path": { "type": "string", "minLength": 1 },
+        "runtime_profile_path": { "type": "string", "minLength": 1 },
+        "updated_platform_profile": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "artifacts": {
+      "type": "object",
+      "required": ["system_image", "installer_image", "recovery_image"],
+      "properties": {
+        "system_image": { "type": "string", "minLength": 1 },
+        "installer_image": { "type": "string", "minLength": 1 },
+        "recovery_image": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

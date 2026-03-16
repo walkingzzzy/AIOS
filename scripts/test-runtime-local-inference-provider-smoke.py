@@ -14,7 +14,7 @@ import threading
 import time
 from pathlib import Path
 
-from aios_cargo_bins import default_aios_bin_dir
+from aios_cargo_bins import default_aios_bin_dir, resolve_binary_path
 
 
 def parse_args() -> argparse.Namespace:
@@ -35,10 +35,10 @@ def repo_root() -> Path:
 
 def resolve_binary(name: str, explicit: Path | None, bin_dir: Path | None) -> Path:
     if explicit is not None:
-        return explicit
+        return resolve_binary_path(explicit.parent, explicit.name)
     if bin_dir is not None:
-        return bin_dir / name
-    return default_aios_bin_dir(repo_root()) / name
+        return resolve_binary_path(bin_dir, name)
+    return resolve_binary_path(default_aios_bin_dir(repo_root()), name)
 
 
 def ensure_binaries(paths: dict[str, Path]) -> None:
@@ -72,6 +72,9 @@ def rpc_response(socket_path: Path, method: str, params: dict, timeout: float) -
             data += chunk
     return json.loads(data.decode("utf-8"))
 
+
+def unix_rpc_supported() -> bool:
+    return hasattr(socket, "AF_UNIX") and os.name != "nt"
 
 def wait_for_socket(path: Path, timeout: float) -> None:
     deadline = time.time() + timeout
@@ -109,7 +112,7 @@ def wait_for_provider_health(socket_path: Path, provider_id: str, expected_statu
     while time.time() < deadline:
         result = rpc_call(
             socket_path,
-            "provider.health.get",
+            "agent.provider.health.get",
             {"provider_id": provider_id},
             timeout=min(timeout, 1.5),
         )
@@ -295,6 +298,7 @@ def make_env(root: Path) -> dict[str, str]:
             "AIOS_RUNTIME_LOCAL_INFERENCE_PROVIDER_AGENTD_SOCKET": str(runtime_root / "agentd" / "agentd.sock"),
             "AIOS_RUNTIME_LOCAL_INFERENCE_PROVIDER_DESCRIPTOR_PATH": str(repo / "aios" / "runtime" / "providers" / "runtime.local-inference.json"),
             "AIOS_RUNTIME_LOCAL_INFERENCE_PROVIDER_MAX_CONCURRENCY": "1",
+            "AIOS_RUNTIME_LOCAL_INFERENCE_PROVIDER_OBSERVABILITY_LOG": str(state_root / "rli" / "observability.jsonl"),
         }
     )
     return env
@@ -302,6 +306,9 @@ def make_env(root: Path) -> dict[str, str]:
 
 def main() -> int:
     args = parse_args()
+    if not unix_rpc_supported():
+        print("runtime local inference provider smoke skipped: unix rpc transport unsupported on this platform")
+        return 0
     binaries = {
         "policyd": resolve_binary("policyd", args.policyd, args.bin_dir),
         "agentd": resolve_binary("agentd", args.agentd, args.bin_dir),
@@ -316,6 +323,7 @@ def main() -> int:
     hold_started = temp_root / "state" / "mock-runtime-backend.hold-started"
     hold_release = temp_root / "state" / "mock-runtime-backend.hold-release"
     env = make_env(temp_root)
+    provider_observability_log = Path(env["AIOS_RUNTIME_LOCAL_INFERENCE_PROVIDER_OBSERVABILITY_LOG"])
     processes: dict[str, subprocess.Popen] = {}
     failed = False
 
@@ -420,7 +428,7 @@ def main() -> int:
             timeout=args.timeout,
         )
         require(embed_response.get("backend_id") == "local-embedding", "runtime embedding backend mismatch")
-        require(embed_response.get("route_state") == "provider-skeleton", "runtime embedding route_state mismatch")
+        require(embed_response.get("route_state") == "provider-local-embedding", "runtime embedding route_state mismatch")
         require(embed_response.get("vector_dimension") == 8, "runtime embedding dimension mismatch")
         require(len(embed_response.get("embeddings", [])) == 2, "runtime embedding record count mismatch")
         require(
@@ -429,8 +437,8 @@ def main() -> int:
         )
         require(embed_response.get("provider_id") == "runtime.local.inference", "runtime embedding provider_id mismatch")
         require(
-            any(note == "provider_operation=embedding-skeleton" for note in embed_response.get("notes", [])),
-            "runtime embedding notes missing skeleton marker",
+            any(note == "provider_operation=embedding" for note in embed_response.get("notes", [])),
+            "runtime embedding notes missing formal operation marker",
         )
 
         rerank_token = rpc_call(
@@ -465,7 +473,7 @@ def main() -> int:
             timeout=args.timeout,
         )
         require(rerank_response.get("backend_id") == "local-reranker", "runtime rerank backend mismatch")
-        require(rerank_response.get("route_state") == "provider-skeleton", "runtime rerank route_state mismatch")
+        require(rerank_response.get("route_state") == "provider-local-rerank", "runtime rerank route_state mismatch")
         require(len(rerank_response.get("results", [])) == 2, "runtime rerank top_k mismatch")
         require(
             (rerank_response.get("results") or [])[0].get("document_index") == 0,
@@ -473,8 +481,48 @@ def main() -> int:
         )
         require(rerank_response.get("provider_id") == "runtime.local.inference", "runtime rerank provider_id mismatch")
         require(
-            any(note == "provider_operation=rerank-skeleton" for note in rerank_response.get("notes", [])),
-            "runtime rerank notes missing skeleton marker",
+            any(note == "provider_operation=rerank" for note in rerank_response.get("notes", [])),
+            "runtime rerank notes missing formal operation marker",
+        )
+
+        wait_for_file(provider_observability_log, args.timeout)
+        observability_entries = [
+            json.loads(line)
+            for line in provider_observability_log.read_text().splitlines()
+            if line.strip()
+        ]
+        observability_kinds = {entry.get("kind") for entry in observability_entries}
+        require(
+            "provider.runtime.infer.result" in observability_kinds,
+            "provider observability log missing infer result trace",
+        )
+        require(
+            "provider.runtime.embed.result" in observability_kinds,
+            "provider observability log missing embedding trace",
+        )
+        require(
+            "provider.runtime.rerank.result" in observability_kinds,
+            "provider observability log missing rerank trace",
+        )
+        embed_trace = next(
+            entry
+            for entry in observability_entries
+            if entry.get("kind") == "provider.runtime.embed.result"
+            and entry.get("payload", {}).get("task_id") == "task-runtime-provider"
+        )
+        require(
+            embed_trace.get("payload", {}).get("route_state") == "provider-local-embedding",
+            "provider embedding trace route_state mismatch",
+        )
+        rerank_trace = next(
+            entry
+            for entry in observability_entries
+            if entry.get("kind") == "provider.runtime.rerank.result"
+            and entry.get("payload", {}).get("task_id") == "task-runtime-provider"
+        )
+        require(
+            rerank_trace.get("payload", {}).get("route_state") == "provider-local-rerank",
+            "provider rerank trace route_state mismatch",
         )
 
         invalid_response = rpc_response(
@@ -616,3 +664,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

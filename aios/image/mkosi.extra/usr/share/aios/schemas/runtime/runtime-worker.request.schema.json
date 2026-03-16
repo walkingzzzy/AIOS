@@ -4,6 +4,7 @@
   "title": "AIOS Runtime Worker Request",
   "type": "object",
   "required": [
+    "worker_contract",
     "backend_id",
     "session_id",
     "task_id",

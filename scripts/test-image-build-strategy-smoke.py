@@ -5,7 +5,7 @@ import argparse
 import json
 import os
 import subprocess
-import tempfile
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -13,6 +13,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OUTPUT_PREFIX = ROOT / "out" / "validation" / "image-build-strategy-report"
+DEFAULT_WORK_ROOT = ROOT / "out" / "validation" / "image-build-strategy-smoke"
 
 
 def parse_args() -> argparse.Namespace:
@@ -29,22 +30,88 @@ def require(condition: bool, message: str) -> None:
 
 
 def write_script(path: Path, content: str) -> None:
-    path.write_text(content)
+    path.write_text(content, encoding="utf-8")
     path.chmod(0o755)
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
 def write_markdown(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content + "\n")
+    path.write_text(content + "\n", encoding="utf-8")
 
 
 def result(name: str, detail: str) -> dict[str, str]:
     return {"name": name, "status": "passed", "detail": detail}
+
+
+def resolve_bash_binary() -> Path | None:
+    override = os.environ.get("AIOS_BASH")
+    candidates: list[Path] = []
+    if override:
+        candidates.append(Path(override))
+
+    if os.name == "nt":
+        for env_name in ("ProgramW6432", "ProgramFiles", "ProgramFiles(x86)"):
+            program_root = os.environ.get(env_name)
+            if not program_root:
+                continue
+            git_root = Path(program_root) / "Git"
+            candidates.extend(
+                [
+                    git_root / "bin" / "bash.exe",
+                    git_root / "usr" / "bin" / "bash.exe",
+                ]
+            )
+        for name in ("bash.exe", "bash"):
+            resolved = shutil.which(name)
+            if not resolved:
+                continue
+            candidate = Path(resolved)
+            candidate_lower = str(candidate).lower()
+            if candidate_lower.endswith(r"\windows\system32\bash.exe"):
+                continue
+            candidates.append(candidate)
+    else:
+        resolved = shutil.which("bash")
+        if resolved:
+            candidates.append(Path(resolved))
+
+    seen: set[Path] = set()
+    for candidate in candidates:
+        normalized = candidate.resolve(strict=False)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        if normalized.exists():
+            return normalized
+    return None
+
+
+def probe_bash_binary(bash_binary: Path) -> tuple[bool, str]:
+    try:
+        completed = subprocess.run(
+            [str(bash_binary), "-lc", "true"],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    except OSError as exc:
+        return False, str(exc)
+
+    if completed.returncode == 0:
+        return True, str(bash_binary)
+
+    detail = (completed.stderr or completed.stdout or f"returncode={completed.returncode}").strip()
+    return False, detail.splitlines()[0] if detail else f"returncode={completed.returncode}"
+
+
+def prepend_path(path: Path) -> str:
+    return os.pathsep.join([str(path), os.environ["PATH"]])
 
 
 def render_markdown(report: dict[str, Any]) -> str:
@@ -88,11 +155,11 @@ def render_markdown(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def run_preflight(script: Path, extra_env: dict[str, str]) -> dict[str, Any]:
+def run_preflight(script: Path, extra_env: dict[str, str], bash_binary: Path) -> dict[str, Any]:
     env = os.environ.copy()
     env.update(extra_env)
     completed = subprocess.run(
-        ["bash", str(script), "--preflight"],
+        [str(bash_binary), str(script), "--preflight"],
         cwd=ROOT,
         text=True,
         capture_output=True,
@@ -124,15 +191,33 @@ def build_report(
 def main() -> int:
     args = parse_args()
 
-    with tempfile.TemporaryDirectory(prefix="aios-image-strategy-") as temp_dir:
-        fake_bin = Path(temp_dir)
-        cached_container_bin_dir = fake_bin / "cached-container-bin"
-        fake_no_docker_bin = fake_bin / "no-docker-bin"
-        cached_container_bin_dir.mkdir(parents=True, exist_ok=True)
-        fake_no_docker_bin.mkdir(parents=True, exist_ok=True)
-        write_script(
-            fake_bin / "docker",
-            """#!/usr/bin/env bash
+    bash_binary = resolve_bash_binary()
+    if bash_binary is None:
+        if os.name == "nt":
+            print("image build strategy smoke skipped: usable Git Bash runtime unavailable on this platform")
+            return 0
+        raise RuntimeError("image build strategy smoke requires bash in PATH")
+
+    bash_ready, bash_detail = probe_bash_binary(bash_binary)
+    if not bash_ready:
+        if os.name == "nt":
+            print(f"image build strategy smoke skipped: bash runtime unavailable on this platform ({bash_detail})")
+            return 0
+        raise RuntimeError(f"image build strategy smoke requires a usable bash runtime: {bash_detail}")
+
+    if DEFAULT_WORK_ROOT.exists():
+        shutil.rmtree(DEFAULT_WORK_ROOT, ignore_errors=True)
+    DEFAULT_WORK_ROOT.mkdir(parents=True, exist_ok=True)
+
+    fake_bin = DEFAULT_WORK_ROOT / "fake-bin"
+    cached_container_bin_dir = DEFAULT_WORK_ROOT / "cached-container-bin"
+    fake_no_docker_bin = DEFAULT_WORK_ROOT / "no-docker-bin"
+    fake_bin.mkdir(parents=True, exist_ok=True)
+    cached_container_bin_dir.mkdir(parents=True, exist_ok=True)
+    fake_no_docker_bin.mkdir(parents=True, exist_ok=True)
+    write_script(
+        fake_bin / "docker",
+        """#!/usr/bin/env bash
 set -euo pipefail
 if [[ "${1:-}" == "ps" ]]; then
   exit 0
@@ -145,75 +230,78 @@ if [[ "${1:-}" == "buildx" && "${2:-}" == "version" ]]; then
 fi
 exit 64
 """,
-        )
-        write_script(
-            fake_bin / "git",
-            """#!/usr/bin/env bash
+    )
+    write_script(
+        fake_bin / "git",
+        """#!/usr/bin/env bash
 set -euo pipefail
 exit 0
 """,
-        )
-        write_script(
-            fake_no_docker_bin / "git",
-            """#!/usr/bin/env bash
+    )
+    write_script(
+        fake_no_docker_bin / "git",
+        """#!/usr/bin/env bash
 set -euo pipefail
 exit 0
 """,
-        )
-        write_script(
-            fake_no_docker_bin / "docker",
-            """#!/usr/bin/env bash
+    )
+    write_script(
+        fake_no_docker_bin / "docker",
+        """#!/usr/bin/env bash
 set -euo pipefail
 exit 127
 """,
+    )
+    for name in [
+        "agentd",
+        "sessiond",
+        "policyd",
+        "runtimed",
+        "deviced",
+        "updated",
+        "device-metadata-provider",
+        "runtime-local-inference-provider",
+        "system-intent-provider",
+        "system-files-provider",
+    ]:
+        write_script(
+            cached_container_bin_dir / name,
+            "#!/usr/bin/env bash\nexit 0\n",
         )
-        for name in [
-            "agentd",
-            "sessiond",
-            "policyd",
-            "runtimed",
-            "deviced",
-            "updated",
-            "device-metadata-provider",
-            "runtime-local-inference-provider",
-            "system-intent-provider",
-            "system-files-provider",
-        ]:
-            write_script(
-                cached_container_bin_dir / name,
-                "#!/usr/bin/env bash\nexit 0\n",
-            )
 
-        base_env = {
-            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+    base_env = {
+        "PATH": prepend_path(fake_bin),
+        "AIOS_HOST_TARGET_OVERRIDE": "x86_64-unknown-linux-gnu",
+    }
+
+    image_preflight = run_preflight(ROOT / "scripts" / "build-aios-image.sh", base_env, bash_binary)
+    overlay_preflight = run_preflight(ROOT / "scripts" / "sync-aios-image-overlay.sh", base_env, bash_binary)
+    explicit_bin_dir_preflight = run_preflight(
+        ROOT / "scripts" / "build-aios-image.sh",
+        {
+            **base_env,
+            "AIOS_BIN_DIR": str(ROOT / "aios" / "target" / "debug"),
+        },
+        bash_binary,
+    )
+    cached_container_preflight = run_preflight(
+        ROOT / "scripts" / "build-aios-image.sh",
+        {
+            "PATH": prepend_path(fake_no_docker_bin),
             "AIOS_HOST_TARGET_OVERRIDE": "x86_64-unknown-linux-gnu",
-        }
-
-        image_preflight = run_preflight(ROOT / "scripts" / "build-aios-image.sh", base_env)
-        overlay_preflight = run_preflight(ROOT / "scripts" / "sync-aios-image-overlay.sh", base_env)
-        explicit_bin_dir_preflight = run_preflight(
-            ROOT / "scripts" / "build-aios-image.sh",
-            {
-                **base_env,
-                "AIOS_BIN_DIR": str(ROOT / "aios" / "target" / "debug"),
-            },
-        )
-        cached_container_preflight = run_preflight(
-            ROOT / "scripts" / "build-aios-image.sh",
-            {
-                "PATH": f"{fake_no_docker_bin}:{os.environ['PATH']}",
-                "AIOS_HOST_TARGET_OVERRIDE": "x86_64-unknown-linux-gnu",
-                "AIOS_DELIVERY_CACHED_BIN_DIR": str(cached_container_bin_dir),
-            },
-        )
-        cached_container_overlay_preflight = run_preflight(
-            ROOT / "scripts" / "sync-aios-image-overlay.sh",
-            {
-                "PATH": f"{fake_no_docker_bin}:{os.environ['PATH']}",
-                "AIOS_HOST_TARGET_OVERRIDE": "x86_64-unknown-linux-gnu",
-                "AIOS_DELIVERY_CACHED_BIN_DIR": str(cached_container_bin_dir),
-            },
-        )
+            "AIOS_DELIVERY_CACHED_BIN_DIR": str(cached_container_bin_dir),
+        },
+        bash_binary,
+    )
+    cached_container_overlay_preflight = run_preflight(
+        ROOT / "scripts" / "sync-aios-image-overlay.sh",
+        {
+            "PATH": prepend_path(fake_no_docker_bin),
+            "AIOS_HOST_TARGET_OVERRIDE": "x86_64-unknown-linux-gnu",
+            "AIOS_DELIVERY_CACHED_BIN_DIR": str(cached_container_bin_dir),
+        },
+        bash_binary,
+    )
 
     results: list[dict[str, str]] = []
 

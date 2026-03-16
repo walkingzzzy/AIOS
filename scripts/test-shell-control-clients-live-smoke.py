@@ -13,7 +13,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from aios_cargo_bins import default_aios_bin_dir
+from aios_cargo_bins import default_aios_bin_dir, resolve_binary_path
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -32,10 +32,10 @@ def parse_args() -> argparse.Namespace:
 
 def resolve_binary(name: str, explicit: Path | None, bin_dir: Path | None) -> Path:
     if explicit is not None:
-        return explicit
+        return resolve_binary_path(explicit.parent, explicit.name)
     if bin_dir is not None:
-        return bin_dir / name
-    return default_aios_bin_dir(ROOT) / name
+        return resolve_binary_path(bin_dir, name)
+    return resolve_binary_path(default_aios_bin_dir(ROOT), name)
 
 
 def resolve_provider(explicit: Path | None) -> Path:
@@ -52,6 +52,9 @@ def ensure_binaries(paths: dict[str, Path]) -> None:
             print(f"  - {item}")
         print("Build them first, for example: cargo build -p aios-sessiond -p aios-policyd")
         raise SystemExit(2)
+
+def unix_rpc_supported() -> bool:
+    return hasattr(socket, "AF_UNIX") and os.name != "nt"
 
 
 def rpc_call(socket_path: Path, method: str, params: dict, timeout: float) -> dict:
@@ -174,6 +177,9 @@ def run_python(script: Path, *args: str, env: dict[str, str] | None = None) -> s
 
 def main() -> int:
     args = parse_args()
+    if not unix_rpc_supported():
+        print("shell control clients live smoke skipped: unix rpc transport unsupported on this platform")
+        return 0
     binaries = {
         "sessiond": resolve_binary("sessiond", args.sessiond, args.bin_dir),
         "policyd": resolve_binary("policyd", args.policyd, args.bin_dir),
@@ -508,7 +514,7 @@ def main() -> int:
         )
         require("approval_ref:" in output, "approval client live create missing approval ref")
 
-        approvals = rpc_call(policyd_socket, "approval.list", {"session_id": session_id}, timeout=args.timeout)
+        approvals = rpc_call(agentd_socket, "agent.approval.list", {"session_id": session_id}, timeout=args.timeout)
         require(len(approvals["approvals"]) == 1, "approval list count mismatch after create")
         approval_ref = approvals["approvals"][0]["approval_ref"]
 
@@ -679,3 +685,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

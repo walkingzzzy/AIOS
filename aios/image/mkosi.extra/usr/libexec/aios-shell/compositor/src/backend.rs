@@ -446,11 +446,12 @@ fn runtime_now_ms() -> u128 {
 mod mode {
     use super::*;
     use crate::panel_snapshot::dispatch_panel_action_via_socket;
-    use crate::session::SessionState;
+    use crate::session::{ManagedWindowSummary, OutputLayoutSummary, SessionState};
     use crate::surfaces::{
         match_panel_slot, placement_contains_point, placement_z_index, surface_contains_point,
         surface_placement, SurfacePlacement,
     };
+    use serde::{Deserialize, Serialize};
     use smithay::backend::{
         allocator::{
             gbm::{GbmAllocator, GbmBufferFlags, GbmDevice},
@@ -545,6 +546,1060 @@ mod mode {
     const RENDERER_BACKEND_WINIT: &str = "winit-gles";
     const RENDERER_BACKEND_DRM: &str = "drm-kms-gbm-egl";
 
+    const WINDOW_MOVE_GRAB_HEIGHT: i32 = 36;
+    const WINDOW_RESIZE_BORDER: i32 = 12;
+    const POINTER_BUTTON_RIGHT: u32 = 0x111;
+    const POINTER_BUTTON_MIDDLE: u32 = 0x112;
+
+    #[derive(Clone, Debug)]
+    struct OutputSeed {
+        output_id: String,
+        connector_name: Option<String>,
+        label: String,
+        width: i32,
+        height: i32,
+        primary: bool,
+        renderable: bool,
+    }
+
+    #[derive(Clone, Debug)]
+    struct LogicalOutput {
+        output_id: String,
+        connector_name: Option<String>,
+        label: String,
+        frame: PersistedRect,
+        primary: bool,
+        renderable: bool,
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+    struct PersistedRect {
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+    }
+
+    impl PersistedRect {
+        fn clamp_to_bounds(&self, bounds: &PersistedRect, min_width: i32, min_height: i32) -> Self {
+            let width = self.width.max(min_width).min(bounds.width.max(min_width));
+            let height = self
+                .height
+                .max(min_height)
+                .min(bounds.height.max(min_height));
+            let max_x = bounds.x + bounds.width - width;
+            let max_y = bounds.y + bounds.height - height;
+            Self {
+                x: self.x.clamp(bounds.x, max_x.max(bounds.x)),
+                y: self.y.clamp(bounds.y, max_y.max(bounds.y)),
+                width,
+                height,
+            }
+        }
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    struct PersistedWindowEntry {
+        window_key: String,
+        app_id: Option<String>,
+        title: Option<String>,
+        slot_id: Option<String>,
+        output_id: Option<String>,
+        workspace_index: u32,
+        window_policy: String,
+        rect: Option<PersistedRect>,
+        #[serde(default)]
+        minimized: bool,
+        last_seen_at_ms: u128,
+    }
+
+    #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+    struct PersistedWindowManagerState {
+        schema: String,
+        active_workspace_index: u32,
+        active_output_id: Option<String>,
+        windows: Vec<PersistedWindowEntry>,
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct ResizeEdges {
+        left: bool,
+        right: bool,
+        top: bool,
+        bottom: bool,
+    }
+
+    #[derive(Clone, Debug)]
+    enum PointerOperationKind {
+        Move,
+        Resize(ResizeEdges),
+    }
+
+    #[derive(Clone, Debug)]
+    struct PointerOperation {
+        window_key: String,
+        pointer_origin: Point<f64, Logical>,
+        initial_rect: PersistedRect,
+        kind: PointerOperationKind,
+        changed: bool,
+    }
+
+    #[derive(Clone, Debug)]
+    struct ManagedWindowPlacement {
+        window_key: String,
+        surface_id: String,
+        app_id: Option<String>,
+        title: Option<String>,
+        slot_id: Option<String>,
+        output_id: String,
+        workspace_index: u32,
+        window_policy: String,
+        floating: bool,
+        visible: bool,
+        minimized: bool,
+        persisted: bool,
+        interaction_state: String,
+        placement: SurfacePlacement,
+    }
+
+    struct WindowManager {
+        state_path: Option<PathBuf>,
+        status: String,
+        output_layout_mode: String,
+        workspace_count: u32,
+        active_workspace_index: u32,
+        active_output_id: Option<String>,
+        workspace_switch_count: u32,
+        move_count: u32,
+        resize_count: u32,
+        minimize_count: u32,
+        restore_count: u32,
+        last_minimized_window_key: Option<String>,
+        last_restored_window_key: Option<String>,
+        outputs: Vec<LogicalOutput>,
+        output_seeds: Vec<OutputSeed>,
+        virtual_output_names: Vec<String>,
+        render_all_outputs: bool,
+        dirty: bool,
+        pointer_operation: Option<PointerOperation>,
+        persisted: PersistedWindowManagerState,
+    }
+
+    impl WindowManager {
+        fn new(config: &Config) -> Self {
+            let state_path = resolved_window_state_path(config);
+            let mut manager = Self {
+                state_path,
+                status: "initializing".to_string(),
+                output_layout_mode: config.output_layout_mode.clone(),
+                workspace_count: config.workspace_count.max(1),
+                active_workspace_index: config
+                    .default_workspace_index
+                    .min(config.workspace_count.max(1).saturating_sub(1)),
+                active_output_id: None,
+                workspace_switch_count: 0,
+                move_count: 0,
+                resize_count: 0,
+                minimize_count: 0,
+                restore_count: 0,
+                last_minimized_window_key: None,
+                last_restored_window_key: None,
+                outputs: Vec::new(),
+                output_seeds: Vec::new(),
+                virtual_output_names: config.virtual_outputs.clone(),
+                render_all_outputs: config.virtual_outputs.len() > 1,
+                dirty: false,
+                pointer_operation: None,
+                persisted: PersistedWindowManagerState::default(),
+            };
+            manager.load_state();
+            manager
+        }
+
+        fn load_state(&mut self) {
+            let Some(path) = self.state_path.as_ref() else {
+                self.status = "ephemeral".to_string();
+                return;
+            };
+            match fs::read_to_string(path) {
+                Ok(contents) => {
+                    match serde_json::from_str::<PersistedWindowManagerState>(&contents) {
+                        Ok(state) => {
+                            self.active_workspace_index = state
+                                .active_workspace_index
+                                .min(self.workspace_count.saturating_sub(1));
+                            self.active_output_id = state.active_output_id.clone();
+                            self.persisted = state;
+                            self.status =
+                                format!("persistent(loaded={})", self.persisted.windows.len());
+                        }
+                        Err(error) => {
+                            self.persisted = PersistedWindowManagerState::default();
+                            self.status = format!("persistent(load-error:{error})");
+                        }
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    self.persisted = PersistedWindowManagerState::default();
+                    self.status = "persistent(empty)".to_string();
+                }
+                Err(error) => {
+                    self.persisted = PersistedWindowManagerState::default();
+                    self.status = format!("persistent(load-error:{error})");
+                }
+            }
+        }
+
+        fn state_path_string(&self) -> Option<String> {
+            self.state_path
+                .as_ref()
+                .map(|path| path.display().to_string())
+        }
+
+        fn set_output_seeds(&mut self, output_seeds: Vec<OutputSeed>) {
+            self.output_seeds = output_seeds;
+        }
+
+        fn sync_outputs(&mut self, window_size: Size<i32, Physical>) {
+            self.outputs = if self.virtual_output_names.len() > 1 {
+                self.render_all_outputs = true;
+                build_virtual_outputs(
+                    &self.virtual_output_names,
+                    PersistedRect {
+                        x: 0,
+                        y: 0,
+                        width: window_size.w.max(1),
+                        height: window_size.h.max(1),
+                    },
+                    &self.output_layout_mode,
+                )
+            } else if !self.output_seeds.is_empty() {
+                self.render_all_outputs = false;
+                build_outputs_from_seeds(&self.output_seeds, &self.output_layout_mode)
+            } else {
+                self.render_all_outputs = false;
+                vec![LogicalOutput {
+                    output_id: "display-1".to_string(),
+                    connector_name: None,
+                    label: "display-1".to_string(),
+                    frame: PersistedRect {
+                        x: 0,
+                        y: 0,
+                        width: window_size.w.max(1),
+                        height: window_size.h.max(1),
+                    },
+                    primary: true,
+                    renderable: true,
+                }]
+            };
+            if self.outputs.is_empty() {
+                self.outputs.push(LogicalOutput {
+                    output_id: "display-1".to_string(),
+                    connector_name: None,
+                    label: "display-1".to_string(),
+                    frame: PersistedRect {
+                        x: 0,
+                        y: 0,
+                        width: window_size.w.max(1),
+                        height: window_size.h.max(1),
+                    },
+                    primary: true,
+                    renderable: true,
+                });
+            }
+            if self.active_output_id.as_ref().map(|output_id| {
+                self.outputs
+                    .iter()
+                    .any(|output| &output.output_id == output_id)
+            }) != Some(true)
+            {
+                self.active_output_id = self
+                    .outputs
+                    .iter()
+                    .find(|output| output.primary)
+                    .map(|output| output.output_id.clone())
+                    .or_else(|| self.outputs.first().map(|output| output.output_id.clone()));
+            }
+        }
+
+        fn primary_output_id(&self) -> String {
+            self.outputs
+                .iter()
+                .find(|output| output.primary)
+                .or_else(|| self.outputs.first())
+                .map(|output| output.output_id.clone())
+                .unwrap_or_else(|| "display-1".to_string())
+        }
+
+        fn active_output_id(&self) -> Option<String> {
+            self.active_output_id.clone()
+        }
+
+        fn cycle_workspace(&mut self, delta: i32) -> bool {
+            if self.workspace_count <= 1 || delta == 0 {
+                return false;
+            }
+            let workspace_count = self.workspace_count as i32;
+            let next = (self.active_workspace_index as i32 + delta).rem_euclid(workspace_count);
+            if next as u32 == self.active_workspace_index {
+                return false;
+            }
+            self.active_workspace_index = next as u32;
+            self.workspace_switch_count += 1;
+            self.persisted.active_workspace_index = self.active_workspace_index;
+            self.dirty = true;
+            self.status = format!("workspace-switched({})", self.active_workspace_index + 1);
+            let _ = self.save_if_dirty();
+            true
+        }
+
+        fn cycle_output(&mut self, delta: i32) -> bool {
+            if self.outputs.len() <= 1 || delta == 0 {
+                return false;
+            }
+            let current_index = self
+                .outputs
+                .iter()
+                .position(|output| {
+                    Some(output.output_id.as_str()) == self.active_output_id.as_deref()
+                })
+                .unwrap_or(0);
+            let next =
+                (current_index as i32 + delta).rem_euclid(self.outputs.len() as i32) as usize;
+            if next == current_index {
+                return false;
+            }
+            self.active_output_id = Some(self.outputs[next].output_id.clone());
+            self.persisted.active_output_id = self.active_output_id.clone();
+            self.dirty = true;
+            self.status = format!("output-switched({})", self.outputs[next].label);
+            let _ = self.save_if_dirty();
+            true
+        }
+
+        fn output_at_point(&self, pointer: Point<f64, Logical>) -> Option<LogicalOutput> {
+            self.outputs
+                .iter()
+                .find(|output| {
+                    pointer.x >= f64::from(output.frame.x)
+                        && pointer.x <= f64::from(output.frame.x + output.frame.width)
+                        && pointer.y >= f64::from(output.frame.y)
+                        && pointer.y <= f64::from(output.frame.y + output.frame.height)
+                })
+                .cloned()
+        }
+
+        fn minimize_window(&mut self, window_key: &str) -> bool {
+            let Some(entry) = self
+                .persisted
+                .windows
+                .iter_mut()
+                .find(|entry| entry.window_key == window_key)
+            else {
+                return false;
+            };
+            if entry.minimized {
+                return false;
+            }
+            entry.minimized = true;
+            self.minimize_count += 1;
+            self.last_minimized_window_key = Some(window_key.to_string());
+            self.dirty = true;
+            self.status = format!("window-minimized({window_key})");
+            let _ = self.save_if_dirty();
+            true
+        }
+
+        fn restore_recent_window(&mut self) -> bool {
+            let active_output = self.active_output_id.clone();
+            let Some(entry) = self
+                .persisted
+                .windows
+                .iter_mut()
+                .rev()
+                .find(|entry| {
+                    entry.minimized
+                        && entry.workspace_index == self.active_workspace_index
+                        && (active_output.is_none()
+                            || entry.output_id.as_ref() == active_output.as_ref()
+                            || entry.output_id.is_none())
+                })
+                .or_else(|| {
+                    self.persisted.windows.iter_mut().rev().find(|entry| {
+                        entry.minimized && entry.workspace_index == self.active_workspace_index
+                    })
+                })
+            else {
+                return false;
+            };
+            entry.minimized = false;
+            entry.workspace_index = self.active_workspace_index;
+            if let Some(active_output_id) = self.active_output_id.clone() {
+                entry.output_id = Some(active_output_id);
+            }
+            entry.last_seen_at_ms = runtime_now_ms();
+            self.restore_count += 1;
+            self.last_restored_window_key = Some(entry.window_key.clone());
+            self.dirty = true;
+            self.status = format!("window-restored({})", entry.window_key);
+            let _ = self.save_if_dirty();
+            true
+        }
+
+        fn move_window_to_workspace_delta(&mut self, window_key: &str, delta: i32) -> bool {
+            if self.workspace_count <= 1 || delta == 0 {
+                return false;
+            }
+            let Some(entry) = self
+                .persisted
+                .windows
+                .iter_mut()
+                .find(|entry| entry.window_key == window_key)
+            else {
+                return false;
+            };
+            let workspace_count = self.workspace_count as i32;
+            let next = (entry.workspace_index as i32 + delta).rem_euclid(workspace_count) as u32;
+            if next == entry.workspace_index {
+                return false;
+            }
+            entry.workspace_index = next;
+            entry.last_seen_at_ms = runtime_now_ms();
+            self.dirty = true;
+            self.status = format!(
+                "window-workspace-moved({window_key}->workspace-{})",
+                next + 1
+            );
+            let _ = self.save_if_dirty();
+            true
+        }
+
+        fn status_label(&self) -> String {
+            self.status.clone()
+        }
+
+        fn drag_state_label(&self) -> String {
+            match self.pointer_operation.as_ref() {
+                Some(operation) if matches!(operation.kind, PointerOperationKind::Move) => {
+                    format!("dragging({})", operation.window_key)
+                }
+                _ => "idle".to_string(),
+            }
+        }
+
+        fn resize_state_label(&self) -> String {
+            match self.pointer_operation.as_ref() {
+                Some(operation) if matches!(operation.kind, PointerOperationKind::Resize(_)) => {
+                    format!("resizing({})", operation.window_key)
+                }
+                _ => "idle".to_string(),
+            }
+        }
+
+        fn output_summaries(&self) -> Vec<OutputLayoutSummary> {
+            self.outputs
+                .iter()
+                .map(|output| OutputLayoutSummary {
+                    output_id: output.output_id.clone(),
+                    connector_name: output.connector_name.clone(),
+                    label: output.label.clone(),
+                    layout_x: output.frame.x,
+                    layout_y: output.frame.y,
+                    layout_width: output.frame.width,
+                    layout_height: output.frame.height,
+                    primary: output.primary,
+                    active: Some(output.output_id.as_str()) == self.active_output_id.as_deref(),
+                })
+                .collect()
+        }
+
+        fn managed_window_summaries(
+            &self,
+            placements: &[ManagedWindowPlacement],
+        ) -> Vec<ManagedWindowSummary> {
+            placements
+                .iter()
+                .map(|placement| ManagedWindowSummary {
+                    window_key: placement.window_key.clone(),
+                    surface_id: placement.surface_id.clone(),
+                    app_id: placement.app_id.clone(),
+                    title: placement.title.clone(),
+                    slot_id: placement.slot_id.clone(),
+                    output_id: placement.output_id.clone(),
+                    workspace_id: format!("workspace-{}", placement.workspace_index + 1),
+                    window_policy: placement.window_policy.clone(),
+                    floating: placement.floating,
+                    visible: placement.visible,
+                    minimized: placement.minimized,
+                    persisted: placement.persisted,
+                    interaction_state: placement.interaction_state.clone(),
+                    layout_x: placement.placement.x,
+                    layout_y: placement.placement.y,
+                    layout_width: placement.placement.width,
+                    layout_height: placement.placement.height,
+                })
+                .collect()
+        }
+
+        fn place_window(
+            &mut self,
+            index: usize,
+            metadata: &ToplevelMetadata,
+            slot_id: Option<&str>,
+            surface_id: String,
+            window_policy: String,
+        ) -> ManagedWindowPlacement {
+            let window_key = managed_window_key(metadata, slot_id);
+            let entry_index =
+                self.ensure_window_entry(&window_key, metadata, slot_id, &window_policy);
+            let floating = is_floating_window_policy(&window_policy);
+            let default_output_id = self.default_output_id(slot_id, &window_policy);
+            let mut output_id = self.persisted.windows[entry_index]
+                .output_id
+                .clone()
+                .unwrap_or(default_output_id);
+            if !self
+                .outputs
+                .iter()
+                .any(|output| output.output_id == output_id)
+            {
+                output_id = self.primary_output_id();
+                self.persisted.windows[entry_index].output_id = Some(output_id.clone());
+                self.dirty = true;
+            }
+            let workspace_index = self.persisted.windows[entry_index]
+                .workspace_index
+                .min(self.workspace_count.saturating_sub(1));
+            if workspace_index != self.persisted.windows[entry_index].workspace_index {
+                self.persisted.windows[entry_index].workspace_index = workspace_index;
+                self.dirty = true;
+            }
+            let output = self
+                .outputs
+                .iter()
+                .find(|output| output.output_id == output_id)
+                .cloned()
+                .unwrap_or_else(|| self.outputs[0].clone());
+            let minimized = self.persisted.windows[entry_index].minimized;
+            let placement = if floating {
+                let default_rect = placement_to_rect(&floating_window_placement_for_output(
+                    index,
+                    &output,
+                    &window_policy,
+                ));
+                let rect = self.persisted.windows[entry_index]
+                    .rect
+                    .clone()
+                    .unwrap_or(default_rect)
+                    .clamp_to_bounds(&output.frame, 280, 180);
+                if self.persisted.windows[entry_index].rect.as_ref() != Some(&rect) {
+                    self.persisted.windows[entry_index].rect = Some(rect.clone());
+                    self.dirty = true;
+                }
+                rect_to_placement(&rect, &window_policy)
+            } else {
+                placement_for_output(slot_id.unwrap_or("task-surface"), &output)
+            };
+            let interaction_state = match self.pointer_operation.as_ref() {
+                Some(operation)
+                    if operation.window_key == window_key
+                        && matches!(operation.kind, PointerOperationKind::Move) =>
+                {
+                    "dragging".to_string()
+                }
+                Some(operation)
+                    if operation.window_key == window_key
+                        && matches!(operation.kind, PointerOperationKind::Resize(_)) =>
+                {
+                    "resizing".to_string()
+                }
+                _ if minimized => "minimized".to_string(),
+                _ if floating => "floating".to_string(),
+                _ => "tiled".to_string(),
+            };
+            ManagedWindowPlacement {
+                window_key,
+                surface_id,
+                app_id: metadata.app_id.clone(),
+                title: metadata.title.clone(),
+                slot_id: slot_id.map(ToOwned::to_owned),
+                output_id: output.output_id.clone(),
+                workspace_index,
+                window_policy,
+                floating,
+                visible: self.should_render_window(workspace_index, &output.output_id, minimized),
+                minimized,
+                persisted: self.state_path.is_some(),
+                interaction_state,
+                placement,
+            }
+        }
+
+        fn begin_pointer_operation(
+            &mut self,
+            placement: &ToplevelPlacement,
+            pointer: Point<f64, Logical>,
+        ) -> bool {
+            if !placement.visible || !is_floating_window_policy(&placement.window_policy) {
+                return false;
+            }
+            let rect = placement_to_rect(&placement.placement);
+            let kind = if let Some(edges) = detect_resize_edges(&placement.placement, pointer) {
+                PointerOperationKind::Resize(edges)
+            } else if is_move_grab_region(&placement.placement, pointer) {
+                PointerOperationKind::Move
+            } else {
+                return false;
+            };
+            self.pointer_operation = Some(PointerOperation {
+                window_key: placement.window_key.clone(),
+                pointer_origin: pointer,
+                initial_rect: rect,
+                kind,
+                changed: false,
+            });
+            self.status = match self.pointer_operation.as_ref().map(|item| &item.kind) {
+                Some(PointerOperationKind::Move) => {
+                    format!("drag-start({})", placement.window_key)
+                }
+                Some(PointerOperationKind::Resize(_)) => {
+                    format!("resize-start({})", placement.window_key)
+                }
+                None => self.status.clone(),
+            };
+            true
+        }
+
+        fn update_pointer_operation(&mut self, pointer: Point<f64, Logical>) -> bool {
+            let Some(operation) = self.pointer_operation.as_mut() else {
+                return false;
+            };
+            let Some(entry_index) = self
+                .persisted
+                .windows
+                .iter()
+                .position(|entry| entry.window_key == operation.window_key)
+            else {
+                return false;
+            };
+            let output_id = self.persisted.windows[entry_index]
+                .output_id
+                .clone()
+                .unwrap_or_else(|| self.primary_output_id());
+            let mut output = self
+                .outputs
+                .iter()
+                .find(|output| output.output_id == output_id)
+                .cloned()
+                .unwrap_or_else(|| self.outputs[0].clone());
+            let delta_x = (pointer.x - operation.pointer_origin.x).round() as i32;
+            let delta_y = (pointer.y - operation.pointer_origin.y).round() as i32;
+            let mut next_rect = operation.initial_rect.clone();
+            let mut transferred_output: Option<LogicalOutput> = None;
+            match &operation.kind {
+                PointerOperationKind::Move => {
+                    next_rect.x += delta_x;
+                    next_rect.y += delta_y;
+                    if let Some(target_output) = self.output_at_point(pointer) {
+                        if target_output.output_id != output.output_id {
+                            output = target_output.clone();
+                            transferred_output = Some(target_output);
+                        }
+                    }
+                }
+                PointerOperationKind::Resize(edges) => {
+                    if edges.left {
+                        next_rect.x += delta_x;
+                        next_rect.width -= delta_x;
+                    }
+                    if edges.right {
+                        next_rect.width += delta_x;
+                    }
+                    if edges.top {
+                        next_rect.y += delta_y;
+                        next_rect.height -= delta_y;
+                    }
+                    if edges.bottom {
+                        next_rect.height += delta_y;
+                    }
+                }
+            }
+            next_rect = next_rect.clamp_to_bounds(&output.frame, 280, 180);
+            if let Some(target_output) = transferred_output.as_ref() {
+                self.persisted.windows[entry_index].output_id =
+                    Some(target_output.output_id.clone());
+                self.active_output_id = Some(target_output.output_id.clone());
+                self.persisted.active_output_id = self.active_output_id.clone();
+                self.status = format!(
+                    "dragging({}:output={})",
+                    operation.window_key, target_output.label
+                );
+                self.dirty = true;
+            }
+            if self.persisted.windows[entry_index].rect.as_ref() != Some(&next_rect) {
+                self.persisted.windows[entry_index].rect = Some(next_rect);
+                self.dirty = true;
+                operation.changed = true;
+                self.status = match operation.kind {
+                    PointerOperationKind::Move => {
+                        format!("dragging({})", operation.window_key)
+                    }
+                    PointerOperationKind::Resize(_) => {
+                        format!("resizing({})", operation.window_key)
+                    }
+                };
+            }
+            true
+        }
+
+        fn finish_pointer_operation(&mut self) -> bool {
+            let Some(operation) = self.pointer_operation.take() else {
+                return false;
+            };
+            if operation.changed {
+                match operation.kind {
+                    PointerOperationKind::Move => self.move_count += 1,
+                    PointerOperationKind::Resize(_) => self.resize_count += 1,
+                }
+                let _ = self.save_if_dirty();
+            }
+            self.status = match operation.kind {
+                PointerOperationKind::Move => format!("drag-complete({})", operation.window_key),
+                PointerOperationKind::Resize(_) => {
+                    format!("resize-complete({})", operation.window_key)
+                }
+            };
+            operation.changed
+        }
+
+        fn save_if_dirty(&mut self) -> Result<(), String> {
+            if !self.dirty {
+                return Ok(());
+            }
+            let Some(path) = self.state_path.as_ref() else {
+                self.status = "ephemeral".to_string();
+                self.dirty = false;
+                return Ok(());
+            };
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+            }
+            self.persisted.schema = "aios.shell.compositor.window-state/v1".to_string();
+            self.persisted.active_workspace_index = self.active_workspace_index;
+            self.persisted.active_output_id = self.active_output_id.clone();
+            fs::write(
+                path,
+                serde_json::to_string_pretty(&self.persisted).map_err(|error| error.to_string())?
+                    + "
+",
+            )
+            .map_err(|error| error.to_string())?;
+            self.status = format!("persistent(saved={})", self.persisted.windows.len());
+            self.dirty = false;
+            Ok(())
+        }
+
+        fn should_render_window(
+            &self,
+            workspace_index: u32,
+            output_id: &str,
+            minimized: bool,
+        ) -> bool {
+            !minimized
+                && workspace_index == self.active_workspace_index
+                && (self.render_all_outputs
+                    || Some(output_id) == self.active_output_id.as_deref()
+                    || self.outputs.iter().all(|output| !output.renderable))
+        }
+
+        fn default_output_id(&self, slot_id: Option<&str>, window_policy: &str) -> String {
+            if slot_id == Some("task-surface") || is_floating_window_policy(window_policy) {
+                self.active_output_id
+                    .clone()
+                    .unwrap_or_else(|| self.primary_output_id())
+            } else {
+                self.primary_output_id()
+            }
+        }
+
+        fn ensure_window_entry(
+            &mut self,
+            window_key: &str,
+            metadata: &ToplevelMetadata,
+            slot_id: Option<&str>,
+            window_policy: &str,
+        ) -> usize {
+            if let Some(index) = self
+                .persisted
+                .windows
+                .iter()
+                .position(|entry| entry.window_key == window_key)
+            {
+                let entry = &mut self.persisted.windows[index];
+                entry.app_id = metadata.app_id.clone();
+                entry.title = metadata.title.clone();
+                entry.slot_id = slot_id.map(ToOwned::to_owned);
+                entry.window_policy = window_policy.to_string();
+                entry.last_seen_at_ms = runtime_now_ms();
+                return index;
+            }
+            self.persisted.windows.push(PersistedWindowEntry {
+                window_key: window_key.to_string(),
+                app_id: metadata.app_id.clone(),
+                title: metadata.title.clone(),
+                slot_id: slot_id.map(ToOwned::to_owned),
+                output_id: None,
+                workspace_index: self.active_workspace_index,
+                window_policy: window_policy.to_string(),
+                rect: None,
+                minimized: false,
+                last_seen_at_ms: runtime_now_ms(),
+            });
+            self.dirty = true;
+            self.persisted.windows.len() - 1
+        }
+    }
+
+    fn resolved_window_state_path(config: &Config) -> Option<PathBuf> {
+        config
+            .window_state_path
+            .as_ref()
+            .map(PathBuf::from)
+            .or_else(|| {
+                config.runtime_state_path.as_ref().map(|value| {
+                    let mut path = PathBuf::from(value);
+                    if let Some(stem) = path
+                        .file_stem()
+                        .map(|stem| stem.to_string_lossy().into_owned())
+                    {
+                        path.set_file_name(format!("{stem}.windows.json"));
+                    } else {
+                        path.push("windows.json");
+                    }
+                    path
+                })
+            })
+    }
+
+    fn build_virtual_outputs(
+        output_names: &[String],
+        frame: PersistedRect,
+        layout_mode: &str,
+    ) -> Vec<LogicalOutput> {
+        let count = output_names.len().max(1) as i32;
+        output_names
+            .iter()
+            .enumerate()
+            .map(|(index, name)| {
+                let index = index as i32;
+                let output_frame = match layout_mode {
+                    "vertical" => {
+                        let height = (frame.height / count).max(1);
+                        let y = frame.y + height * index;
+                        let bottom = if index == count - 1 {
+                            frame.y + frame.height
+                        } else {
+                            y + height
+                        };
+                        PersistedRect {
+                            x: frame.x,
+                            y,
+                            width: frame.width,
+                            height: (bottom - y).max(1),
+                        }
+                    }
+                    "mirrored" => frame.clone(),
+                    _ => {
+                        let width = (frame.width / count).max(1);
+                        let x = frame.x + width * index;
+                        let right = if index == count - 1 {
+                            frame.x + frame.width
+                        } else {
+                            x + width
+                        };
+                        PersistedRect {
+                            x,
+                            y: frame.y,
+                            width: (right - x).max(1),
+                            height: frame.height,
+                        }
+                    }
+                };
+                LogicalOutput {
+                    output_id: format!("virtual-output-{}", index + 1),
+                    connector_name: Some(name.clone()),
+                    label: name.clone(),
+                    frame: output_frame,
+                    primary: index == 0,
+                    renderable: true,
+                }
+            })
+            .collect()
+    }
+
+    fn build_outputs_from_seeds(seeds: &[OutputSeed], layout_mode: &str) -> Vec<LogicalOutput> {
+        let mut cursor_x = 0;
+        let mut cursor_y = 0;
+        seeds
+            .iter()
+            .enumerate()
+            .map(|(index, seed)| {
+                let frame = match layout_mode {
+                    "vertical" => {
+                        let frame = PersistedRect {
+                            x: 0,
+                            y: cursor_y,
+                            width: seed.width.max(1),
+                            height: seed.height.max(1),
+                        };
+                        cursor_y += seed.height.max(1);
+                        frame
+                    }
+                    "mirrored" => PersistedRect {
+                        x: 0,
+                        y: 0,
+                        width: seed.width.max(1),
+                        height: seed.height.max(1),
+                    },
+                    _ => {
+                        let frame = PersistedRect {
+                            x: cursor_x,
+                            y: 0,
+                            width: seed.width.max(1),
+                            height: seed.height.max(1),
+                        };
+                        cursor_x += seed.width.max(1);
+                        frame
+                    }
+                };
+                LogicalOutput {
+                    output_id: seed.output_id.clone(),
+                    connector_name: seed.connector_name.clone(),
+                    label: seed.label.clone(),
+                    frame,
+                    primary: seed.primary || index == 0,
+                    renderable: seed.renderable,
+                }
+            })
+            .collect()
+    }
+
+    fn managed_window_key(metadata: &ToplevelMetadata, slot_id: Option<&str>) -> String {
+        let raw = format!(
+            "{}|{}|{}",
+            metadata.app_id.as_deref().unwrap_or_default(),
+            metadata.title.as_deref().unwrap_or_default(),
+            slot_id.unwrap_or_default()
+        );
+        let sanitized = raw
+            .chars()
+            .map(|character| {
+                if character.is_ascii_alphanumeric() {
+                    character.to_ascii_lowercase()
+                } else {
+                    '-'
+                }
+            })
+            .collect::<String>();
+        if sanitized.trim_matches('-').is_empty() {
+            "window-anonymous".to_string()
+        } else {
+            sanitized
+                .split('-')
+                .filter(|segment| !segment.is_empty())
+                .collect::<Vec<_>>()
+                .join("-")
+        }
+    }
+
+    fn is_floating_window_policy(window_policy: &str) -> bool {
+        matches!(
+            window_policy,
+            "floating-dialog" | "floating-utility" | "floating-workspace"
+        )
+    }
+
+    fn is_minimizable_window_policy(window_policy: &str) -> bool {
+        is_floating_window_policy(window_policy) || window_policy.starts_with("workspace-")
+    }
+
+    fn placement_for_output(slot_id: &str, output: &LogicalOutput) -> SurfacePlacement {
+        let mut placement = surface_placement(slot_id, output.frame.width, output.frame.height);
+        placement.x += output.frame.x;
+        placement.y += output.frame.y;
+        placement
+    }
+
+    fn floating_window_placement_for_output(
+        index: usize,
+        output: &LogicalOutput,
+        window_policy: &str,
+    ) -> SurfacePlacement {
+        let size = Size::from((output.frame.width, output.frame.height));
+        let mut placement = floating_window_placement(index, size, window_policy);
+        placement.x += output.frame.x;
+        placement.y += output.frame.y;
+        placement
+    }
+
+    fn placement_to_rect(placement: &SurfacePlacement) -> PersistedRect {
+        PersistedRect {
+            x: placement.x,
+            y: placement.y,
+            width: placement.width,
+            height: placement.height,
+        }
+    }
+
+    fn rect_to_placement(rect: &PersistedRect, window_policy: &str) -> SurfacePlacement {
+        SurfacePlacement {
+            zone: if window_policy == "floating-dialog" {
+                "center-modal"
+            } else if window_policy == "floating-utility" {
+                "right-rail"
+            } else {
+                "floating-stack"
+            },
+            anchor: if window_policy == "floating-dialog" {
+                "center"
+            } else if window_policy == "floating-utility" {
+                "top-right"
+            } else {
+                "top-left"
+            },
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+        }
+    }
+
+    fn detect_resize_edges(
+        placement: &SurfacePlacement,
+        pointer: Point<f64, Logical>,
+    ) -> Option<ResizeEdges> {
+        let left = pointer.x <= f64::from(placement.x + WINDOW_RESIZE_BORDER);
+        let right = pointer.x >= f64::from(placement.x + placement.width - WINDOW_RESIZE_BORDER);
+        let top = pointer.y <= f64::from(placement.y + WINDOW_RESIZE_BORDER);
+        let bottom = pointer.y >= f64::from(placement.y + placement.height - WINDOW_RESIZE_BORDER);
+        if left || right || top || bottom {
+            Some(ResizeEdges {
+                left,
+                right,
+                top,
+                bottom,
+            })
+        } else {
+            None
+        }
+    }
+
+    fn is_move_grab_region(placement: &SurfacePlacement, pointer: Point<f64, Logical>) -> bool {
+        pointer.y <= f64::from(placement.y + WINDOW_MOVE_GRAB_HEIGHT)
+            && pointer.x >= f64::from(placement.x)
+            && pointer.x <= f64::from(placement.x + placement.width)
+    }
+
     pub fn mode_label(config: &Config) -> String {
         match normalized_compositor_backend(config) {
             "drm-kms" => MODE_LABEL_DRM.to_string(),
@@ -611,6 +1666,8 @@ mod mode {
             session.set_touch_status("disabled");
         }
         session.set_input_backend_status("active(winit)");
+        let window_manager = WindowManager::new(config);
+        session.set_window_state_path(window_manager.state_path_string());
         let mut state = App {
             compositor_state,
             xdg_shell_state,
@@ -621,6 +1678,8 @@ mod mode {
             panel_bridge_socket: config.panel_bridge_socket.clone(),
             panel_action_log_path: config.panel_action_log_path.clone(),
             session,
+            window_manager,
+            last_toplevel_placements: Vec::new(),
         };
 
         let owned_runtime_dir = ensure_runtime_dir()?;
@@ -649,6 +1708,12 @@ mod mode {
                 None
             }
         };
+        let initial_window_size = renderer
+            .as_ref()
+            .map(|renderer| renderer.backend.window_size())
+            .unwrap_or_else(|| Size::from((1280, 800)));
+        state.window_manager.sync_outputs(initial_window_size);
+        state.sync_window_manager_session(&[]);
 
         runtime.publish_ready(&mut state.session)?;
         let run_result = (|| -> Result<(), Box<dyn Error>> {
@@ -740,6 +1805,7 @@ mod mode {
         active_output_count: u32,
         primary_output_name: Option<String>,
         primary_output_size: Option<Size<i32, Physical>>,
+        outputs: Vec<OutputSeed>,
         atomic_modesetting: bool,
         plane_count: u32,
     }
@@ -817,6 +1883,7 @@ mod mode {
 
     struct DrmRuntime {
         output_size: Size<i32, Physical>,
+        output_seeds: Vec<OutputSeed>,
         drm_notifier: DrmDeviceNotifier,
         presentation: Rc<RefCell<DrmPresentationRuntime>>,
     }
@@ -835,11 +1902,14 @@ mod mode {
         Ok((libseat_session, session_notifier))
     }
 
-    fn select_primary_drm_output(device: &DrmDevice) -> Result<DrmSelectedOutput, String> {
+    fn select_primary_drm_output(
+        device: &DrmDevice,
+        config: &Config,
+    ) -> Result<DrmSelectedOutput, String> {
         let resources = device
             .resource_handles()
             .map_err(|error| format!("drm-resources-unavailable:{error}"))?;
-        let mut used_crtcs = Vec::new();
+        let mut best_candidate: Option<((i32, i32, i32, i32, i32), DrmSelectedOutput)> = None;
 
         for connector_handle in resources.connectors() {
             let info = device
@@ -848,33 +1918,48 @@ mod mode {
             if info.state() != connector::State::Connected {
                 continue;
             }
-            let Some(mode) = info.modes().first().copied() else {
+            let Some(crtc) = select_crtc_for_connector(device, &resources, &info, &[]) else {
                 continue;
             };
-            let Some(crtc) = select_crtc_for_connector(device, &resources, &info, &used_crtcs)
+            let connector_name = format!("{:?}-{}", info.interface(), info.interface_id());
+            let Some((mode, output_mode, output_size, mode_rank)) =
+                select_connector_mode(&info, config)
             else {
                 continue;
             };
-            used_crtcs.push(crtc);
-            let connector_name = format!("{:?}-{}", info.interface(), info.interface_id());
-            let (width, height) = mode.size();
             let physical_size_mm = info
                 .size()
                 .map(|(w, h)| (i32::try_from(w).unwrap_or(0), i32::try_from(h).unwrap_or(0)))
                 .unwrap_or((0, 0));
-            return Ok(DrmSelectedOutput {
+            let candidate = DrmSelectedOutput {
                 connector: *connector_handle,
-                connector_name,
+                connector_name: connector_name.clone(),
                 physical_size_mm,
                 subpixel: info.subpixel().into(),
                 crtc,
                 mode,
-                output_mode: OutputMode::from(mode),
-                output_size: Size::from((i32::from(width), i32::from(height))),
-            });
+                output_mode,
+                output_size,
+            };
+            let rank = (
+                connector_preference_rank(
+                    &connector_name,
+                    config.drm_preferred_connector.as_deref(),
+                ),
+                mode_rank.0,
+                mode_rank.1,
+                mode_rank.2,
+                mode_rank.3,
+            );
+            match &best_candidate {
+                Some((best_rank, _)) if *best_rank <= rank => {}
+                _ => best_candidate = Some((rank, candidate)),
+            }
         }
 
-        Err("drm-output-not-available".to_string())
+        best_candidate
+            .map(|(_, candidate)| candidate)
+            .ok_or_else(|| "drm-output-not-available".to_string())
     }
 
     fn create_drm_output(selected_output: &DrmSelectedOutput) -> Output {
@@ -927,13 +2012,17 @@ mod mode {
                 |error| format!("drm-device-init-failed({}):{error}", drm_path.display()),
             )?;
         let drm_probe = probe_drm_outputs(&drm_device)?;
+        let selected_output = select_primary_drm_output(&drm_device, config)?;
         session.set_drm_topology(
             Some(drm_path.display().to_string()),
+            Some(selected_output.connector_name.clone()),
+            Some(selected_output.output_size.w),
+            Some(selected_output.output_size.h),
+            Some(selected_output.output_mode.refresh),
             drm_probe.output_count,
             drm_probe.connected_output_count,
             drm_probe.primary_output_name.clone(),
         );
-        let selected_output = select_primary_drm_output(&drm_device)?;
 
         let gbm = GbmDevice::new(drm_device_fd.clone())
             .map_err(|error| format!("gbm-init-failed:{error}"))?;
@@ -1012,7 +2101,11 @@ mod mode {
             }
 
             for placement in placements {
-                configure_toplevel_for_placement(&placement.surface, &placement.placement);
+                configure_toplevel_for_placement(
+                    &placement.surface,
+                    &placement.placement,
+                    &placement.window_policy,
+                );
             }
 
             let elements = placements
@@ -1211,6 +2304,7 @@ mod mode {
 
         Ok(DrmRuntime {
             output_size: context.selected_output.output_size,
+            output_seeds: context.drm_probe.outputs.clone(),
             drm_notifier: context.drm_notifier,
             presentation: Rc::new(RefCell::new(DrmPresentationRuntime::new(
                 context.drm_device,
@@ -1285,6 +2379,8 @@ mod mode {
             session.set_touch_status("disabled");
         }
         session.set_input_backend_status("initializing(libinput)");
+        let window_manager = WindowManager::new(config);
+        session.set_window_state_path(window_manager.state_path_string());
         let mut state = App {
             compositor_state,
             xdg_shell_state,
@@ -1295,6 +2391,8 @@ mod mode {
             panel_bridge_socket: config.panel_bridge_socket.clone(),
             panel_action_log_path: config.panel_action_log_path.clone(),
             session,
+            window_manager,
+            last_toplevel_placements: Vec::new(),
         };
 
         let owned_runtime_dir = ensure_runtime_dir()?;
@@ -1322,6 +2420,11 @@ mod mode {
                 Box::new(std::io::Error::new(std::io::ErrorKind::Other, error)) as Box<dyn Error>
             })?;
         let output_size = drm_runtime.output_size;
+        state
+            .window_manager
+            .set_output_seeds(drm_runtime.output_seeds.clone());
+        state.window_manager.sync_outputs(output_size);
+        state.sync_window_manager_session(&[]);
         let drm_presentation = drm_runtime.presentation.clone();
         let input_backend =
             initialize_libinput_backend(config, libseat_session.clone(), &mut state.session)
@@ -1544,6 +2647,73 @@ mod mode {
             })
     }
 
+    fn connector_preference_rank(connector_name: &str, preferred: Option<&str>) -> i32 {
+        let Some(preferred) = preferred else {
+            return 0;
+        };
+        if normalized_connector_name(connector_name) == normalized_connector_name(preferred) {
+            0
+        } else {
+            1
+        }
+    }
+
+    fn select_connector_mode(
+        info: &connector::Info,
+        config: &Config,
+    ) -> Option<(
+        ControlMode,
+        OutputMode,
+        Size<i32, Physical>,
+        (i32, i32, i32, i32),
+    )> {
+        info.modes()
+            .iter()
+            .copied()
+            .map(|mode| {
+                let output_mode = OutputMode::from(mode);
+                let (width, height) = mode.size();
+                let size = Size::from((i32::from(width), i32::from(height)));
+                let rank = mode_preference_rank(size, output_mode.refresh, config);
+                (mode, output_mode, size, rank)
+            })
+            .min_by_key(|(_, _, _, rank)| *rank)
+    }
+
+    fn mode_preference_rank(
+        size: Size<i32, Physical>,
+        refresh_millihz: i32,
+        config: &Config,
+    ) -> (i32, i32, i32, i32) {
+        (
+            config
+                .drm_output_width
+                .map(|width| (size.w - width).abs())
+                .unwrap_or(0),
+            config
+                .drm_output_height
+                .map(|height| (size.h - height).abs())
+                .unwrap_or(0),
+            config
+                .drm_output_refresh_millihz
+                .map(|refresh| (refresh_millihz - refresh).abs())
+                .unwrap_or(0),
+            if refresh_millihz > 0 {
+                -refresh_millihz
+            } else {
+                0
+            },
+        )
+    }
+
+    fn normalized_connector_name(value: &str) -> String {
+        value
+            .chars()
+            .filter(|character| character.is_ascii_alphanumeric())
+            .flat_map(char::to_lowercase)
+            .collect()
+    }
+
     fn probe_drm_outputs(device: &DrmDevice) -> Result<DrmProbe, String> {
         let resources = device
             .resource_handles()
@@ -1553,6 +2723,7 @@ mod mode {
         let mut plane_count = 0;
         let mut primary_output_name = None;
         let mut primary_output_size = None;
+        let mut outputs = Vec::new();
         let mut used_crtcs = Vec::new();
 
         for connector_handle in resources.connectors() {
@@ -1561,11 +2732,28 @@ mod mode {
                 .map_err(|error| format!("drm-connector-query-failed:{error}"))?;
             let connector_name = format!("{:?}-{}", info.interface(), info.interface_id());
             let is_connected = info.state() == connector::State::Connected;
+            let size = info
+                .modes()
+                .first()
+                .map(|mode| {
+                    let (width, height) = mode.size();
+                    (i32::from(width), i32::from(height))
+                })
+                .unwrap_or((1920, 1080));
             if is_connected {
                 connected_output_count += 1;
                 if primary_output_name.is_none() {
                     primary_output_name = Some(connector_name.clone());
                 }
+                outputs.push(OutputSeed {
+                    output_id: connector_name.clone(),
+                    connector_name: Some(connector_name.clone()),
+                    label: connector_name.clone(),
+                    width: size.0,
+                    height: size.1,
+                    primary: primary_output_name.as_deref() == Some(connector_name.as_str()),
+                    renderable: false,
+                });
             }
 
             let Some(mode) = info.modes().first().copied() else {
@@ -1590,6 +2778,25 @@ mod mode {
                 primary_output_size = Some(Size::from((i32::from(width), i32::from(height))));
             }
         }
+        if let Some(primary_name) = primary_output_name.as_deref() {
+            for output in &mut outputs {
+                if output.output_id == primary_name {
+                    output.primary = true;
+                    output.renderable = true;
+                }
+            }
+        }
+        if outputs.is_empty() {
+            outputs.push(OutputSeed {
+                output_id: "display-1".to_string(),
+                connector_name: None,
+                label: "display-1".to_string(),
+                width: 1920,
+                height: 1080,
+                primary: true,
+                renderable: true,
+            });
+        }
 
         Ok(DrmProbe {
             output_count: resources.connectors().len() as u32,
@@ -1597,6 +2804,7 @@ mod mode {
             active_output_count,
             primary_output_name,
             primary_output_size,
+            outputs,
             atomic_modesetting: device.is_atomic(),
             plane_count,
         })
@@ -1652,6 +2860,8 @@ mod mode {
         panel_bridge_socket: Option<String>,
         panel_action_log_path: Option<String>,
         session: SessionState,
+        window_manager: WindowManager,
+        last_toplevel_placements: Vec<ToplevelPlacement>,
     }
 
     #[derive(Clone, Debug)]
@@ -1667,6 +2877,12 @@ mod mode {
         sequence: usize,
         z_index: i32,
         placement: SurfacePlacement,
+        window_policy: String,
+        window_key: String,
+        output_id: String,
+        visible: bool,
+        persisted: bool,
+        interaction_state: String,
     }
 
     #[derive(Clone, Debug)]
@@ -1679,14 +2895,7 @@ mod mode {
 
     impl App {
         fn active_modal_slot_id(&self) -> Option<String> {
-            self.session
-                .surfaces
-                .iter()
-                .filter(|surface| {
-                    surface.panel_component.is_some() && surface.focus_policy == "shell-modal"
-                })
-                .max_by_key(|surface| surface.z_index)
-                .map(|surface| surface.surface_id.clone())
+            self.session.active_modal_surface_id.clone()
         }
 
         fn keyboard_focus_target(&mut self, window_size: Size<i32, Physical>) -> Option<WlSurface> {
@@ -1719,6 +2928,75 @@ mod mode {
                     focus_policy: surface.focus_policy.clone(),
                     primary_action_id: surface.panel_primary_action_id.clone(),
                 })
+        }
+
+        fn slot_window_policy(&self, slot_id: &str) -> Option<String> {
+            self.session
+                .surfaces
+                .iter()
+                .find(|surface| surface.surface_id == slot_id)
+                .map(|surface| surface.window_policy.clone())
+        }
+
+        fn sync_window_manager_session(&mut self, placements: &[ManagedWindowPlacement]) {
+            self.session.update_window_management(
+                self.window_manager.status_label(),
+                self.window_manager.output_layout_mode.clone(),
+                self.window_manager.active_output_id(),
+                self.window_manager.output_summaries(),
+                self.window_manager.workspace_count,
+                self.window_manager.active_workspace_index,
+                self.window_manager.workspace_switch_count,
+                self.window_manager.managed_window_summaries(placements),
+                self.window_manager.move_count,
+                self.window_manager.resize_count,
+                self.window_manager.minimize_count,
+                self.window_manager.restore_count,
+                self.window_manager.last_minimized_window_key.clone(),
+                self.window_manager.last_restored_window_key.clone(),
+                self.window_manager.drag_state_label(),
+                self.window_manager.resize_state_label(),
+            );
+        }
+
+        fn hit_toplevel_placement(
+            &self,
+            location: Point<f64, Logical>,
+        ) -> Option<ToplevelPlacement> {
+            self.last_toplevel_placements
+                .iter()
+                .rev()
+                .find(|placement| {
+                    placement_contains_point(&placement.placement, location.x, location.y)
+                })
+                .cloned()
+        }
+
+        fn maybe_cycle_workspace(&mut self, vertical_amount: f64) -> bool {
+            if self.session.last_hit_slot_id.as_deref() != Some("launcher")
+                || vertical_amount.abs() < 0.5
+            {
+                return false;
+            }
+            if self
+                .window_manager
+                .cycle_workspace(if vertical_amount > 0.0 { 1 } else { -1 })
+            {
+                self.set_keyboard_focus(None);
+                return true;
+            }
+            false
+        }
+
+        fn maybe_cycle_output(&mut self, horizontal_amount: f64) -> bool {
+            if horizontal_amount.abs() < 0.5 {
+                return false;
+            }
+            if self.session.last_hit_slot_id.as_deref() != Some("task-surface") {
+                return false;
+            }
+            self.window_manager
+                .cycle_output(if horizontal_amount > 0.0 { 1 } else { -1 })
         }
 
         fn sync_runtime_metrics(&mut self) {
@@ -2021,8 +3299,15 @@ mod mode {
                 );
                 return;
             };
-            let mut process = Command::new("/bin/sh");
-            process.arg("-lc").arg(command);
+            let mut process = if cfg!(windows) {
+                let mut process = Command::new("cmd");
+                process.arg("/C").arg(command);
+                process
+            } else {
+                let mut process = Command::new("/bin/sh");
+                process.arg("-lc").arg(command);
+                process
+            };
             process.env("AIOS_SHELL_PANEL_SLOT_ID", slot_id);
             process.env("AIOS_SHELL_PANEL_COMPONENT", &component);
             process.env("AIOS_SHELL_PANEL_ACTION_ID", &action_id);
@@ -2157,6 +3442,7 @@ mod mode {
             &mut self,
             window_size: Size<i32, Physical>,
         ) -> Vec<ToplevelPlacement> {
+            self.window_manager.sync_outputs(window_size);
             self.session
                 .sync_surface_layouts(window_size.w, window_size.h);
             self.session.clear_surface_embeddings();
@@ -2176,46 +3462,76 @@ mod mode {
 
             let mut used_slots = Vec::new();
             let mut placements = Vec::new();
+            let mut managed_placements = Vec::new();
 
             for (index, surface) in toplevels.into_iter().enumerate() {
                 let metadata = toplevel_metadata(&surface);
-                let slot_id = match_panel_slot(
+                let candidate_slot = match_panel_slot(
                     &available_slots,
                     &used_slots,
                     metadata.app_id.as_deref(),
                     metadata.title.as_deref(),
                 );
-                let placement = match &slot_id {
-                    Some(slot_id) => {
-                        let placement = surface_placement(slot_id, window_size.w, window_size.h);
+                let window_policy = candidate_slot
+                    .as_deref()
+                    .and_then(|slot_id| self.slot_window_policy(slot_id))
+                    .unwrap_or_else(|| toplevel_window_policy(&metadata));
+                let managed = self.window_manager.place_window(
+                    index,
+                    &metadata,
+                    candidate_slot.as_deref(),
+                    surface_label(surface.wl_surface()),
+                    window_policy.clone(),
+                );
+                if managed.visible {
+                    if let Some(slot_id) = candidate_slot.as_ref() {
                         used_slots.push(slot_id.clone());
                         self.session.bind_surface_embedding(
                             slot_id,
-                            surface_label(surface.wl_surface()),
+                            managed.surface_id.clone(),
                             metadata.app_id.clone(),
                             metadata.title.clone(),
                         );
-                        placement
                     }
-                    None => floating_window_placement(index, window_size),
+                }
+                let z_index = if managed.visible {
+                    placement_z_index(managed.placement.zone)
+                } else {
+                    -1024
                 };
-                let z_index = placement_z_index(placement.zone);
+                managed_placements.push(managed.clone());
                 placements.push(ToplevelPlacement {
                     surface,
-                    slot_id,
+                    slot_id: candidate_slot,
                     sequence: index,
                     z_index,
-                    placement,
+                    placement: managed.placement.clone(),
+                    window_policy,
+                    window_key: managed.window_key.clone(),
+                    output_id: managed.output_id.clone(),
+                    visible: managed.visible,
+                    persisted: managed.persisted,
+                    interaction_state: managed.interaction_state.clone(),
                 });
             }
 
-            placements.sort_by_key(|placement| (placement.z_index, placement.sequence));
+            self.sync_window_manager_session(&managed_placements);
+            let _ = self.window_manager.save_if_dirty();
+            let mut visible_placements = placements
+                .into_iter()
+                .filter(|placement| placement.visible)
+                .collect::<Vec<_>>();
+            visible_placements.sort_by_key(|placement| (placement.z_index, placement.sequence));
+            self.last_toplevel_placements = visible_placements.clone();
             self.session.note_stacking(
-                placements
+                visible_placements
                     .last()
                     .map(|placement| surface_label(placement.surface.wl_surface())),
+                visible_placements
+                    .last()
+                    .and_then(|placement| placement.slot_id.clone()),
             );
-            placements
+            visible_placements
         }
 
         fn route_input_event<B>(
@@ -2275,6 +3591,17 @@ mod mode {
                         (base.x + delta.x, base.y + delta.y).into(),
                         window_size,
                     );
+                    if self.window_manager.update_pointer_operation(location) {
+                        self.session.note_pointer_input(
+                            if self.window_manager.drag_state_label() != "idle" {
+                                "pointer-drag"
+                            } else {
+                                "pointer-resize"
+                            },
+                            Some((location.x, location.y)),
+                        );
+                        return;
+                    }
                     let focus = self.pointer_focus_target(location, window_size);
                     if let Some(pointer) = self.seat.get_pointer() {
                         let motion = PointerMotionEvent {
@@ -2293,6 +3620,17 @@ mod mode {
                 }
                 InputEvent::PointerMotionAbsolute { event } => {
                     let location = absolute_location::<B, _>(&event, window_size);
+                    if self.window_manager.update_pointer_operation(location) {
+                        self.session.note_pointer_input(
+                            if self.window_manager.drag_state_label() != "idle" {
+                                "pointer-drag"
+                            } else {
+                                "pointer-resize"
+                            },
+                            Some((location.x, location.y)),
+                        );
+                        return;
+                    }
                     let focus = self.pointer_focus_target(location, window_size);
                     if let Some(pointer) = self.seat.get_pointer() {
                         let motion = PointerMotionEvent {
@@ -2310,31 +3648,128 @@ mod mode {
                     }
                 }
                 InputEvent::PointerButton { event } => {
+                    let button_code = event.button_code();
+                    let pointer_location = self.current_pointer_location(window_size);
                     let focus = self.pointer_focus_from_last_location(window_size);
-                    if let Some(pointer) = self.seat.get_pointer() {
-                        let button = PointerButtonEvent {
-                            serial: SERIAL_COUNTER.next_serial(),
-                            time: event.time_msec(),
-                            button: event.button_code(),
-                            state: event.state(),
-                        };
-                        pointer.button(self, &button);
-                        pointer.frame(self);
+                    let hit_placement =
+                        self.hit_toplevel_placement(pointer_location).or_else(|| {
+                            self.collect_toplevel_placements(window_size)
+                                .into_iter()
+                                .rev()
+                                .find(|placement| {
+                                    placement_contains_point(
+                                        &placement.placement,
+                                        pointer_location.x,
+                                        pointer_location.y,
+                                    )
+                                })
+                        });
+                    let minimizing_window = matches!(event.state(), ButtonState::Pressed)
+                        && button_code == POINTER_BUTTON_MIDDLE
+                        && hit_placement
+                            .as_ref()
+                            .filter(|placement| {
+                                is_minimizable_window_policy(&placement.window_policy)
+                            })
+                            .map(|placement| {
+                                self.window_manager.minimize_window(&placement.window_key)
+                            })
+                            .unwrap_or(false);
+                    let restoring_window = matches!(event.state(), ButtonState::Pressed)
+                        && button_code == POINTER_BUTTON_MIDDLE
+                        && hit_placement.is_none()
+                        && self.session.last_hit_slot_id.as_deref() == Some("task-surface")
+                        && self.window_manager.restore_recent_window();
+                    let moving_window_workspace = matches!(event.state(), ButtonState::Pressed)
+                        && button_code == POINTER_BUTTON_RIGHT
+                        && hit_placement
+                            .as_ref()
+                            .filter(|placement| {
+                                is_minimizable_window_policy(&placement.window_policy)
+                            })
+                            .map(|placement| {
+                                self.window_manager
+                                    .move_window_to_workspace_delta(&placement.window_key, 1)
+                            })
+                            .unwrap_or(false);
+                    let finishing_grab = matches!(event.state(), ButtonState::Released)
+                        && self.window_manager.pointer_operation.is_some();
+                    let starting_grab = !minimizing_window
+                        && !restoring_window
+                        && !moving_window_workspace
+                        && matches!(event.state(), ButtonState::Pressed)
+                        && button_code != POINTER_BUTTON_RIGHT
+                        && hit_placement
+                            .as_ref()
+                            .map(|placement| {
+                                self.window_manager
+                                    .begin_pointer_operation(placement, pointer_location)
+                            })
+                            .unwrap_or(false);
+                    if !starting_grab
+                        && !finishing_grab
+                        && !minimizing_window
+                        && !restoring_window
+                        && !moving_window_workspace
+                    {
+                        if let Some(pointer) = self.seat.get_pointer() {
+                            let button = PointerButtonEvent {
+                                serial: SERIAL_COUNTER.next_serial(),
+                                time: event.time_msec(),
+                                button: button_code,
+                                state: event.state(),
+                            };
+                            pointer.button(self, &button);
+                            pointer.frame(self);
+                        }
                     }
                     self.session.note_pointer_input(
                         format!("pointer-button:{}", button_state_label(event.state())),
                         None,
                     );
+                    if minimizing_window || restoring_window || moving_window_workspace {
+                        let _ = self.collect_toplevel_placements(window_size);
+                        self.set_keyboard_focus(None);
+                        return;
+                    }
                     if matches!(event.state(), ButtonState::Pressed) {
-                        if let Some((surface, _)) = focus {
-                            self.set_keyboard_focus(Some(surface));
-                        } else {
-                            self.activate_panel_host_slot("pointer-button");
+                        if let Some(placement) = hit_placement.as_ref() {
+                            self.set_keyboard_focus(Some(placement.surface.wl_surface().clone()));
                         }
+                        if !starting_grab {
+                            if let Some((surface, _)) = focus {
+                                self.set_keyboard_focus(Some(surface));
+                            } else {
+                                self.activate_panel_host_slot("pointer-button");
+                            }
+                        }
+                    } else if finishing_grab {
+                        self.window_manager.finish_pointer_operation();
+                        let _ = self.collect_toplevel_placements(window_size);
                     }
                 }
                 InputEvent::PointerAxis { event } => {
                     let _ = self.pointer_focus_from_last_location(window_size);
+                    let horizontal_amount = event
+                        .amount(Axis::Horizontal)
+                        .or_else(|| {
+                            event
+                                .amount_v120(Axis::Horizontal)
+                                .map(|value| value / 120.0)
+                        })
+                        .unwrap_or(0.0);
+                    let vertical_amount = event
+                        .amount(Axis::Vertical)
+                        .or_else(|| event.amount_v120(Axis::Vertical).map(|value| value / 120.0))
+                        .unwrap_or(0.0);
+                    if self.maybe_cycle_workspace(vertical_amount)
+                        || self.maybe_cycle_output(horizontal_amount)
+                    {
+                        let _ = self.collect_toplevel_placements(window_size);
+                        self.session
+                            .note_pointer_input("pointer-axis:window-manager", None);
+                        return;
+                    }
                     if let Some(pointer) = self.seat.get_pointer() {
                         let mut frame = AxisFrame::new(event.time_msec())
                             .source(event.source())
@@ -2588,7 +4023,11 @@ mod mode {
             let damage = Rectangle::from_size(size);
             let placements = app.collect_toplevel_placements(size);
             for placement in &placements {
-                configure_toplevel_for_placement(&placement.surface, &placement.placement);
+                configure_toplevel_for_placement(
+                    &placement.surface,
+                    &placement.placement,
+                    &placement.window_policy,
+                );
             }
             {
                 let (renderer, mut framebuffer) =
@@ -2656,12 +4095,21 @@ mod mode {
         }
     }
 
-    fn configure_toplevel_for_placement(surface: &ToplevelSurface, placement: &SurfacePlacement) {
+    fn configure_toplevel_for_placement(
+        surface: &ToplevelSurface,
+        placement: &SurfacePlacement,
+        window_policy: &str,
+    ) {
         let logical_size: Size<i32, Logical> = (placement.width, placement.height).into();
         surface.with_pending_state(|state| {
             state.size = Some(logical_size);
             state.bounds = Some(logical_size);
             state.states.set(xdg_toplevel::State::Activated);
+            if window_policy.starts_with("workspace-fullscreen") {
+                state.states.set(xdg_toplevel::State::Fullscreen);
+            } else if window_policy.starts_with("workspace-maximized") {
+                state.states.set(xdg_toplevel::State::Maximized);
+            }
         });
         let _ = surface.send_pending_configure();
     }
@@ -2669,19 +4117,49 @@ mod mode {
     fn floating_window_placement(
         index: usize,
         window_size: Size<i32, Physical>,
+        window_policy: &str,
     ) -> SurfacePlacement {
-        let width = (window_size.w / 2).clamp(360, 720);
-        let height = (window_size.h * 3 / 5).clamp(280, 640);
-        let step_x = 28 * (index as i32);
-        let step_y = 22 * (index as i32);
-        SurfacePlacement {
-            zone: "floating-stack",
-            anchor: "top-left",
-            x: ((window_size.w - width) / 2 + step_x)
-                .clamp(24, (window_size.w - width - 24).max(24)),
-            y: (72 + step_y).clamp(24, (window_size.h - height - 24).max(24)),
-            width,
-            height,
+        match window_policy {
+            "floating-dialog" => {
+                let width = (window_size.w / 3).clamp(360, 680);
+                let height = (window_size.h / 3).clamp(240, 440);
+                SurfacePlacement {
+                    zone: "center-modal",
+                    anchor: "center",
+                    x: (window_size.w - width) / 2,
+                    y: (window_size.h - height) / 2,
+                    width,
+                    height,
+                }
+            }
+            "floating-utility" => {
+                let width = (window_size.w / 3).clamp(320, 520);
+                let height = (window_size.h / 2).clamp(260, 560);
+                let step_y = 28 * (index as i32);
+                SurfacePlacement {
+                    zone: "right-rail",
+                    anchor: "top-right",
+                    x: (window_size.w - width - 24).max(24),
+                    y: (96 + step_y).clamp(24, (window_size.h - height - 24).max(24)),
+                    width,
+                    height,
+                }
+            }
+            _ => {
+                let width = (window_size.w / 2).clamp(360, 720);
+                let height = (window_size.h * 3 / 5).clamp(280, 640);
+                let step_x = 28 * (index as i32);
+                let step_y = 22 * (index as i32);
+                SurfacePlacement {
+                    zone: "floating-stack",
+                    anchor: "top-left",
+                    x: ((window_size.w - width) / 2 + step_x)
+                        .clamp(24, (window_size.w - width - 24).max(24)),
+                    y: (72 + step_y).clamp(24, (window_size.h - height - 24).max(24)),
+                    width,
+                    height,
+                }
+            }
         }
     }
 
@@ -2698,6 +4176,31 @@ mod mode {
                 title: attributes.title.clone(),
             }
         })
+    }
+
+    fn toplevel_window_policy(metadata: &ToplevelMetadata) -> String {
+        if metadata_has_token(metadata, &["dialog", "prompt", "chooser", "picker", "auth"]) {
+            "floating-dialog".to_string()
+        } else if metadata_has_token(
+            metadata,
+            &[
+                "settings", "control", "status", "utility", "monitor", "audit",
+            ],
+        ) {
+            "floating-utility".to_string()
+        } else {
+            "floating-workspace".to_string()
+        }
+    }
+
+    fn metadata_has_token(metadata: &ToplevelMetadata, patterns: &[&str]) -> bool {
+        let label = format!(
+            "{} {}",
+            metadata.app_id.as_deref().unwrap_or_default(),
+            metadata.title.as_deref().unwrap_or_default()
+        )
+        .to_ascii_lowercase();
+        patterns.iter().any(|pattern| label.contains(pattern))
     }
 
     fn surface_label(surface: &WlSurface) -> String {

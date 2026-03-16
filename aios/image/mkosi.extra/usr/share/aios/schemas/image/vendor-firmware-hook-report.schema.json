@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aios/image/vendor-firmware-hook-report.schema.json",
+  "title": "AIOS Vendor Firmware Hook Report",
+  "type": "object",
+  "required": ["stage", "vendor_id", "hardware_profile_id", "install_id"],
+  "properties": {
+    "stage": {
+      "type": "string",
+      "enum": ["pre-install", "post-install"]
+    },
+    "vendor_id": { "type": "string", "minLength": 1 },
+    "hardware_profile_id": { "type": "string", "minLength": 1 },
+    "install_id": { "type": "string" },
+    "install_slot": { "type": "string", "minLength": 1 },
+    "nvbootctrl_binary": { "type": "string", "minLength": 1 },
+    "current_slot": { "type": "string" },
+    "slots_info": { "type": "string" }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "vendor_id": { "const": "nvidia" }
+        },
+        "required": ["vendor_id"]
+      },
+      "then": {
+        "required": ["nvbootctrl_binary", "current_slot", "slots_info"]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "vendor_id": { "const": "nvidia" },
+          "stage": { "const": "post-install" }
+        },
+        "required": ["vendor_id", "stage"]
+      },
+      "then": {
+        "required": ["install_slot"]
+      }
+    }
+  ],
+  "additionalProperties": false
+}

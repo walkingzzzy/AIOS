@@ -51,7 +51,9 @@ pub fn candidate_capabilities(intent: &str) -> Vec<String> {
     }
 
     if normalized.contains("audit")
-        && (normalized.contains("operator") || normalized.contains("panel") || normalized.contains("log"))
+        && (normalized.contains("operator")
+            || normalized.contains("panel")
+            || normalized.contains("log"))
     {
         push_capability(&mut capabilities, "shell.operator-audit.open");
     }

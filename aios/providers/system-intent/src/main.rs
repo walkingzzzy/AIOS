@@ -65,7 +65,11 @@ fn emit_trace(state: &AppState, kind: &str, payload: serde_json::Value, notes: V
         payload,
         notes,
     ) {
-        tracing::debug!(?error, kind, "failed to append provider observability trace event");
+        tracing::debug!(
+            ?error,
+            kind,
+            "failed to append provider observability trace event"
+        );
     }
 }
 
@@ -83,7 +87,12 @@ fn emit_health_event(
         Some(&state.config.paths.socket_path),
         notes,
     ) {
-        tracing::debug!(?error, source, status, "failed to append provider health event");
+        tracing::debug!(
+            ?error,
+            source,
+            status,
+            "failed to append provider health event"
+        );
     }
 }
 
@@ -190,9 +199,7 @@ async fn report_registry_health(
                         format!("registry_status={status}"),
                         format!(
                             "last_error={}",
-                            last_error
-                                .clone()
-                                .unwrap_or_else(|| "<none>".to_string())
+                            last_error.clone().unwrap_or_else(|| "<none>".to_string())
                         ),
                     ],
                 );
@@ -316,9 +323,7 @@ async fn sync_registry_state_once(state: &AppState, registration_succeeded: &mut
                     format!("registry_status={status}"),
                     format!(
                         "last_error={}",
-                        last_error
-                            .clone()
-                            .unwrap_or_else(|| "<none>".to_string())
+                        last_error.clone().unwrap_or_else(|| "<none>".to_string())
                     ),
                 ],
             );

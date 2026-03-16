@@ -65,6 +65,16 @@ deviced/
 - 已有最小验证：`cargo test -p aios-deviced`、`cargo build -p aios-deviced`、`cargo test --workspace`、`scripts/test-deviced-smoke.py`、`scripts/test-deviced-native-backend-smoke.py`、`scripts/test-deviced-readiness-matrix-smoke.py`、`scripts/test-deviced-continuous-native-smoke.py`、`scripts/test-deviced-runtime-helpers-smoke.py`、`scripts/test-deviced-ui-tree-collector-smoke.py`、`scripts/test-deviced-policy-approval-smoke.py`、`scripts/test-cross-service-health-smoke.py`、`scripts/test-shell-prototypes.py`、`scripts/test-shell-live-smoke.py`、`scripts/test-device-metadata-provider-smoke.py`，覆盖 formal native backend adapter id、screen probe live path、screen + audio capture、continuous native capture collector、runtime helper 默认发现、native stub preview、indicator state、approval metadata、`policyd` 审批联动、共享 observability sink 的 device trace / approval correlation、retention linkage、backend readiness 状态、backend snapshot JSON、dedicated `ui_tree` support matrix artifact、builtin AT-SPI live collector 与 shell live fallback
 - 缺失：真实 portal / PipeWire / libinput / camera backend、跨桌面环境 fully-qualified `ui_tree` 支持矩阵与长期稳定性证据、visible indicator / backend status 正式 shell surface
 
+
+## 5.1 冻结接口
+
+当前联调冻结面如下：
+
+- `device.capture.request` / `device.capture.stop` 维持 session/task/window/source/continuous 语义不变
+- `device.state.get` 固定暴露 `backend_statuses`、`capture_adapters`、`backend_summary`、`ui_tree_support_matrix`
+- `backend-state.json` 与 `device.state.get` 共用同一 `backend_summary` / support matrix 语义
+- `ui_tree_support_matrix` 固定包含 `environment_id`、`available`、`readiness`、`current`、`desktop_environment`、`session_type`、`adapter_id`、`execution_path`、`stability`、`limitations`、`evidence`、`details`
+- shell / provider 不应自行推导 backend readiness，应消费 `backend_summary` 与 support matrix
 ## 6. 下一步
 
 1. 继续把 formal native adapter contract 从当前 evidence / helper / state-bridge 路径推进到 release-grade portal / PipeWire / libinput / camera backend

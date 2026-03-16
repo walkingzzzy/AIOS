@@ -33,6 +33,9 @@ def filter_attention(model: dict | None) -> dict | None:
     result["adapters"] = [
         item for item in result.get("adapters", []) if item.get("modality") in modalities
     ]
+    result["evidence_artifacts"] = [
+        item for item in result.get("evidence_artifacts", []) if item.get("modality") in modalities
+    ]
     return result
 
 

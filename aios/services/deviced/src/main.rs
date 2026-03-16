@@ -8,11 +8,15 @@ mod indicator;
 mod normalize;
 mod observability;
 mod probe;
+mod release_grade;
 mod retention;
 mod rpc;
 mod taint;
 
 use std::sync::{Arc, Mutex};
+
+#[cfg(test)]
+pub(crate) static TEST_ENV_LOCK: Mutex<()> = Mutex::new(());
 
 use chrono::{DateTime, Utc};
 

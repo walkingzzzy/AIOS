@@ -12,6 +12,7 @@ from prototype import (
     default_panel_action_log,
     default_backend_state,
     default_deviced_socket,
+    default_agent_socket,
     default_indicator_state,
     default_policy_socket,
     default_policy_audit_log,
@@ -49,6 +50,7 @@ def build_summary(
         "operator_audit_issue_count": (audit_summary or {}).get("issue_count", 0),
         "backend_evidence_present_count": (backend_evidence_summary or {}).get("present_count", 0),
         "backend_evidence_missing_count": (backend_evidence_summary or {}).get("missing_count", 0),
+        "backend_evidence_backend_ids": (backend_evidence_summary or {}).get("backend_ids", []),
         "remote_governance_issue_count": (remote_governance_summary or {}).get("issue_count", 0),
         "remote_governance_matched_entry_count": (remote_governance_summary or {}).get("matched_entry_count", 0),
     }
@@ -63,6 +65,7 @@ def main() -> int:
     parser.add_argument("--backend-state", type=Path, default=default_backend_state())
     parser.add_argument("--deviced-socket", type=Path, default=default_deviced_socket())
     parser.add_argument("--policy-socket", type=Path, default=default_policy_socket())
+    parser.add_argument("--agent-socket", type=Path, default=default_agent_socket())
     parser.add_argument("--panel-action-log", type=Path, default=default_panel_action_log())
     parser.add_argument("--policy-audit-log", type=Path, default=default_policy_audit_log())
     parser.add_argument("--runtime-events-log", type=Path, default=default_runtime_events_log())
@@ -79,7 +82,7 @@ def main() -> int:
     indicator_state = load_json(args.indicator_state)
     backend_state = load_backend_state(args.backend_state, args.deviced_socket)
     panel_action_events = load_panel_action_events(args.panel_action_log)
-    approvals = list_approvals(args.policy_socket, args.approval_fixture)
+    approvals = list_approvals(args.agent_socket, args.approval_fixture)
     audit_summary = operator_audit_notifications(
         args.policy_audit_log,
         args.runtime_events_log,
@@ -118,6 +121,7 @@ def main() -> int:
             print(f"by_source: {json.dumps(summary['by_source'], ensure_ascii=False, sort_keys=True)}")
             print(f"operator_audit_issue_count: {summary['operator_audit_issue_count']}")
             print(f"backend_evidence_present_count: {summary['backend_evidence_present_count']}")
+            print(f"backend_evidence_backend_ids: {json.dumps(summary['backend_evidence_backend_ids'], ensure_ascii=False)}")
             print(f"remote_governance_issue_count: {summary['remote_governance_issue_count']}")
         return 0
 

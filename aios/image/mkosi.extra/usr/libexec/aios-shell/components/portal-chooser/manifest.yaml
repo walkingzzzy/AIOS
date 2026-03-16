@@ -3,9 +3,10 @@ display_name: Portal Chooser
 status: in_progress
 role: shell-portal-surface
 integrates:
+  - aios-agentd
   - aios-sessiond
 features:
-  - portal.handle.list
+  - agent.portal.handle.list
   - requested-kind-ranking
   - approval-aware-routing
   - standalone-chooser-gui

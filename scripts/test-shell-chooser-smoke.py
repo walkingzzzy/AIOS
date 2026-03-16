@@ -157,6 +157,7 @@ def main() -> int:
         panel = json.loads(output)
         require(panel["panel_id"] == "portal-chooser-panel", "portal chooser panel id mismatch")
         require(panel["meta"]["handle_count"] == 4, "portal chooser panel count mismatch")
+        require(panel["meta"]["data_source_status"] == "ready", "portal chooser panel data-source status mismatch")
         require(panel["meta"]["focus_handle_id"] == "ph-screen", "portal chooser focus handle mismatch")
         require(panel["header"]["status"] == "pending", "portal chooser initial status mismatch")
         require(panel["sections"][1]["items"][0]["handle_id"] == "ph-screen", "portal chooser ranked handle mismatch")
@@ -170,6 +171,29 @@ def main() -> int:
         require(
             panel["sections"][3]["items"][0]["label"] == "Handle ID",
             "portal chooser selection details section mismatch",
+        )
+
+        fallback_panel = json.loads(
+            run_python(
+                ROOT / "aios/shell/components/portal-chooser/panel.py",
+                "model",
+                "--session-id",
+                "session-missing",
+                "--json",
+            )
+        )
+        require(
+            fallback_panel["meta"]["data_source_status"] == "fallback-empty",
+            "portal chooser fallback status mismatch",
+        )
+        require(
+            bool(fallback_panel["meta"]["data_source_error"]),
+            "portal chooser fallback error missing",
+        )
+        require(fallback_panel["header"]["status"] == "failed", "portal chooser fallback header status mismatch")
+        require(
+            any(item["label"] == "Last Error" for item in fallback_panel["sections"][0]["items"]),
+            "portal chooser fallback should expose source error",
         )
 
         standalone_snapshot = json.loads(
@@ -191,6 +215,56 @@ def main() -> int:
             standalone_snapshot["model"]["meta"]["detail_handle_id"] == "ph-screen",
             "portal chooser standalone detail handle mismatch",
         )
+
+        fallback_standalone_snapshot = json.loads(
+            run_python(
+                ROOT / "aios/shell/components/portal-chooser/standalone.py",
+                "snapshot",
+                "--session-id",
+                "session-missing",
+                "--json",
+            )
+        )
+        require(
+            fallback_standalone_snapshot["status"] == "failed",
+            "portal chooser fallback standalone status mismatch",
+        )
+        require(
+            fallback_standalone_snapshot["model"]["meta"]["data_source_status"] == "fallback-empty",
+            "portal chooser fallback standalone data-source status mismatch",
+        )
+        require(
+            bool(fallback_standalone_snapshot["model"]["meta"]["data_source_error"]),
+            "portal chooser fallback standalone error missing",
+        )
+
+        export_prefix = temp_root / "portal-chooser-export"
+        standalone_export = json.loads(
+            run_python(
+                ROOT / "aios/shell/components/portal-chooser/standalone.py",
+                "export",
+                "--session-id",
+                "session-missing",
+                "--output-prefix",
+                str(export_prefix),
+                "--json",
+            )
+        )
+        require(
+            standalone_export["snapshot"]["model"]["meta"]["data_source_status"] == "fallback-empty",
+            "portal chooser fallback export data-source status mismatch",
+        )
+        require(
+            Path(standalone_export["artifacts"]["json"]).exists(),
+            "portal chooser export json artifact missing",
+        )
+        require(
+            Path(standalone_export["artifacts"]["manifest"]).exists(),
+            "portal chooser export manifest artifact missing",
+        )
+        export_manifest = json.loads(Path(standalone_export["artifacts"]["manifest"]).read_text())
+        require(export_manifest["summary"]["status"] == "failed", "portal chooser export status mismatch")
+        require(export_manifest["summary"]["handle_count"] == 0, "portal chooser export handle count mismatch")
 
         output = run_python(
             ROOT / "aios/shell/components/portal-chooser/panel.py",
@@ -639,3 +713,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

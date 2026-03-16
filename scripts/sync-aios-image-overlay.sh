@@ -9,8 +9,26 @@ PRECHECK=false
 FORWARD_ARGS=()
 CACHED_CONTAINER_BIN_DIR=""
 
+resolve_python_bin() {
+  if [[ -n "${AIOS_PYTHON_BIN:-}" ]]; then
+    printf '%s\n' "$AIOS_PYTHON_BIN"
+    return 0
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    printf 'python3\n'
+    return 0
+  fi
+  if command -v python >/dev/null 2>&1; then
+    printf 'python\n'
+    return 0
+  fi
+  printf 'python3\n'
+}
+
+PYTHON_BIN="$(resolve_python_bin)"
+
 default_aios_bin_dir() {
-  PYTHONPATH="$ROOT_DIR/scripts" python3 - "$ROOT_DIR" <<'PY'
+  PYTHONPATH="$ROOT_DIR/scripts" "$PYTHON_BIN" - "$ROOT_DIR" <<'PY'
 from pathlib import Path
 import sys
 
@@ -21,7 +39,7 @@ PY
 }
 
 default_container_native_bin_dir() {
-  PYTHONPATH="$ROOT_DIR/scripts" python3 - "$ROOT_DIR" <<'PY'
+  PYTHONPATH="$ROOT_DIR/scripts" "$PYTHON_BIN" - "$ROOT_DIR" <<'PY'
 from pathlib import Path
 import sys
 
@@ -32,7 +50,7 @@ PY
 }
 
 cached_container_bin_dir_ready() {
-  PYTHONPATH="$ROOT_DIR/scripts" python3 - "$1" <<'PY'
+  PYTHONPATH="$ROOT_DIR/scripts" "$PYTHON_BIN" - "$1" <<'PY'
 from pathlib import Path
 import sys
 
@@ -47,7 +65,7 @@ detect_host_target() {
     printf '%s\n' "$AIOS_HOST_TARGET_OVERRIDE"
     return 0
   fi
-  PYTHONPATH="$ROOT_DIR/scripts" python3 - "$ROOT_DIR" <<'PY'
+  PYTHONPATH="$ROOT_DIR/scripts" "$PYTHON_BIN" - "$ROOT_DIR" <<'PY'
 from pathlib import Path
 import sys
 
@@ -121,13 +139,34 @@ CACHED_CONTAINER_BIN_DIR="$(default_container_native_bin_dir)"
 resolved_linux_binary_strategy="$(resolve_linux_binary_strategy)"
 
 if [[ "$PRECHECK" == "true" ]]; then
-  printf '{"status":"ready","overlay_dir":"%s","linux_binary_strategy":"%s","has_explicit_bin_dir":%s,"host_target":"%s","cached_container_bin_dir":"%s","cached_container_bin_dir_ready":%s}\n' \
-    "$OVERLAY_DIR" \
-    "$resolved_linux_binary_strategy" \
-    "$([[ -n "$BIN_DIR" ]] && printf true || printf false)" \
-    "$(detect_host_target)" \
-    "$CACHED_CONTAINER_BIN_DIR" \
-    "$([[ -n "$CACHED_CONTAINER_BIN_DIR" ]] && cached_container_bin_dir_ready "$CACHED_CONTAINER_BIN_DIR" && printf true || printf false)"
+  explicit_bin_dir=false
+  if [[ -n "$BIN_DIR" ]]; then
+    explicit_bin_dir=true
+  fi
+  cached_container_ready=false
+  if [[ -n "$CACHED_CONTAINER_BIN_DIR" ]] && cached_container_bin_dir_ready "$CACHED_CONTAINER_BIN_DIR"; then
+    cached_container_ready=true
+  fi
+  PYTHONPATH="$ROOT_DIR/scripts" "$PYTHON_BIN" -     "$OVERLAY_DIR"     "$resolved_linux_binary_strategy"     "$explicit_bin_dir"     "$(detect_host_target)"     "$CACHED_CONTAINER_BIN_DIR"     "$cached_container_ready" <<'PY'
+import json
+import sys
+
+
+def as_bool(value: str) -> bool:
+    return value == "true"
+
+
+payload = {
+    "status": "ready",
+    "overlay_dir": sys.argv[1],
+    "linux_binary_strategy": sys.argv[2],
+    "has_explicit_bin_dir": as_bool(sys.argv[3]),
+    "host_target": sys.argv[4],
+    "cached_container_bin_dir": sys.argv[5],
+    "cached_container_bin_dir_ready": as_bool(sys.argv[6]),
+}
+print(json.dumps(payload, ensure_ascii=False))
+PY
   exit 0
 fi
 
@@ -137,14 +176,14 @@ case "$resolved_linux_binary_strategy" in
       BIN_DIR="$(default_aios_bin_dir)"
     fi
     if (( ${#FORWARD_ARGS[@]} > 0 )); then
-      exec python3 "$ROOT_DIR/scripts/build-aios-delivery.py" \
+      exec "$PYTHON_BIN" "$ROOT_DIR/scripts/build-aios-delivery.py" \
         --bin-dir "$BIN_DIR" \
         --build-missing \
         --no-archive \
         --sync-overlay "$OVERLAY_DIR" \
         "${FORWARD_ARGS[@]}"
     fi
-    exec python3 "$ROOT_DIR/scripts/build-aios-delivery.py" \
+    exec "$PYTHON_BIN" "$ROOT_DIR/scripts/build-aios-delivery.py" \
       --bin-dir "$BIN_DIR" \
       --build-missing \
       --no-archive \
@@ -153,13 +192,13 @@ case "$resolved_linux_binary_strategy" in
   container-cached-bin-dir)
     BIN_DIR="$CACHED_CONTAINER_BIN_DIR"
     if (( ${#FORWARD_ARGS[@]} > 0 )); then
-      exec python3 "$ROOT_DIR/scripts/build-aios-delivery.py" \
+      exec "$PYTHON_BIN" "$ROOT_DIR/scripts/build-aios-delivery.py" \
         --bin-dir "$BIN_DIR" \
         --no-archive \
         --sync-overlay "$OVERLAY_DIR" \
         "${FORWARD_ARGS[@]}"
     fi
-    exec python3 "$ROOT_DIR/scripts/build-aios-delivery.py" \
+    exec "$PYTHON_BIN" "$ROOT_DIR/scripts/build-aios-delivery.py" \
       --bin-dir "$BIN_DIR" \
       --no-archive \
       --sync-overlay "$OVERLAY_DIR"

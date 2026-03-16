@@ -16,6 +16,24 @@ REUSE_LOCAL_BUILDER="${AIOS_IMAGE_REUSE_LOCAL_BUILDER:-1}"
 BUILDER_RETRIES="${AIOS_IMAGE_BUILDER_RETRIES:-3}"
 REUSE_EXISTING_OUTPUT="${AIOS_IMAGE_REUSE_EXISTING_OUTPUT:-1}"
 
+resolve_python_bin() {
+  if [[ -n "${AIOS_PYTHON_BIN:-}" ]]; then
+    printf '%s\n' "$AIOS_PYTHON_BIN"
+    return 0
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    printf 'python3\n'
+    return 0
+  fi
+  if command -v python >/dev/null 2>&1; then
+    printf 'python\n'
+    return 0
+  fi
+  printf 'python3\n'
+}
+
+PYTHON_BIN="$(resolve_python_bin)"
+
 host_mkosi_available=false
 docker_available=false
 buildx_available=false
@@ -120,7 +138,7 @@ detect_host_target() {
     printf '%s\n' "$AIOS_HOST_TARGET_OVERRIDE"
     return 0
   fi
-  PYTHONPATH="$ROOT_DIR/scripts" python3 - "$ROOT_DIR" <<'PY'
+  PYTHONPATH="$ROOT_DIR/scripts" "$PYTHON_BIN" - "$ROOT_DIR" <<'PY'
 from pathlib import Path
 import sys
 
@@ -131,7 +149,7 @@ PY
 }
 
 default_container_native_bin_dir() {
-  PYTHONPATH="$ROOT_DIR/scripts" python3 - "$ROOT_DIR" <<'PY'
+  PYTHONPATH="$ROOT_DIR/scripts" "$PYTHON_BIN" - "$ROOT_DIR" <<'PY'
 from pathlib import Path
 import sys
 
@@ -142,7 +160,7 @@ PY
 }
 
 cached_container_bin_dir_ready() {
-  PYTHONPATH="$ROOT_DIR/scripts" python3 - "$1" <<'PY'
+  PYTHONPATH="$ROOT_DIR/scripts" "$PYTHON_BIN" - "$1" <<'PY'
 from pathlib import Path
 import sys
 
@@ -226,29 +244,41 @@ print_preflight() {
   if [[ "$build_mode" == "blocked" && "$existing_output_ready" != "true" ]]; then
     status="blocked"
   fi
-  printf '{"status":"%s","build_mode":"%s","mkosi_available":%s,"docker_available":%s,"buildx_available":%s,"git_available":%s,"containerized_build_available":%s,"mkosi_source_dir":"%s","image_dir":"%s","host_output_dir":"%s","mkosi_conf":"%s","overlay_sync":"%s","container_platform":"%s","linux_binary_strategy":"%s","builder_tag":"%s","reuse_local_builder":"%s","reuse_existing_output":"%s","output_stem":"%s","existing_output_ready":%s,"host_target":"%s","cached_container_bin_dir":"%s","cached_container_bin_dir_ready":%s}\n' \
-    "$status" \
-    "$build_mode" \
-    "$host_mkosi_available" \
-    "$docker_available" \
-    "$buildx_available" \
-    "$git_available" \
-    "$containerized_build_available" \
-    "$MKOSI_SOURCE_DIR" \
-    "$IMAGE_DIR" \
-    "$HOST_OUTPUT_DIR" \
-    "$IMAGE_DIR/mkosi.conf" \
-    "$ROOT_DIR/scripts/sync-aios-image-overlay.sh" \
-    "$MKOSI_CONTAINER_PLATFORM" \
-    "$linux_binary_strategy" \
-    "$MKOSI_BUILDER_TAG" \
-    "$REUSE_LOCAL_BUILDER" \
-    "$REUSE_EXISTING_OUTPUT" \
-    "$output_stem" \
-    "$existing_output_ready" \
-    "$(detect_host_target)" \
-    "$cached_container_bin_dir" \
-    "$cached_container_bin_dir_available"
+  PYTHONPATH="$ROOT_DIR/scripts" "$PYTHON_BIN" -     "$status"     "$build_mode"     "$host_mkosi_available"     "$docker_available"     "$buildx_available"     "$git_available"     "$containerized_build_available"     "$MKOSI_SOURCE_DIR"     "$IMAGE_DIR"     "$HOST_OUTPUT_DIR"     "$IMAGE_DIR/mkosi.conf"     "$ROOT_DIR/scripts/sync-aios-image-overlay.sh"     "$MKOSI_CONTAINER_PLATFORM"     "$linux_binary_strategy"     "$MKOSI_BUILDER_TAG"     "$REUSE_LOCAL_BUILDER"     "$REUSE_EXISTING_OUTPUT"     "$output_stem"     "$existing_output_ready"     "$(detect_host_target)"     "$cached_container_bin_dir"     "$cached_container_bin_dir_available" <<'PY'
+import json
+import sys
+
+
+def as_bool(value: str) -> bool:
+    return value == "true"
+
+
+payload = {
+    "status": sys.argv[1],
+    "build_mode": sys.argv[2],
+    "mkosi_available": as_bool(sys.argv[3]),
+    "docker_available": as_bool(sys.argv[4]),
+    "buildx_available": as_bool(sys.argv[5]),
+    "git_available": as_bool(sys.argv[6]),
+    "containerized_build_available": as_bool(sys.argv[7]),
+    "mkosi_source_dir": sys.argv[8],
+    "image_dir": sys.argv[9],
+    "host_output_dir": sys.argv[10],
+    "mkosi_conf": sys.argv[11],
+    "overlay_sync": sys.argv[12],
+    "container_platform": sys.argv[13],
+    "linux_binary_strategy": sys.argv[14],
+    "builder_tag": sys.argv[15],
+    "reuse_local_builder": sys.argv[16],
+    "reuse_existing_output": sys.argv[17],
+    "output_stem": sys.argv[18],
+    "existing_output_ready": as_bool(sys.argv[19]),
+    "host_target": sys.argv[20],
+    "cached_container_bin_dir": sys.argv[21],
+    "cached_container_bin_dir_ready": as_bool(sys.argv[22]),
+}
+print(json.dumps(payload, ensure_ascii=False))
+PY
 }
 
 if [[ "${1:-}" == "--preflight" ]]; then

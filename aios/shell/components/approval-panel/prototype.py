@@ -11,7 +11,13 @@ def default_socket() -> Path:
     return Path(os.environ.get("AIOS_POLICYD_SOCKET_PATH", "/run/aios/policyd/policyd.sock"))
 
 
+def default_agent_socket() -> Path:
+    return Path(os.environ.get("AIOS_AGENTD_SOCKET_PATH", "/run/aios/agentd/agentd.sock"))
+
+
 def rpc_call(socket_path: Path, method: str, params: dict) -> dict:
+    if not hasattr(socket, "AF_UNIX"):
+        raise RuntimeError(f"unix-domain-socket-unavailable:{socket_path}")
     payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
         client.connect(str(socket_path))
@@ -100,6 +106,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="AIOS approval panel prototype")
     parser.add_argument("command", nargs="?", default="list", choices=["list", "get", "create", "resolve"])
     parser.add_argument("--socket", type=Path, default=default_socket())
+    parser.add_argument("--agent-socket", type=Path, default=default_agent_socket())
     parser.add_argument("--fixture", type=Path)
     parser.add_argument("--approval-ref")
     parser.add_argument("--user-id", default="local-user")
@@ -118,16 +125,16 @@ if __name__ == "__main__":
         result = fixture_call(args.fixture, args.command, args)
     elif args.command == "list":
         result = rpc_call(
-            args.socket,
-            "approval.list",
+            args.agent_socket,
+            "agent.approval.list",
             {"session_id": args.session_id, "task_id": args.task_id, "status": args.status},
         )
     elif args.command == "create":
         if not args.session_id or not args.task_id:
             raise SystemExit("--session-id and --task-id are required for create")
         result = rpc_call(
-            args.socket,
-            "approval.create",
+            args.agent_socket,
+            "agent.approval.create",
             {
                 "user_id": args.user_id,
                 "session_id": args.session_id,
@@ -141,13 +148,13 @@ if __name__ == "__main__":
     elif args.command == "get":
         if not args.approval_ref:
             raise SystemExit("--approval-ref is required for get")
-        result = rpc_call(args.socket, "approval.get", {"approval_ref": args.approval_ref})
+        result = rpc_call(args.agent_socket, "agent.approval.get", {"approval_ref": args.approval_ref})
     else:
         if not args.approval_ref:
             raise SystemExit("--approval-ref is required for resolve")
         result = rpc_call(
-            args.socket,
-            "approval.resolve",
+            args.agent_socket,
+            "agent.approval.resolve",
             {
                 "approval_ref": args.approval_ref,
                 "status": args.status or "approved",

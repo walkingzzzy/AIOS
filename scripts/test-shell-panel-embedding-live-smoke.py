@@ -8,7 +8,6 @@ import signal
 import socket
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 
@@ -16,6 +15,7 @@ from shell_evidence_manifest import write_shell_evidence_manifest
 
 
 ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_WORK_ROOT = ROOT / "out" / "validation" / "shell-panel-embedding-live-smoke"
 COMPOSITOR_MANIFEST = ROOT / "aios/shell/compositor/Cargo.toml"
 
 
@@ -104,7 +104,10 @@ def main() -> int:
         print("shell panel embedding live smoke skipped: GTK4/libadwaita runtime unavailable")
         return 0
 
-    temp_root = Path(tempfile.mkdtemp(prefix="aios-shell-panel-embedding-"))
+    temp_root = DEFAULT_WORK_ROOT
+    if temp_root.exists():
+        shutil.rmtree(temp_root, ignore_errors=True)
+    temp_root.mkdir(parents=True, exist_ok=True)
     failed = False
     bridge_process: subprocess.Popen[str] | None = None
     compositor_process: subprocess.Popen[str] | None = None
@@ -220,7 +223,7 @@ def main() -> int:
                     "keyboard_enabled = true",
                     "touch_enabled = false",
                     "keyboard_layout = us",
-                    "placeholder_surfaces = launcher,approval-panel",
+                    "panel_slots = launcher,approval-panel",
                     f"socket_name = {wayland_socket_name}",
                     f"panel_bridge_socket = {bridge_socket}",
                     f"panel_action_log_path = {panel_action_log}",
@@ -381,3 +384,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

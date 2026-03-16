@@ -77,9 +77,16 @@ impl Scheduler {
         route_profile_path: &Path,
         backend_commands: BackendCommands,
     ) -> anyhow::Result<Self> {
-        let runtime_profile: RuntimeProfile =
-            aios_core::schema::load_yaml_file(runtime_profile_path)?;
-        let route_profile: RouteProfile = aios_core::schema::load_yaml_file(route_profile_path)?;
+        let runtime_profile: RuntimeProfile = aios_core::schema::load_yaml_file_validated(
+            runtime_profile_path,
+            aios_core::schema::SchemaNamespace::Runtime,
+            "runtime-profile.schema.json",
+        )?;
+        let route_profile: RouteProfile = aios_core::schema::load_yaml_file_validated(
+            route_profile_path,
+            aios_core::schema::SchemaNamespace::Runtime,
+            "route-profile.schema.json",
+        )?;
         let backend_commands = merge_backend_commands(&runtime_profile, backend_commands);
 
         Ok(Self {
@@ -410,6 +417,11 @@ fn merge_backend_commands(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        fs,
+        path::PathBuf,
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
     fn scheduler() -> Scheduler {
         Scheduler {
@@ -460,6 +472,27 @@ mod tests {
             },
             backend_commands: BackendCommands::default(),
         }
+    }
+
+    fn temp_profile_dir(name: &str) -> PathBuf {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        std::env::temp_dir().join(format!("aios-runtimed-{name}-{suffix}"))
+    }
+
+    fn write_profiles(
+        runtime_profile: &str,
+        route_profile: &str,
+    ) -> anyhow::Result<(PathBuf, PathBuf, PathBuf)> {
+        let root = temp_profile_dir("profiles");
+        fs::create_dir_all(&root)?;
+        let runtime_profile_path = root.join("runtime-profile.yaml");
+        let route_profile_path = root.join("route-profile.yaml");
+        fs::write(&runtime_profile_path, runtime_profile)?;
+        fs::write(&route_profile_path, route_profile)?;
+        Ok((root, runtime_profile_path, route_profile_path))
     }
 
     #[test]
@@ -539,5 +572,127 @@ mod tests {
 
         assert_eq!(response.selected_backend, "local-cpu");
         assert!(response.degraded);
+    }
+
+    #[test]
+    fn load_rejects_runtime_profile_with_invalid_offload_policy() {
+        let runtime_profile = r#"
+profile_id: default-local
+scope: system
+default_backend: local-cpu
+allowed_backends:
+  - local-cpu
+local_model_pool:
+  - qwen-local-14b
+remote_model_pool:
+  - gpt-4.1
+embedding_backend: local-embedding
+rerank_backend: local-reranker
+cpu_fallback: true
+memory_budget_mb: 6144
+kv_cache_budget_mb: 2048
+timeout_ms: 30000
+max_concurrency: 4
+max_parallel_models: 2
+offload_policy: invalid-policy
+degradation_policy: fallback-local-cpu
+observability_level: standard
+"#;
+        let route_profile = r#"
+profile_id: default-route
+default_topology: tool-calling
+allowed_topologies:
+  - direct
+  - tool-calling
+router_stack:
+  - rule
+semantic_router_enabled: true
+llm_router_enabled: true
+cost_router_enabled: true
+provider_preference: structured-first
+prefer_local: true
+prefer_structured_interface: true
+allow_gui_fallback: manual-only
+iteration_cap: 8
+tool_call_cap: 12
+replan_cap: 2
+escalation_threshold: high-risk-or-low-confidence
+human_handoff_policy: required-on-ambiguous-high-risk
+"#;
+        let (root, runtime_profile_path, route_profile_path) =
+            write_profiles(runtime_profile, route_profile).expect("write test profiles");
+
+        let error = Scheduler::load(
+            &runtime_profile_path,
+            &route_profile_path,
+            BackendCommands::default(),
+        )
+        .expect_err("invalid runtime profile should be rejected");
+
+        let error_text = error.to_string();
+        assert!(error_text.contains("failed schema validation"));
+        assert!(error_text.contains("runtime-profile.schema.json"));
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn load_rejects_route_profile_with_invalid_topology() {
+        let runtime_profile = r#"
+profile_id: default-local
+scope: system
+default_backend: local-cpu
+allowed_backends:
+  - local-cpu
+local_model_pool:
+  - qwen-local-14b
+remote_model_pool:
+  - gpt-4.1
+embedding_backend: local-embedding
+rerank_backend: local-reranker
+cpu_fallback: true
+memory_budget_mb: 6144
+kv_cache_budget_mb: 2048
+timeout_ms: 30000
+max_concurrency: 4
+max_parallel_models: 2
+offload_policy: manual-only
+degradation_policy: fallback-local-cpu
+observability_level: standard
+"#;
+        let route_profile = r#"
+profile_id: default-route
+default_topology: invalid-topology
+allowed_topologies:
+  - direct
+  - tool-calling
+router_stack:
+  - rule
+semantic_router_enabled: true
+llm_router_enabled: true
+cost_router_enabled: true
+provider_preference: structured-first
+prefer_local: true
+prefer_structured_interface: true
+allow_gui_fallback: manual-only
+iteration_cap: 8
+tool_call_cap: 12
+replan_cap: 2
+escalation_threshold: high-risk-or-low-confidence
+human_handoff_policy: required-on-ambiguous-high-risk
+"#;
+        let (root, runtime_profile_path, route_profile_path) =
+            write_profiles(runtime_profile, route_profile).expect("write test profiles");
+
+        let error = Scheduler::load(
+            &runtime_profile_path,
+            &route_profile_path,
+            BackendCommands::default(),
+        )
+        .expect_err("invalid route profile should be rejected");
+
+        let error_text = error.to_string();
+        assert!(error_text.contains("failed schema validation"));
+        assert!(error_text.contains("route-profile.schema.json"));
+        fs::remove_dir_all(root).ok();
     }
 }

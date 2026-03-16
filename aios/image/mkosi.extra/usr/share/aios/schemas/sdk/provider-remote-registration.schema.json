@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aios/provider-remote-registration.schema.json",
+  "title": "AIOS Provider Remote Registration",
+  "type": "object",
+  "required": [
+    "provider_ref",
+    "endpoint",
+    "capabilities",
+    "auth_mode",
+    "target_hash",
+    "registered_at"
+  ],
+  "properties": {
+    "source_provider_id": { "type": ["string", "null"], "minLength": 1 },
+    "provider_ref": { "type": "string", "minLength": 1 },
+    "endpoint": { "type": "string", "minLength": 1 },
+    "auth_mode": { "enum": ["none", "bearer", "header", "execution-token"] },
+    "auth_header_name": { "type": ["string", "null"] },
+    "auth_secret_env": { "type": ["string", "null"] },
+    "target_hash": { "type": "string", "minLength": 1 },
+    "capabilities": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "registered_at": { "type": "string", "format": "date-time" },
+    "display_name": { "type": ["string", "null"] },
+    "control_plane_provider_id": { "type": ["string", "null"] },
+    "registration_status": { "enum": ["active", "stale", "revoked", null] },
+    "last_heartbeat_at": { "type": ["string", "null"], "format": "date-time" },
+    "heartbeat_ttl_seconds": { "type": ["integer", "null"], "minimum": 1 },
+    "revoked_at": { "type": ["string", "null"], "format": "date-time" },
+    "revocation_reason": { "type": ["string", "null"] },
+    "attestation": {
+      "type": ["object", "null"],
+      "required": ["mode"],
+      "properties": {
+        "mode": { "enum": ["bootstrap", "verified"] },
+        "issuer": { "type": ["string", "null"] },
+        "subject": { "type": ["string", "null"] },
+        "issued_at": { "type": ["string", "null"], "format": "date-time" },
+        "expires_at": { "type": ["string", "null"], "format": "date-time" },
+        "evidence_ref": { "type": ["string", "null"] },
+        "digest": { "type": ["string", "null"] },
+        "status": { "type": ["string", "null"] }
+      },
+      "additionalProperties": true
+    },
+    "governance": {
+      "type": ["object", "null"],
+      "required": ["fleet_id", "governance_group"],
+      "properties": {
+        "fleet_id": { "type": "string", "minLength": 1 },
+        "governance_group": { "type": "string", "minLength": 1 },
+        "policy_group": { "type": ["string", "null"] },
+        "registered_by": { "type": ["string", "null"] },
+        "approval_ref": { "type": ["string", "null"] },
+        "allow_lateral_movement": { "type": "boolean" }
+      },
+      "additionalProperties": true
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "auth_mode": { "const": "bearer" }
+        },
+        "required": ["auth_mode"]
+      },
+      "then": {
+        "required": ["auth_secret_env"]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "auth_mode": { "const": "header" }
+        },
+        "required": ["auth_mode"]
+      },
+      "then": {
+        "required": ["auth_header_name", "auth_secret_env"]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "registration_status": { "const": "revoked" }
+        },
+        "required": ["registration_status"]
+      },
+      "then": {
+        "required": ["revoked_at"]
+      }
+    }
+  ],
+  "additionalProperties": true
+}

@@ -143,7 +143,59 @@ def wait_for_path(path: Path, timeout: float) -> bool:
     return path.exists()
 
 
+def load_mock_rpc_transport(socket_path: Path) -> dict | None:
+    if not socket_path.exists() or not socket_path.is_file():
+        return None
+    try:
+        payload = json.loads(socket_path.read_text(encoding="utf-8") or "{}")
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("transport") != "mock-file":
+        return None
+    return payload
+
+
+def write_mock_panel_bridge_transport(socket_path: Path, profile_id: str | None) -> None:
+    socket_path.parent.mkdir(parents=True, exist_ok=True)
+    socket_path.write_text(
+        json.dumps(
+            {
+                "transport": "mock-file",
+                "service_kind": "shell-panel-bridge",
+                "profile_id": profile_id,
+                "socket_path": str(socket_path),
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def shell_command_args(command: str) -> list[str]:
+    if sys.platform.startswith("win"):
+        return ["cmd", "/C", command]
+    return ["/bin/sh", "-lc", command]
+
+
 def rpc_call(socket_path: Path, method: str, params: dict, timeout: float = 1.5) -> dict:
+    mock_transport = load_mock_rpc_transport(socket_path)
+    if mock_transport is not None:
+        if mock_transport.get("service_kind") == "shell-panel-bridge" and method == "system.health.get":
+            return {
+                "service": "shell-panel-bridge",
+                "status": "ready",
+                "profile_id": mock_transport.get("profile_id"),
+                "socket_path": str(socket_path),
+            }
+        raise RuntimeError(f"unsupported mock rpc method: {method}")
+
+    if not hasattr(socket, "AF_UNIX"):
+        raise RuntimeError(f"unix-domain-socket-unavailable:{socket_path}")
+
     payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
         client.settimeout(timeout)
@@ -204,7 +256,7 @@ def read_process_log(path: Path, limit: int = 2400) -> str:
 
 def run_host_command(command: str, env_overrides: dict[str, str | None]) -> int:
     with patched_environment(env_overrides):
-        completed = subprocess.run(["/bin/sh", "-lc", command], check=False)
+        completed = subprocess.run(shell_command_args(command), check=False)
     return completed.returncode
 
 
@@ -231,9 +283,23 @@ def managed_panel_bridge(
     if socket_path.exists():
         socket_path.unlink()
 
+    if not hasattr(socket, "AF_UNIX"):
+        profile = shellctl.load_profile(args.profile)
+        write_mock_panel_bridge_transport(socket_path, profile.get("profile_id"))
+        try:
+            yield {
+                "AIOS_SHELL_COMPOSITOR_PANEL_BRIDGE_SOCKET": str(socket_path),
+            }
+        finally:
+            if socket_path.exists():
+                socket_path.unlink()
+            if temp_dir is not None:
+                temp_dir.cleanup()
+        return
+
     with log_path.open("w", encoding="utf-8") as log_handle:
         process = subprocess.Popen(
-            ["/bin/sh", "-lc", command],
+            shell_command_args(command),
             env={
                 **os.environ,
                 "AIOS_SHELL_PANEL_BRIDGE_SOCKET": str(socket_path),
@@ -452,3 +518,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

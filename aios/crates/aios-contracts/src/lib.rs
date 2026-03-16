@@ -25,6 +25,7 @@ pub mod methods {
     pub const SESSION_RESUME: &str = "session.resume";
     pub const SESSION_CLOSE: &str = "session.close";
     pub const SESSION_EVIDENCE_GET: &str = "session.evidence.get";
+    pub const SESSION_EVIDENCE_EXPORT: &str = "session.evidence.export";
     pub const TASK_CREATE: &str = "task.create";
     pub const TASK_GET: &str = "task.get";
     pub const TASK_LIST: &str = "task.list";
@@ -44,6 +45,7 @@ pub mod methods {
 
     pub const POLICY_EVALUATE: &str = "policy.evaluate";
     pub const POLICY_AUDIT_QUERY: &str = "policy.audit.query";
+    pub const POLICY_AUDIT_EXPORT: &str = "policy.audit.export";
     pub const POLICY_TOKEN_ISSUE: &str = "policy.token.issue";
     pub const POLICY_TOKEN_VERIFY: &str = "policy.token.verify";
 
@@ -86,8 +88,41 @@ pub mod methods {
     pub const PORTAL_HANDLE_LIST: &str = "portal.handle.list";
 
     pub const AGENT_INTENT_SUBMIT: &str = "agent.intent.submit";
+    pub const AGENT_TASK_GET: &str = "agent.task.get";
+    pub const AGENT_TASK_LIST: &str = "agent.task.list";
+    pub const AGENT_TASK_CREATE: &str = "agent.task.create";
+    pub const AGENT_TASK_STATE_UPDATE: &str = "agent.task.state.update";
+    pub const AGENT_TASK_EVENTS_LIST: &str = "agent.task.events.list";
+    pub const AGENT_TASK_PLAN_PUT: &str = "agent.task.plan.put";
+    pub const AGENT_TASK_PLAN_GET: &str = "agent.task.plan.get";
     pub const AGENT_TASK_PLAN: &str = "agent.task.plan";
     pub const AGENT_TASK_REPLAN: &str = "agent.task.replan";
+    pub const AGENT_TASK_RESUME: &str = "agent.task.resume";
+    pub const AGENT_SESSION_CREATE: &str = "agent.session.create";
+    pub const AGENT_SESSION_LIST: &str = "agent.session.list";
+    pub const AGENT_SESSION_RESUME: &str = "agent.session.resume";
+    pub const AGENT_SESSION_EVIDENCE_GET: &str = "agent.session.evidence.get";
+    pub const AGENT_SESSION_EVIDENCE_EXPORT: &str = "agent.session.evidence.export";
+    pub const AGENT_PROVIDER_DISCOVER: &str = "agent.provider.discover";
+    pub const AGENT_PROVIDER_RESOLVE_CAPABILITY: &str = "agent.provider.resolve_capability";
+    pub const AGENT_PROVIDER_GET_DESCRIPTOR: &str = "agent.provider.get_descriptor";
+    pub const AGENT_PROVIDER_HEALTH_GET: &str = "agent.provider.health.get";
+    pub const AGENT_PROVIDER_HEALTH_REPORT: &str = "agent.provider.health.report";
+    pub const AGENT_PROVIDER_DISABLE: &str = "agent.provider.disable";
+    pub const AGENT_PROVIDER_ENABLE: &str = "agent.provider.enable";
+    pub const AGENT_PROVIDER_REGISTER: &str = "agent.provider.register";
+    pub const AGENT_PROVIDER_UNREGISTER: &str = "agent.provider.unregister";
+    pub const AGENT_APPROVAL_CREATE: &str = "agent.approval.create";
+    pub const AGENT_APPROVAL_GET: &str = "agent.approval.get";
+    pub const AGENT_APPROVAL_LIST: &str = "agent.approval.list";
+    pub const AGENT_APPROVAL_RESOLVE: &str = "agent.approval.resolve";
+    pub const AGENT_PORTAL_HANDLE_ISSUE: &str = "agent.portal.handle.issue";
+    pub const AGENT_PORTAL_HANDLE_REVOKE: &str = "agent.portal.handle.revoke";
+    pub const AGENT_PORTAL_HANDLE_LIST: &str = "agent.portal.handle.list";
+    pub const AGENT_POLICY_TOKEN_ISSUE: &str = "agent.policy.token.issue";
+    pub const AGENT_POLICY_TOKEN_VERIFY: &str = "agent.policy.token.verify";
+    pub const AGENT_AUDIT_QUERY: &str = "agent.audit.query";
+    pub const AGENT_AUDIT_EXPORT: &str = "agent.audit.export";
 }
 
 pub const SHARED_CONTRACT_VERSION: &str = "1.0.0";
@@ -130,6 +165,7 @@ pub fn shared_contract_manifest() -> ContractManifest {
         methods::SESSION_RESUME,
         methods::SESSION_CLOSE,
         methods::SESSION_EVIDENCE_GET,
+        methods::SESSION_EVIDENCE_EXPORT,
         methods::TASK_CREATE,
         methods::TASK_GET,
         methods::TASK_LIST,
@@ -147,6 +183,7 @@ pub fn shared_contract_manifest() -> ContractManifest {
         methods::MEMORY_PROCEDURAL_LIST,
         methods::POLICY_EVALUATE,
         methods::POLICY_AUDIT_QUERY,
+        methods::POLICY_AUDIT_EXPORT,
         methods::POLICY_TOKEN_ISSUE,
         methods::POLICY_TOKEN_VERIFY,
         methods::APPROVAL_CREATE,
@@ -166,8 +203,41 @@ pub fn shared_contract_manifest() -> ContractManifest {
         methods::PROVIDER_GET_DESCRIPTOR,
         methods::PROVIDER_HEALTH_GET,
         methods::AGENT_INTENT_SUBMIT,
+        methods::AGENT_TASK_GET,
+        methods::AGENT_TASK_LIST,
+        methods::AGENT_TASK_CREATE,
+        methods::AGENT_TASK_STATE_UPDATE,
+        methods::AGENT_TASK_EVENTS_LIST,
+        methods::AGENT_TASK_PLAN_PUT,
+        methods::AGENT_TASK_PLAN_GET,
         methods::AGENT_TASK_PLAN,
         methods::AGENT_TASK_REPLAN,
+        methods::AGENT_TASK_RESUME,
+        methods::AGENT_SESSION_CREATE,
+        methods::AGENT_SESSION_LIST,
+        methods::AGENT_SESSION_RESUME,
+        methods::AGENT_SESSION_EVIDENCE_GET,
+        methods::AGENT_SESSION_EVIDENCE_EXPORT,
+        methods::AGENT_PROVIDER_DISCOVER,
+        methods::AGENT_PROVIDER_RESOLVE_CAPABILITY,
+        methods::AGENT_PROVIDER_GET_DESCRIPTOR,
+        methods::AGENT_PROVIDER_HEALTH_GET,
+        methods::AGENT_PROVIDER_HEALTH_REPORT,
+        methods::AGENT_PROVIDER_DISABLE,
+        methods::AGENT_PROVIDER_ENABLE,
+        methods::AGENT_PROVIDER_REGISTER,
+        methods::AGENT_PROVIDER_UNREGISTER,
+        methods::AGENT_APPROVAL_CREATE,
+        methods::AGENT_APPROVAL_GET,
+        methods::AGENT_APPROVAL_LIST,
+        methods::AGENT_APPROVAL_RESOLVE,
+        methods::AGENT_PORTAL_HANDLE_ISSUE,
+        methods::AGENT_PORTAL_HANDLE_REVOKE,
+        methods::AGENT_PORTAL_HANDLE_LIST,
+        methods::AGENT_POLICY_TOKEN_ISSUE,
+        methods::AGENT_POLICY_TOKEN_VERIFY,
+        methods::AGENT_AUDIT_QUERY,
+        methods::AGENT_AUDIT_EXPORT,
     ]
     .into_iter()
     .map(|method| ContractMethodRecord {
@@ -227,6 +297,9 @@ fn default_query_reverse() -> bool {
     true
 }
 
+fn default_runtime_backend_health_state() -> String {
+    "unknown".to_string()
+}
 fn default_portal_revocable() -> bool {
     true
 }
@@ -443,6 +516,64 @@ pub struct DeviceBackendStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceBackendSummary {
+    pub overall_status: String,
+    #[serde(default)]
+    pub status_count: u32,
+    #[serde(default)]
+    pub available_status_count: u32,
+    #[serde(default)]
+    pub adapter_count: u32,
+    #[serde(default)]
+    pub attention_count: u32,
+    #[serde(default)]
+    pub continuous_collector_count: u32,
+    #[serde(default)]
+    pub ui_tree_support_route_count: u32,
+    #[serde(default)]
+    pub ui_tree_support_ready_count: u32,
+    #[serde(default)]
+    pub ui_tree_snapshot_present: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui_tree_capture_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui_tree_current_support: Option<String>,
+    #[serde(default)]
+    pub readiness_summary: BTreeMap<String, u32>,
+    #[serde(default)]
+    pub evidence_artifact_count: u32,
+    #[serde(default)]
+    pub evidence_present_count: u32,
+    #[serde(default)]
+    pub evidence_missing_count: u32,
+    #[serde(default)]
+    pub evidence_baselines: Vec<String>,
+}
+
+impl Default for DeviceBackendSummary {
+    fn default() -> Self {
+        Self {
+            overall_status: "unknown".to_string(),
+            status_count: 0,
+            available_status_count: 0,
+            adapter_count: 0,
+            attention_count: 0,
+            continuous_collector_count: 0,
+            ui_tree_support_route_count: 0,
+            ui_tree_support_ready_count: 0,
+            ui_tree_snapshot_present: false,
+            ui_tree_capture_mode: None,
+            ui_tree_current_support: None,
+            readiness_summary: BTreeMap::new(),
+            evidence_artifact_count: 0,
+            evidence_present_count: 0,
+            evidence_missing_count: 0,
+            evidence_baselines: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UiTreeSupportMatrixEntry {
     pub environment_id: String,
     pub available: bool,
@@ -507,6 +638,8 @@ pub struct DeviceStateGetResponse {
     pub ui_tree_snapshot: Option<Value>,
     #[serde(default)]
     pub continuous_collectors: Vec<DeviceContinuousCollectorStatus>,
+    #[serde(default)]
+    pub backend_summary: DeviceBackendSummary,
     #[serde(default)]
     pub ui_tree_support_matrix: Vec<UiTreeSupportMatrixEntry>,
     #[serde(default)]
@@ -621,6 +754,14 @@ pub struct SessionEvidenceRequest {
     #[serde(default = "default_query_limit")]
     pub limit: u32,
 }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionEvidenceExportRequest {
+    pub session_id: String,
+    #[serde(default = "default_query_limit")]
+    pub limit: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionRecord {
@@ -722,6 +863,25 @@ pub struct SessionEvidenceResponse {
     pub procedural_memory: Vec<ProceduralMemoryRecord>,
     pub portal_handles: Vec<PortalHandleRecord>,
     pub recovery: RecoveryRef,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionEvidenceExportResponse {
+    pub service_id: String,
+    pub session_id: String,
+    pub export_id: String,
+    pub export_path: String,
+    pub created_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery_id: Option<String>,
+    pub task_count: u32,
+    pub task_event_count: u32,
+    pub working_memory_count: u32,
+    pub episodic_memory_count: u32,
+    pub semantic_memory_count: u32,
+    pub procedural_memory_count: u32,
+    pub portal_handle_count: u32,
+    #[serde(default)]
+    pub notes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -926,6 +1086,42 @@ pub struct AuditQueryResponse {
     #[serde(default)]
     pub entries: Vec<AuditRecord>,
 }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuditExportRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capability_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_location: Option<String>,
+    #[serde(default = "default_query_limit")]
+    pub limit: u32,
+    #[serde(default = "default_query_reverse")]
+    pub reverse: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuditExportResponse {
+    pub service_id: String,
+    pub export_id: String,
+    pub export_path: String,
+    pub created_at: String,
+    pub entry_count: u32,
+    pub active_segment_path: String,
+    pub index_path: String,
+    pub archive_dir: String,
+    pub archived_segment_count: u32,
+    #[serde(default)]
+    pub notes: Vec<String>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TraceEventRecord {
@@ -1022,8 +1218,61 @@ pub struct RuntimeBackendDescriptor {
     pub backend_id: String,
     pub availability: String,
     pub activation: String,
+    #[serde(default = "default_runtime_backend_health_state")]
+    pub health_state: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub reason: String,
+    #[serde(default)]
+    pub managed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_backend: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_contract: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_state: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub socket_path: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeBackendEventPayload {
+    pub event_phase: String,
+    pub backend_id: String,
+    pub resolved_backend: String,
+    pub route_state: String,
+    #[serde(default)]
+    pub degraded: bool,
+    #[serde(default)]
+    pub rejected: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_backend: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_backend: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimated_latency_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_queue: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_requests: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queue_saturated: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_service_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_path: Option<String>,
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeRouteResolveRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1920,6 +2169,8 @@ pub struct DeviceMetadataGetResponse {
     #[serde(default)]
     pub summary: DeviceMetadataReadinessSummary,
     #[serde(default)]
+    pub backend_summary: DeviceBackendSummary,
+    #[serde(default)]
     pub ui_tree_support_matrix: Vec<UiTreeSupportMatrixEntry>,
     #[serde(default)]
     pub notes: Vec<String>,
@@ -2020,6 +2271,13 @@ pub struct AgentPlanRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentTaskGetRequest {
+    pub task_id: String,
+    #[serde(default = "default_query_limit")]
+    pub event_limit: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentPlan {
     pub task_id: String,
     pub session_id: String,
@@ -2027,6 +2285,24 @@ pub struct AgentPlan {
     pub route_preference: String,
     pub candidate_capabilities: Vec<String>,
     pub next_action: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentTaskResumeRequest {
+    pub task_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_ref: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentProviderExecutionResult {
+    pub provider_id: String,
+    pub capability_id: String,
+    pub status: String,
+    pub task_state: String,
+    pub result: Value,
+    #[serde(default)]
+    pub notes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2044,11 +2320,54 @@ pub struct AgentIntentSubmissionResponse {
     pub execution_token: Option<ExecutionToken>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_preview: Option<RuntimeInferResponse>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_execution: Option<AgentProviderExecutionResult>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentTaskGetResponse {
+    pub task: TaskRecord,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<AgentPlan>,
+    #[serde(default)]
+    pub events: Vec<TaskEventRecord>,
+    #[serde(default)]
+    pub approvals: Vec<ApprovalRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub portal_handle_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub portal_handle: Option<PortalHandleRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_resolution: Option<ProviderResolveCapabilityResponse>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_token: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_execution: Option<AgentProviderExecutionResult>,
+    #[serde(default)]
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentTaskResumeResponse {
+    pub task: TaskRecord,
+    pub plan: AgentPlan,
+    pub approval: ApprovalRecord,
+    pub provider_resolution: ProviderResolveCapabilityResponse,
+    pub portal_handle: PortalHandleRecord,
+    pub execution_token: ExecutionToken,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_execution: Option<AgentProviderExecutionResult>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+    use std::collections::BTreeMap;
 
     #[test]
     fn shared_contract_manifest_exposes_frozen_methods_and_schemas() {
@@ -2067,5 +2386,254 @@ mod tests {
             .schemas
             .iter()
             .any(|item| { item.schema_ref == "aios/policy/schemas/execution-token.schema.json" }));
+    }
+
+    #[test]
+    fn runtime_backend_descriptor_defaults_new_health_fields_when_omitted() {
+        let descriptor: RuntimeBackendDescriptor = serde_json::from_value(serde_json::json!({
+            "backend_id": "local-cpu",
+            "availability": "available",
+            "activation": "built-in"
+        }))
+        .expect("descriptor should deserialize");
+
+        assert_eq!(descriptor.health_state, "unknown");
+        assert!(descriptor.reason.is_empty());
+        assert!(!descriptor.managed);
+        assert!(descriptor.fallback_backend.is_none());
+    }
+
+    #[test]
+    fn runtime_backend_event_payload_serializes_stable_runtime_fields() {
+        let payload = RuntimeBackendEventPayload {
+            event_phase: "fallback".to_string(),
+            backend_id: "local-cpu".to_string(),
+            resolved_backend: "local-gpu".to_string(),
+            route_state: "backend-fallback-local-cpu".to_string(),
+            degraded: true,
+            rejected: false,
+            requested_backend: Some("local-gpu".to_string()),
+            fallback_backend: Some("local-cpu".to_string()),
+            reason: Some("gpu worker unavailable".to_string()),
+            model: Some("smoke-model".to_string()),
+            estimated_latency_ms: Some(42),
+            pending_queue: Some(1),
+            active_requests: Some(2),
+            queue_saturated: Some(false),
+            provider_id: Some("nvidia.jetson.tensorrt".to_string()),
+            runtime_service_id: Some("aios-runtimed.jetson-vendor-helper".to_string()),
+            provider_status: Some("available".to_string()),
+            artifact_path: Some("/var/lib/aios/runtimed/vendor-execution.json".to_string()),
+        };
+
+        let value = serde_json::to_value(&payload).expect("payload should serialize");
+        assert_eq!(value["event_phase"], "fallback");
+        assert_eq!(value["backend_id"], "local-cpu");
+        assert_eq!(value["resolved_backend"], "local-gpu");
+        assert_eq!(value["fallback_backend"], "local-cpu");
+        assert_eq!(value["pending_queue"], 1);
+        assert_eq!(value["provider_id"], "nvidia.jetson.tensorrt");
+        assert_eq!(
+            value["artifact_path"],
+            "/var/lib/aios/runtimed/vendor-execution.json"
+        );
+    }
+
+    #[test]
+    fn device_state_response_preserves_frozen_backend_summary_shape() {
+        let response = DeviceStateGetResponse {
+            service_id: "aios-deviced".to_string(),
+            capabilities: vec![DeviceCapabilityDescriptor {
+                modality: "screen".to_string(),
+                available: true,
+                conditional: false,
+                source_backend: "screen-capture-portal".to_string(),
+                notes: vec!["screen-capability".to_string()],
+            }],
+            active_captures: Vec::new(),
+            backend_statuses: vec![DeviceBackendStatus {
+                modality: "screen".to_string(),
+                backend: "screen-capture-portal".to_string(),
+                available: true,
+                readiness: "native-live".to_string(),
+                details: vec!["probe_source=builtin".to_string()],
+            }],
+            capture_adapters: vec![DeviceCaptureAdapterPlan {
+                modality: "screen".to_string(),
+                backend: "screen-capture-portal".to_string(),
+                adapter_id: "screen.portal-native".to_string(),
+                execution_path: "native-live".to_string(),
+                preview_object_kind: "screen_frame".to_string(),
+                notes: vec!["adapter_contract=formal-native-backend".to_string()],
+            }],
+            ui_tree_snapshot: Some(json!({
+                "snapshot_id": "tree-1",
+                "capture_mode": "native-live",
+                "focus_node": "desktop-0/app-0/0",
+            })),
+            continuous_collectors: vec![DeviceContinuousCollectorStatus {
+                capture_id: "capture-1".to_string(),
+                modality: "audio".to_string(),
+                backend: "pipewire-audio".to_string(),
+                collector_mode: "continuous".to_string(),
+                status: "running".to_string(),
+                updated_at: "2026-03-16T00:00:00Z".to_string(),
+                sample_count: 4,
+                details: vec!["sample_rate=48000".to_string()],
+            }],
+            backend_summary: DeviceBackendSummary {
+                overall_status: "ready".to_string(),
+                status_count: 5,
+                available_status_count: 5,
+                adapter_count: 5,
+                attention_count: 0,
+                continuous_collector_count: 1,
+                ui_tree_support_route_count: 3,
+                ui_tree_support_ready_count: 2,
+                ui_tree_snapshot_present: true,
+                ui_tree_capture_mode: Some("native-live".to_string()),
+                ui_tree_current_support: Some("native-live".to_string()),
+                readiness_summary: BTreeMap::from([("native-live".to_string(), 5)]),
+                evidence_artifact_count: 5,
+                evidence_present_count: 5,
+                evidence_missing_count: 0,
+                evidence_baselines: vec!["os-native-backend".to_string()],
+            },
+            ui_tree_support_matrix: vec![UiTreeSupportMatrixEntry {
+                environment_id: "atspi-live".to_string(),
+                available: true,
+                readiness: "native-live".to_string(),
+                current: true,
+                desktop_environment: Some("gnome".to_string()),
+                session_type: Some("wayland".to_string()),
+                adapter_id: Some("ui_tree.atspi-native".to_string()),
+                execution_path: Some("native-live".to_string()),
+                stability: Some("best-effort-live".to_string()),
+                limitations: vec!["desktop-dependent".to_string()],
+                evidence: vec!["support_matrix_path=/tmp/ui-tree-support-matrix.json".to_string()],
+                details: vec!["desktop=gnome".to_string()],
+            }],
+            notes: vec!["backend_overall_status=ready".to_string()],
+        };
+
+        let value =
+            serde_json::to_value(&response).expect("device state response should serialize");
+        assert_eq!(value["backend_summary"]["overall_status"], "ready");
+        assert_eq!(value["backend_summary"]["available_status_count"], 5);
+        assert_eq!(
+            value["backend_summary"]["ui_tree_capture_mode"],
+            "native-live"
+        );
+        assert_eq!(
+            value["backend_summary"]["readiness_summary"]["native-live"],
+            5
+        );
+        assert_eq!(
+            value["ui_tree_support_matrix"][0]["environment_id"],
+            "atspi-live"
+        );
+        assert_eq!(
+            value["ui_tree_support_matrix"][0]["adapter_id"],
+            "ui_tree.atspi-native"
+        );
+    }
+
+    #[test]
+    fn device_response_compatibility_defaults_new_backend_summary_fields_when_omitted() {
+        let state: DeviceStateGetResponse = serde_json::from_value(json!({
+            "service_id": "aios-deviced"
+        }))
+        .expect("device state response should deserialize with omitted optional fields");
+        assert_eq!(state.backend_summary.overall_status, "unknown");
+        assert!(state.ui_tree_support_matrix.is_empty());
+
+        let metadata: DeviceMetadataGetResponse = serde_json::from_value(json!({
+            "provider_id": "device.metadata.local",
+            "device_service_id": "aios-deviced",
+            "generated_at": "2026-03-16T00:00:00Z"
+        }))
+        .expect("device metadata response should deserialize with omitted optional fields");
+        assert_eq!(metadata.backend_summary.overall_status, "unknown");
+        assert!(metadata.ui_tree_support_matrix.is_empty());
+    }
+
+    #[test]
+    fn device_metadata_response_preserves_frozen_backend_summary_shape() {
+        let response = DeviceMetadataGetResponse {
+            provider_id: "device.metadata.local".to_string(),
+            device_service_id: "aios-deviced".to_string(),
+            generated_at: "2026-03-16T00:00:00Z".to_string(),
+            entries: vec![DeviceMetadataEntry {
+                modality: "screen".to_string(),
+                source_backend: "screen-capture-portal".to_string(),
+                available: true,
+                conditional: false,
+                readiness: "native-live".to_string(),
+                backend_details: vec!["probe_source=builtin".to_string()],
+                adapter_id: Some("screen.portal-native".to_string()),
+                adapter_execution_path: Some("native-live".to_string()),
+                notes: vec!["adapter_contract=formal-native-backend".to_string()],
+            }],
+            available_modalities: vec!["screen".to_string()],
+            active_capture_count: 1,
+            summary: DeviceMetadataReadinessSummary {
+                overall_status: "ready".to_string(),
+                requested_modalities: vec!["screen".to_string()],
+                available_modalities: vec!["screen".to_string()],
+                unavailable_modalities: Vec::new(),
+                conditional_modalities: Vec::new(),
+                unknown_modalities: Vec::new(),
+                active_capture_count: 1,
+                continuous_collector_count: 0,
+                ui_tree_available: true,
+                ui_tree_snapshot_attached: true,
+            },
+            backend_summary: DeviceBackendSummary {
+                overall_status: "ready".to_string(),
+                status_count: 5,
+                available_status_count: 5,
+                adapter_count: 5,
+                attention_count: 0,
+                continuous_collector_count: 1,
+                ui_tree_support_route_count: 3,
+                ui_tree_support_ready_count: 2,
+                ui_tree_snapshot_present: true,
+                ui_tree_capture_mode: Some("native-live".to_string()),
+                ui_tree_current_support: Some("native-live".to_string()),
+                readiness_summary: BTreeMap::from([("native-live".to_string(), 5)]),
+                evidence_artifact_count: 5,
+                evidence_present_count: 5,
+                evidence_missing_count: 0,
+                evidence_baselines: vec!["os-native-backend".to_string()],
+            },
+            ui_tree_support_matrix: vec![UiTreeSupportMatrixEntry {
+                environment_id: "atspi-live".to_string(),
+                available: true,
+                readiness: "native-live".to_string(),
+                current: true,
+                desktop_environment: Some("gnome".to_string()),
+                session_type: Some("wayland".to_string()),
+                adapter_id: Some("ui_tree.atspi-native".to_string()),
+                execution_path: Some("native-live".to_string()),
+                stability: Some("best-effort-live".to_string()),
+                limitations: vec!["desktop-dependent".to_string()],
+                evidence: vec!["support_matrix_path=/tmp/ui-tree-support-matrix.json".to_string()],
+                details: vec!["desktop=gnome".to_string()],
+            }],
+            notes: vec!["backend_overall_status=ready".to_string()],
+        };
+
+        let value =
+            serde_json::to_value(&response).expect("device metadata response should serialize");
+        assert_eq!(value["summary"]["overall_status"], "ready");
+        assert_eq!(value["backend_summary"]["overall_status"], "ready");
+        assert_eq!(
+            value["backend_summary"]["ui_tree_capture_mode"],
+            "native-live"
+        );
+        assert_eq!(
+            value["ui_tree_support_matrix"][0]["environment_id"],
+            "atspi-live"
+        );
     }
 }

@@ -50,6 +50,7 @@ def load_model(path: Path, fixture: Path | None, socket_path: Path) -> dict | No
                 "statuses": state.get("backend_statuses", []),
                 "adapters": state.get("capture_adapters", []),
                 "ui_tree_snapshot": state.get("ui_tree_snapshot"),
+                "backend_summary": state.get("backend_summary", {}),
                 "ui_tree_support_matrix": state.get("ui_tree_support_matrix", []),
                 "notes": state.get("notes", []),
             }
@@ -112,6 +113,11 @@ def attach_evidence_artifacts(model: dict) -> dict:
                 "execution_path": (artifact or {}).get("execution_path"),
                 "source": (artifact or {}).get("source"),
                 "readiness": (artifact or {}).get("readiness"),
+                "release_grade_backend_id": (artifact or {}).get("release_grade_backend_id")
+                or (artifact or {}).get("release_grade_backend"),
+                "release_grade_backend_origin": (artifact or {}).get("release_grade_backend_origin"),
+                "release_grade_backend_stack": (artifact or {}).get("release_grade_backend_stack"),
+                "contract_kind": (artifact or {}).get("contract_kind"),
                 "state_refs": list((artifact or {}).get("state_refs", [])),
                 "probe": (artifact or {}).get("probe"),
                 "baseline_payload": (artifact or {}).get("baseline_payload"),
@@ -132,6 +138,14 @@ def render(model: dict | None) -> str:
     updated_at = model.get("updated_at")
     if updated_at:
         lines.append(f"updated_at: {updated_at}")
+    backend_summary = model.get("backend_summary") or {}
+    if isinstance(backend_summary, dict) and backend_summary:
+        lines.append(
+            "summary: "
+            f"{backend_summary.get('overall_status', 'unknown')} "
+            f"statuses={backend_summary.get('status_count', 0)} "
+            f"attention={backend_summary.get('attention_count', 0)}"
+        )
     for status in model.get("statuses", []):
         details = ", ".join(status.get("details", []))
         line = (
@@ -170,7 +184,11 @@ def render(model: dict | None) -> str:
         lines.append(
             "evidence: "
             f"{artifact.get('modality') or '-'} "
-            f"[{artifact.get('baseline') or 'unknown'}] "
+            f"backend_id={artifact.get('release_grade_backend_id') or '-'} "
+            f"baseline={artifact.get('baseline') or 'unknown'} "
+            f"origin={artifact.get('release_grade_backend_origin') or '-'} "
+            f"stack={artifact.get('release_grade_backend_stack') or '-'} "
+            f"contract={artifact.get('contract_kind') or '-'} "
             f"path={artifact.get('artifact_path')} "
             f"source={artifact.get('source') or '-'} "
             f"state_refs={state_refs or '-'}"
@@ -187,3 +205,5 @@ if __name__ == "__main__":
     parser.add_argument("--fixture", type=Path)
     args = parser.parse_args()
     print(render(load_model(args.path, args.fixture, args.socket)))
+
+

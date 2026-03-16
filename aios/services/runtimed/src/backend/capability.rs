@@ -35,6 +35,19 @@ impl BackendReadiness {
             backend_id: backend_id.to_string(),
             availability: self.availability.clone(),
             activation: self.activation.clone(),
+            health_state: if self.is_available() {
+                "ready".to_string()
+            } else {
+                "unavailable".to_string()
+            },
+            reason: self.reason.clone(),
+            managed: false,
+            fallback_backend: default_fallback_backend(backend_id).map(str::to_string),
+            worker_contract: None,
+            worker_state: None,
+            command_source: None,
+            detail: None,
+            socket_path: None,
         }
     }
 }
@@ -82,4 +95,12 @@ pub fn configured_command_readiness(
         "configured-wrapper",
         format!("{backend_id} wrapper configured"),
     ))
+}
+
+fn default_fallback_backend(backend_id: &str) -> Option<&'static str> {
+    if backend_id == "local-cpu" {
+        None
+    } else {
+        Some("local-cpu")
+    }
 }

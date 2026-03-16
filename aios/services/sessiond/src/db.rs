@@ -1281,7 +1281,14 @@ mod tests {
         assert!(records.contains("\"kind\":\"session.created\""));
         assert!(records.contains("\"kind\":\"task.created\""));
         assert!(records.contains("\"kind\":\"task.state.updated\""));
-        assert!(records.contains(&database_path.display().to_string()));
+        let parsed_records = records
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| serde_json::from_str::<Value>(line).expect("observability entry"))
+            .collect::<Vec<_>>();
+        assert!(parsed_records
+            .iter()
+            .any(|entry| entry["artifact_path"] == database_path.display().to_string()));
 
         std::fs::remove_dir_all(root).ok();
     }

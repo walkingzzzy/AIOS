@@ -41,7 +41,7 @@ def build_model(state: dict | None) -> dict:
     return {
         "component_id": "capture-indicators",
         "panel_id": "capture-indicators-panel",
-        "panel_kind": "shell-panel-skeleton",
+        "panel_kind": "shell-panel",
         "header": {
             "title": "Capture Indicators",
             "subtitle": f"{len(active)} active captures · {modality_count} modalities",
@@ -128,7 +128,7 @@ def render_text(panel: dict) -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="AIOS capture indicators panel skeleton")
+    parser = argparse.ArgumentParser(description="AIOS capture indicators panel")
     parser.add_argument("command", nargs="?", default="render", choices=["render", "model", "action", "watch"])
     parser.add_argument("--path", type=Path, default=default_indicator_path())
     parser.add_argument("--action")
@@ -183,3 +183,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

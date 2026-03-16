@@ -504,6 +504,34 @@ entries:
       expected_values:
         - "passed"
 
+  - check_id: "release-gate-vendor-runtime-smoke"
+    owner: "Team E / Systems"
+    gate: "validate"
+    domain: "release-governance"
+    blocking: true
+    command: "python3 scripts/test-release-gate-smoke.py"
+    artifacts:
+      - "out/validation/release-gate-vendor-runtime-smoke-report.json"
+      - "out/validation/release-gate-vendor-runtime-smoke-report.md"
+    source_paths:
+      - "scripts/test-release-gate-smoke.py"
+      - "scripts/check-release-gate.py"
+      - "docs/RELEASE_CHECKLIST.md"
+      - "aios/hardware/schemas/hardware-validation-evidence-index.schema.json"
+    failure_symptom: "release gate no longer distinguishes synthetic baseline warnings from real-machine vendor runtime sign-off evidence or incomplete attached metadata"
+    triage: "tests/observability/test-plan.md"
+    workflow_jobs:
+      - "validate"
+    coverage_domains:
+      - "hardware-evidence"
+      - "release-governance"
+    status_source:
+      kind: "report-status"
+      report_path: "out/validation/release-gate-vendor-runtime-smoke-report.json"
+      field: "overall_status"
+      expected_values:
+        - "passed"
+
   - check_id: "image-build-strategy-smoke"
     owner: "Team A / Platform"
     gate: "validate"

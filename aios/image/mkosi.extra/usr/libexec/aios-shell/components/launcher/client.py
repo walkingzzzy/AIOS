@@ -3,7 +3,7 @@ import argparse
 import json
 from pathlib import Path
 
-from prototype import default_socket, fixture_call, rpc_call
+from prototype import default_agent_socket, default_socket, fixture_call, rpc_call
 
 
 def print_result(command: str, result: dict) -> None:
@@ -39,6 +39,7 @@ def main() -> int:
         choices=["create-session", "resume", "create-task"],
     )
     parser.add_argument("--socket", type=Path, default=default_socket())
+    parser.add_argument("--agent-socket", type=Path, default=default_agent_socket())
     parser.add_argument("--fixture", type=Path)
     parser.add_argument("--user-id", default="local-user")
     parser.add_argument("--intent", default="shell-launcher")
@@ -52,20 +53,20 @@ def main() -> int:
         result = fixture_call(args.fixture, args.command, args)
     elif args.command == "create-session":
         result = rpc_call(
-            args.socket,
-            "session.create",
+            args.agent_socket,
+            "agent.session.create",
             {"user_id": args.user_id, "metadata": {"initial_intent": args.intent}},
         )
     elif args.command == "resume":
         if not args.session_id:
             raise SystemExit("--session-id is required for resume")
-        result = rpc_call(args.socket, "session.resume", {"session_id": args.session_id})
+        result = rpc_call(args.agent_socket, "agent.session.resume", {"session_id": args.session_id})
     else:
         if not args.session_id:
             raise SystemExit("--session-id is required for create-task")
         result = rpc_call(
-            args.socket,
-            "task.create",
+            args.agent_socket,
+            "agent.task.create",
             {"session_id": args.session_id, "title": args.title, "state": args.state},
         )
 

@@ -178,7 +178,9 @@ fn heuristic_capabilities(intent: &str) -> Vec<String> {
         push_capability(&mut capabilities, "shell.notification.open");
     }
     if normalized.contains("audit")
-        && (normalized.contains("operator") || normalized.contains("panel") || normalized.contains("log"))
+        && (normalized.contains("operator")
+            || normalized.contains("panel")
+            || normalized.contains("log"))
     {
         push_capability(&mut capabilities, "shell.operator-audit.open");
     }

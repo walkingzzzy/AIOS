@@ -8,10 +8,10 @@ use aios_contracts::{
     PortalListHandlesRequest, PortalLookupHandleRequest, PortalRevokeHandleRequest,
     ProceduralMemoryListRequest, ProceduralMemoryPutRequest, SemanticMemoryListRequest,
     SemanticMemoryPutRequest, ServiceContractResponse, SessionCloseRequest, SessionCloseResponse,
-    SessionCreateRequest, SessionCreateResponse, SessionEvidenceRequest, SessionEvidenceResponse,
-    SessionListRequest, SessionResumeRequest, SessionResumeResponse, TaskCreateRequest,
-    TaskCreateResponse, TaskEventListRequest, TaskGetRequest, TaskListRequest, TaskPlanGetRequest,
-    TaskPlanPutRequest, TaskStateUpdateRequest, WorkingMemoryReadRequest,
+    SessionCreateRequest, SessionCreateResponse, SessionEvidenceExportRequest,
+    SessionEvidenceRequest, SessionListRequest, SessionResumeRequest, SessionResumeResponse,
+    TaskCreateRequest, TaskCreateResponse, TaskEventListRequest, TaskGetRequest, TaskListRequest,
+    TaskPlanGetRequest, TaskPlanPutRequest, TaskStateUpdateRequest, WorkingMemoryReadRequest,
     WorkingMemoryWriteRequest,
 };
 use aios_rpc::{RpcError, RpcResult, RpcRouter};
@@ -95,79 +95,46 @@ pub fn build_router(state: AppState) -> Arc<RpcRouter> {
     let evidence_state = state.clone();
     router.register_method(methods::SESSION_EVIDENCE_GET, move |params| {
         let request: SessionEvidenceRequest = parse_params(params)?;
-        let session = evidence_state
-            .sessions
-            .get(&request.session_id)
-            .map_err(internal)?
-            .ok_or_else(|| RpcError::resource_not_found("session", &request.session_id))?;
-        let tasks = evidence_state
-            .tasks
-            .list(TaskListRequest {
+        let response = crate::evidence::collect(&evidence_state, &request)
+            .map_err(internal)
+            .map_err(|error| {
+                if error.to_string().contains("session ")
+                    && error.to_string().contains(" not found")
+                {
+                    RpcError::resource_not_found("session", &request.session_id)
+                } else {
+                    error
+                }
+            })?;
+        json(response)
+    });
+
+    let evidence_export_state = state.clone();
+    router.register_method(methods::SESSION_EVIDENCE_EXPORT, move |params| {
+        let request: SessionEvidenceExportRequest = parse_params(params)?;
+        let evidence = crate::evidence::collect(
+            &evidence_export_state,
+            &SessionEvidenceRequest {
                 session_id: request.session_id.clone(),
-                state: None,
-                limit: Some(request.limit),
-            })
-            .map_err(internal)?
-            .tasks;
-        let task_events = evidence_state
-            .database
-            .list_session_task_events(&request.session_id, request.limit)
-            .map_err(internal)?;
-        let working_memory = evidence_state
-            .memory
-            .read(WorkingMemoryReadRequest {
-                session_id: request.session_id.clone(),
-                ref_id: None,
-                limit: Some(request.limit),
-            })
-            .map_err(internal)?
-            .entries;
-        let episodic_memory = evidence_state
-            .memory
-            .list_episodic(EpisodicMemoryListRequest {
-                session_id: request.session_id.clone(),
-                limit: Some(request.limit),
-            })
-            .map_err(internal)?
-            .entries;
-        let semantic_memory = evidence_state
-            .memory
-            .list_semantic(SemanticMemoryListRequest {
-                session_id: request.session_id.clone(),
-                label: None,
-                limit: Some(request.limit),
-            })
-            .map_err(internal)?
-            .entries;
-        let procedural_memory = evidence_state
-            .memory
-            .list_procedural(ProceduralMemoryListRequest {
-                session_id: request.session_id.clone(),
-                rule_name: None,
-                limit: Some(request.limit),
-            })
-            .map_err(internal)?
-            .entries;
-        let portal_handles = evidence_state
-            .portal
-            .list(PortalListHandlesRequest {
-                session_id: Some(request.session_id.clone()),
-            })
-            .map_err(internal)?
-            .handles;
-        let recovery = crate::recovery::baseline_ref(&evidence_state.database, &request.session_id)
-            .map_err(internal)?;
-        json(SessionEvidenceResponse {
-            session,
-            tasks,
-            task_events,
-            working_memory,
-            episodic_memory,
-            semantic_memory,
-            procedural_memory,
-            portal_handles,
-            recovery,
-        })
+                limit: request.limit,
+            },
+        )
+        .map_err(internal)
+        .map_err(|error| {
+            if error.to_string().contains("session ") && error.to_string().contains(" not found") {
+                RpcError::resource_not_found("session", &request.session_id)
+            } else {
+                error
+            }
+        })?;
+        let response = crate::evidence::export_bundle(
+            &evidence_export_state.config.service_id,
+            &evidence_export_state.config.evidence_export_dir,
+            &request,
+            &evidence,
+        )
+        .map_err(internal)?;
+        json(response)
     });
 
     let task_create_state = state.clone();

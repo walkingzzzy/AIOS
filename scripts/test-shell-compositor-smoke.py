@@ -22,6 +22,7 @@ def main() -> int:
         runtime_lock_path = Path(temp_dir) / "compositor.lock"
         runtime_ready_path = Path(temp_dir) / "compositor-ready.json"
         runtime_state_path = Path(temp_dir) / "compositor-state.json"
+        window_state_path = Path(temp_dir) / "compositor-windows.json"
         snapshot_path.write_text(
             json.dumps(
                 {
@@ -70,13 +71,17 @@ def main() -> int:
                     "keyboard_enabled = true",
                     "touch_enabled = true",
                     "keyboard_layout = us",
-                    "placeholder_surfaces = launcher,approval-panel,notification-center",
+                    "panel_slots = launcher,approval-panel,notification-center",
                     f"panel_snapshot_path = {snapshot_path}",
                     f"panel_snapshot_command = {sys.executable} {command_path}",
                     f"panel_action_log_path = {panel_action_log_path}",
                     f"runtime_lock_path = {runtime_lock_path}",
                     f"runtime_ready_path = {runtime_ready_path}",
                     f"runtime_state_path = {runtime_state_path}",
+                    f"window_state_path = {window_state_path}",
+                    "workspace_count = 4",
+                    "default_workspace_index = 0",
+                    "output_layout_mode = horizontal",
                     "runtime_state_refresh_ticks = 1",
                     "panel_snapshot_refresh_ticks = 1",
                     "tick_ms = 1",
@@ -145,9 +150,41 @@ def main() -> int:
         require("runtime_state_status" in payload, "compositor runtime state status missing")
         require("session_control_status" in payload, "compositor session control status missing")
         require("drm_device_path" in payload, "compositor drm device path missing")
+        require("drm_connector_name" in payload, "compositor drm connector name missing")
+        require("drm_output_width" in payload, "compositor drm output width missing")
+        require("drm_output_height" in payload, "compositor drm output height missing")
+        require("drm_refresh_millihz" in payload, "compositor drm refresh missing")
         require("output_count" in payload, "compositor output count missing")
         require("connected_output_count" in payload, "compositor connected output count missing")
         require("primary_output_name" in payload, "compositor primary output name missing")
+        require("workspace_toplevel_mode" in payload, "compositor workspace toplevel mode missing")
+        require("workspace_count" in payload, "compositor workspace count missing")
+        require("active_workspace_index" in payload, "compositor active workspace index missing")
+        require("active_workspace_id" in payload, "compositor active workspace id missing")
+        require("workspace_switch_count" in payload, "compositor workspace switch count missing")
+        require("output_layout_mode" in payload, "compositor output layout mode missing")
+        require("window_manager_status" in payload, "compositor window manager status missing")
+        require("window_state_path" in payload, "compositor window state path missing")
+        require("managed_window_count" in payload, "compositor managed window count missing")
+        require("visible_window_count" in payload, "compositor visible window count missing")
+        require("floating_window_count" in payload, "compositor floating window count missing")
+        require("minimized_window_count" in payload, "compositor minimized window count missing")
+        require("window_move_count" in payload, "compositor window move count missing")
+        require("window_resize_count" in payload, "compositor window resize count missing")
+        require("window_minimize_count" in payload, "compositor window minimize count missing")
+        require("window_restore_count" in payload, "compositor window restore count missing")
+        require("last_minimized_window_key" in payload, "compositor last minimized window key missing")
+        require("last_restored_window_key" in payload, "compositor last restored window key missing")
+        require("workspace_window_counts" in payload, "compositor workspace window counts missing")
+        require("drag_state" in payload, "compositor drag state missing")
+        require("resize_state" in payload, "compositor resize state missing")
+        require("outputs" in payload, "compositor outputs missing")
+        require("managed_windows" in payload, "compositor managed windows missing")
+        require("modal_surface_count" in payload, "compositor modal surface count missing")
+        require("blocked_surface_count" in payload, "compositor blocked surface count missing")
+        require("shell_role_counts" in payload, "compositor shell role counts missing")
+        require("interaction_mode_counts" in payload, "compositor interaction mode counts missing")
+        require("window_policy_counts" in payload, "compositor window policy counts missing")
         require("panel_host_status" in payload, "compositor panel host status missing")
         require("panel_host_bound_count" in payload, "compositor panel host bound count missing")
         require("panel_host_activation_count" in payload, "compositor panel host activation count missing")
@@ -194,6 +231,7 @@ def main() -> int:
         require("last_input_event" in payload, "compositor last input event missing")
         require("focused_surface_id" in payload, "compositor focused surface id missing")
         require("topmost_surface_id" in payload, "compositor topmost surface id missing")
+        require("topmost_slot_id" in payload, "compositor topmost slot id missing")
         require("last_hit_surface_id" in payload, "compositor last hit surface id missing")
         require("last_hit_slot_id" in payload, "compositor last hit slot id missing")
         require("last_pointer_x" in payload, "compositor last pointer x missing")
@@ -233,8 +271,43 @@ def main() -> int:
         require(payload["panel_snapshot_surface_count"] == 3, "compositor panel snapshot surface count mismatch")
         require(payload["panel_embedding_status"] == "panel-host-ready(3/3)", "compositor panel embedding status mismatch")
         require(payload["embedded_surface_count"] == 0, "compositor embedded surface count mismatch")
+        require(payload["workspace_toplevel_mode"] == "maximized", "compositor workspace toplevel mode mismatch")
+        require(payload["workspace_count"] == 4, "compositor workspace count mismatch")
+        require(payload["active_workspace_index"] == 0, "compositor active workspace index mismatch")
+        require(payload["active_workspace_id"] == "workspace-1", "compositor active workspace id mismatch")
+        require(payload["workspace_switch_count"] == 0, "compositor workspace switch count mismatch")
+        require(payload["output_layout_mode"] == "horizontal", "compositor output layout mode mismatch")
+        require(payload["window_state_path"] == str(window_state_path), "compositor window state path mismatch")
+        require(payload["managed_window_count"] == 0, "compositor managed window count mismatch")
+        require(payload["visible_window_count"] == 0, "compositor visible window count mismatch")
+        require(payload["floating_window_count"] == 0, "compositor floating window count mismatch")
+        require(payload["minimized_window_count"] == 0, "compositor minimized window count mismatch")
+        require(payload["window_move_count"] == 0, "compositor window move count mismatch")
+        require(payload["window_resize_count"] == 0, "compositor window resize count mismatch")
+        require(payload["window_minimize_count"] == 0, "compositor window minimize count mismatch")
+        require(payload["window_restore_count"] == 0, "compositor window restore count mismatch")
+        require(payload["last_minimized_window_key"] is None, "compositor last minimized window key mismatch")
+        require(payload["last_restored_window_key"] is None, "compositor last restored window key mismatch")
+        require(payload["workspace_window_counts"] == {}, "compositor workspace window counts mismatch")
+        require(payload["drag_state"] == "idle", "compositor drag state mismatch")
+        require(payload["resize_state"] == "idle", "compositor resize state mismatch")
+        require(payload["outputs"] == [], "compositor outputs mismatch")
+        require(payload["managed_windows"] == [], "compositor managed windows mismatch")
+        require(payload["window_manager_status"] == "persistent", "compositor window manager status mismatch")
+        require(payload["modal_surface_count"] == 1, "compositor modal surface count mismatch")
+        require(payload["blocked_surface_count"] == 2, "compositor blocked surface count mismatch")
+        require(payload["shell_role_counts"]["dock"] == 1, "compositor dock role count mismatch")
+        require(payload["shell_role_counts"]["modal"] == 1, "compositor modal role count mismatch")
         require(
-            payload["stacking_status"] == "panel-host-only(approval-panel)",
+            payload["interaction_mode_counts"]["blocked-by-modal"] == 2,
+            "compositor blocked interaction count mismatch",
+        )
+        require(
+            payload["window_policy_counts"]["modal-dialog"] == 1,
+            "compositor modal window policy mismatch",
+        )
+        require(
+            payload["stacking_status"] == "panel-host-stack(approval-panel)",
             "compositor stacking status mismatch",
         )
         require(payload["attention_surface_count"] == 1, "compositor attention surface count mismatch")
@@ -251,11 +324,26 @@ def main() -> int:
             payload["topmost_surface_id"] == "approval-panel",
             "compositor topmost surface id mismatch",
         )
+        require(payload["topmost_slot_id"] == "approval-panel", "compositor topmost slot id mismatch")
         require(payload["last_hit_surface_id"] is None, "compositor last hit surface id mismatch")
         require(payload["last_hit_slot_id"] is None, "compositor last hit slot id mismatch")
         require(payload["last_pointer_x"] is None, "compositor last pointer x mismatch")
         require(payload["last_pointer_y"] is None, "compositor last pointer y mismatch")
         require(payload["input_device_count"] == 0, "compositor input device count mismatch")
+        surfaces = {surface["surface_id"]: surface for surface in payload["surfaces"]}
+        require(surfaces["launcher"]["shell_role"] == "dock", "compositor launcher shell role mismatch")
+        require(
+            surfaces["approval-panel"]["interaction_mode"] == "modal",
+            "compositor approval interaction mode mismatch",
+        )
+        require(
+            surfaces["approval-panel"]["window_policy"] == "modal-dialog",
+            "compositor approval window policy mismatch",
+        )
+        require(
+            surfaces["notification-center"]["blocked_by"] == "approval-panel",
+            "compositor notification blocked_by mismatch",
+        )
         require(runtime_state_path.exists(), "compositor runtime state file missing")
         runtime_state = json.loads(runtime_state_path.read_text())
         require(runtime_state["phase"] == "stopped", "compositor runtime state phase mismatch")
@@ -450,3 +538,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

@@ -3,7 +3,7 @@ import argparse
 import json
 from pathlib import Path
 
-from prototype import default_socket, fixture_call, print_events, print_tasks, rpc_call
+from prototype import default_agent_socket, default_socket, fixture_call, print_events, print_tasks, rpc_call
 
 
 def print_task(task: dict) -> None:
@@ -31,7 +31,7 @@ def main() -> int:
         choices=["list", "show", "update", "plan", "summary", "events"],
     )
     parser.add_argument("--socket", type=Path, default=default_socket())
-    parser.add_argument("--agent-socket", type=Path)
+    parser.add_argument("--agent-socket", type=Path, default=default_agent_socket())
     parser.add_argument("--fixture", type=Path)
     parser.add_argument("--session-id")
     parser.add_argument("--task-id")
@@ -49,34 +49,38 @@ def main() -> int:
         if not args.session_id:
             raise SystemExit("--session-id is required for list/summary")
         result = rpc_call(
-            args.socket,
-            "task.list",
+            args.agent_socket,
+            "agent.task.list",
             {"session_id": args.session_id, "state": args.state, "limit": args.limit},
         )
     elif effective_command == "show":
         if not args.task_id:
             raise SystemExit("--task-id is required for show")
-        result = rpc_call(args.socket, "task.get", {"task_id": args.task_id})
+        result = rpc_call(
+            args.agent_socket,
+            "agent.task.get",
+            {"task_id": args.task_id, "event_limit": args.limit or 10},
+        )
     elif effective_command == "update":
         if not args.task_id:
             raise SystemExit("--task-id is required for update")
         if not args.state:
             raise SystemExit("--state is required for update")
         result = rpc_call(
-            args.socket,
-            "task.state.update",
+            args.agent_socket,
+            "agent.task.state.update",
             {"task_id": args.task_id, "new_state": args.state, "reason": args.reason},
         )
     elif effective_command == "plan":
         if not args.task_id:
             raise SystemExit("--task-id is required for plan")
-        result = rpc_call(args.socket, "task.plan.get", {"task_id": args.task_id})
+        result = rpc_call(args.agent_socket, "agent.task.plan.get", {"task_id": args.task_id})
     else:
         if not args.task_id:
             raise SystemExit("--task-id is required for events")
         result = rpc_call(
-            args.socket,
-            "task.events.list",
+            args.agent_socket,
+            "agent.task.events.list",
             {"task_id": args.task_id, "limit": args.limit or 10, "reverse": True},
         )
 
@@ -92,7 +96,7 @@ def main() -> int:
     elif command == "events" and not args.json:
         print_events(result)
     elif command in {"show", "update"} and not args.json:
-        print_task(result)
+        print_task(result.get("task", result))
     else:
         print(json.dumps(result, indent=2, ensure_ascii=False))
     return 0

@@ -74,18 +74,49 @@ def require_gtk_runtime():
     return Adw, GLib, Gtk
 
 
+def load_bridge_transport(socket_path: Path) -> dict | None:
+    if not socket_path.exists() or not socket_path.is_file():
+        return None
+    try:
+        payload = json.loads(socket_path.read_text(encoding="utf-8") or "{}")
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("transport") not in {"tcp", "mock-file"}:
+        return None
+    return payload
+
+
 def rpc_call(socket_path: Path, method: str, params: dict, timeout: float = 2.0) -> dict:
+    transport = load_bridge_transport(socket_path)
     payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-        client.settimeout(timeout)
-        client.connect(str(socket_path))
-        client.sendall(json.dumps(payload).encode("utf-8") + b"\n")
-        data = b""
-        while not data.endswith(b"\n"):
-            chunk = client.recv(65536)
-            if not chunk:
-                break
-            data += chunk
+    if transport is not None and transport.get("transport") == "tcp":
+        host = str(transport.get("host") or "127.0.0.1")
+        port = int(transport.get("port") or 0)
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
+            client.settimeout(timeout)
+            client.connect((host, port))
+            client.sendall(json.dumps(payload).encode("utf-8") + b"\n")
+            data = b""
+            while not data.endswith(b"\n"):
+                chunk = client.recv(65536)
+                if not chunk:
+                    break
+                data += chunk
+    else:
+        if not hasattr(socket, "AF_UNIX"):
+            raise RuntimeError(f"unix-domain-socket-unavailable:{socket_path}")
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.settimeout(timeout)
+            client.connect(str(socket_path))
+            client.sendall(json.dumps(payload).encode("utf-8") + b"\n")
+            data = b""
+            while not data.endswith(b"\n"):
+                chunk = client.recv(65536)
+                if not chunk:
+                    break
+                data += chunk
     response = json.loads(data.decode("utf-8"))
     if response.get("error"):
         raise RuntimeError(str(response["error"]))
@@ -539,3 +570,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

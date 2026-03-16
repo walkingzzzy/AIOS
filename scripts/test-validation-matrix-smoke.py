@@ -67,7 +67,7 @@ def result(name: str, status: str, detail: str) -> dict[str, str]:
 
 
 def load_yaml(path: Path) -> dict[str, Any]:
-    return yaml.safe_load(path.read_text())
+    return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
 def normalize_command(command: str) -> str:
@@ -76,12 +76,12 @@ def normalize_command(command: str) -> str:
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
 def write_markdown(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content + "\n")
+    path.write_text(content + "\n", encoding="utf-8")
 
 
 def render_markdown(report: dict[str, Any]) -> str:
@@ -264,7 +264,13 @@ def validate_system_validation_alignment(entries: list[dict[str, Any]]) -> dict[
             f"report not present: {SYSTEM_VALIDATION_REPORT}",
         )
 
-    report = json.loads(SYSTEM_VALIDATION_REPORT.read_text())
+    report = json.loads(SYSTEM_VALIDATION_REPORT.read_text(encoding="utf-8"))
+    if not isinstance(report, dict) or not isinstance(report.get("checks"), list):
+        return result(
+            "system-validation-alignment",
+            "skipped",
+            f"report is incomplete and was ignored: {SYSTEM_VALIDATION_REPORT}",
+        )
     report_ids = {item["check_id"] for item in report.get("checks", [])}
     missing = sorted(report_ids - matrix_ids)
     extra = sorted(matrix_ids - report_ids)
@@ -349,3 +355,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

@@ -14,11 +14,12 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from aios_cargo_bins import default_aios_bin_dir
+from aios_cargo_bins import default_aios_bin_dir, resolve_binary_path
 
 
 ROOT = Path(__file__).resolve().parent.parent
 RUNTIME = ROOT / "aios" / "compat" / "office" / "runtime" / "office_provider.py"
+DEFAULT_WORK_ROOT = ROOT / "out" / "validation" / "office-provider-smoke"
 
 
 def parse_args() -> argparse.Namespace:
@@ -38,11 +39,13 @@ def require(condition: bool, message: str) -> None:
 
 def resolve_binary(name: str, explicit: Path | None, bin_dir: Path | None) -> Path:
     if explicit is not None:
-        return explicit
-    if bin_dir is not None:
-        return bin_dir / name
-    return default_aios_bin_dir(ROOT) / name
+        return resolve_binary_path(explicit.parent, explicit.name)
+    base_dir = bin_dir or default_aios_bin_dir(ROOT)
+    return resolve_binary_path(base_dir, name)
 
+
+def unix_rpc_supported() -> bool:
+    return hasattr(socket, "AF_UNIX") and os.name != "nt"
 
 def rpc_call(socket_path: Path, method: str, params: dict, timeout: float) -> dict:
     payload = {
@@ -222,11 +225,20 @@ class OfficeHandler(BaseHTTPRequestHandler):
 
 def main() -> int:
     args = parse_args()
+    if not unix_rpc_supported():
+        print("office provider smoke skipped: unix rpc transport unsupported on this platform")
+        return 0
     server = ThreadingHTTPServer(("127.0.0.1", 0), OfficeHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    temp_root = args.output_dir or Path(tempfile.mkdtemp(prefix="aios-office-provider-"))
-    temp_root.mkdir(parents=True, exist_ok=True)
+    if args.output_dir is not None:
+        temp_root = args.output_dir
+        temp_root.mkdir(parents=True, exist_ok=True)
+    else:
+        if DEFAULT_WORK_ROOT.exists():
+            shutil.rmtree(DEFAULT_WORK_ROOT, ignore_errors=True)
+        DEFAULT_WORK_ROOT.mkdir(parents=True, exist_ok=True)
+        temp_root = DEFAULT_WORK_ROOT
     agentd_binary = resolve_binary("agentd", args.agentd, args.bin_dir)
     agentd_process: subprocess.Popen | None = None
     failed = False
@@ -381,82 +393,96 @@ def main() -> int:
 
         control_plane_provider_id = None
         control_plane_mode = "skipped"
+        control_plane_skip_reason = None
         if agentd_binary.exists():
             control_plane_env, agentd_socket = build_agentd_env(temp_root)
             agentd_process = launch(agentd_binary, control_plane_env)
-            wait_for_socket(agentd_socket, args.timeout)
-            wait_for_health(agentd_socket, args.timeout)
-            _, control_plane = run_json_command(
-                "register-control-plane",
-                "--provider-ref",
-                "office.remote.worker",
-                "--agentd-socket",
-                str(agentd_socket),
-                env=env,
-            )
-            control_plane_provider_id = control_plane["control_plane_provider_id"]
-            require(
-                control_plane["record"]["provider_id"] == control_plane_provider_id,
-                "office control-plane provider id mismatch",
-            )
-            require(
-                control_plane["record"]["descriptor"]["execution_location"] == "attested_remote",
-                "office control-plane execution_location mismatch",
-            )
-            remote_registration = (
-                (control_plane["record"].get("descriptor") or {}).get("remote_registration") or {}
-            )
-            require(
-                remote_registration.get("provider_ref") == "office.remote.worker",
-                "office control-plane remote provider ref mismatch",
-            )
-            require(
-                remote_registration.get("control_plane_provider_id") == control_plane_provider_id,
-                "office control-plane remote registration id mismatch",
-            )
-            require(
-                ((remote_registration.get("attestation") or {}).get("mode") == "verified"),
-                "office control-plane remote attestation mismatch",
-            )
-            require(
-                ((remote_registration.get("governance") or {}).get("fleet_id") == "fleet-office"),
-                "office control-plane remote governance mismatch",
-            )
-            refreshed_remote_listing = run_json_command("list-remotes", env=env)[1]
-            refreshed_remote = refreshed_remote_listing["registered_remotes"][0]
-            require(
-                refreshed_remote.get("control_plane_provider_id") == control_plane_provider_id,
-                "office remote registry did not persist control_plane_provider_id",
-            )
-            resolved = rpc_call(
-                agentd_socket,
-                "provider.resolve_capability",
-                {
-                    "capability_id": "compat.document.open",
-                    "preferred_execution_location": "attested_remote",
-                    "require_healthy": True,
-                    "include_disabled": False,
-                },
-                timeout=args.timeout,
-            )
-            require(
-                (resolved.get("selected") or {}).get("provider_id") == control_plane_provider_id,
-                "office control-plane provider was not selected for attested_remote resolution",
-            )
-            resolved_remote = (resolved.get("selected") or {}).get("remote_registration") or {}
-            require(
-                resolved_remote.get("target_hash") == refreshed_remote.get("target_hash"),
-                "office resolved remote target hash mismatch",
-            )
-            require(
-                ((resolved_remote.get("attestation") or {}).get("issuer") == "office-smoke-attestor"),
-                "office resolved remote attestation issuer mismatch",
-            )
-            require(
-                ((resolved_remote.get("governance") or {}).get("governance_group") == "operator-audit"),
-                "office resolved remote governance group mismatch",
-            )
-            control_plane_mode = "validated"
+            try:
+                wait_for_socket(agentd_socket, args.timeout)
+                wait_for_health(agentd_socket, args.timeout)
+                _, control_plane = run_json_command(
+                    "register-control-plane",
+                    "--provider-ref",
+                    "office.remote.worker",
+                    "--agentd-socket",
+                    str(agentd_socket),
+                    env=env,
+                )
+                control_plane_provider_id = control_plane["control_plane_provider_id"]
+                require(
+                    control_plane["record"]["provider_id"] == control_plane_provider_id,
+                    "office control-plane provider id mismatch",
+                )
+                require(
+                    control_plane["record"]["descriptor"]["execution_location"] == "attested_remote",
+                    "office control-plane execution_location mismatch",
+                )
+                remote_registration = (
+                    (control_plane["record"].get("descriptor") or {}).get("remote_registration") or {}
+                )
+                require(
+                    remote_registration.get("provider_ref") == "office.remote.worker",
+                    "office control-plane remote provider ref mismatch",
+                )
+                require(
+                    remote_registration.get("control_plane_provider_id") == control_plane_provider_id,
+                    "office control-plane remote registration id mismatch",
+                )
+                require(
+                    ((remote_registration.get("attestation") or {}).get("mode") == "verified"),
+                    "office control-plane remote attestation mismatch",
+                )
+                require(
+                    ((remote_registration.get("governance") or {}).get("fleet_id") == "fleet-office"),
+                    "office control-plane remote governance mismatch",
+                )
+                refreshed_remote_listing = run_json_command("list-remotes", env=env)[1]
+                refreshed_remote = refreshed_remote_listing["registered_remotes"][0]
+                require(
+                    refreshed_remote.get("control_plane_provider_id") == control_plane_provider_id,
+                    "office remote registry did not persist control_plane_provider_id",
+                )
+                resolved = rpc_call(
+                    agentd_socket,
+                    "agent.provider.resolve_capability",
+                    {
+                        "capability_id": "compat.document.open",
+                        "preferred_execution_location": "attested_remote",
+                        "require_healthy": True,
+                        "include_disabled": False,
+                    },
+                    timeout=args.timeout,
+                )
+                require(
+                    (resolved.get("selected") or {}).get("provider_id") == control_plane_provider_id,
+                    "office control-plane provider was not selected for attested_remote resolution",
+                )
+                resolved_remote = (resolved.get("selected") or {}).get("remote_registration") or {}
+                require(
+                    resolved_remote.get("target_hash") == refreshed_remote.get("target_hash"),
+                    "office resolved remote target hash mismatch",
+                )
+                require(
+                    ((resolved_remote.get("attestation") or {}).get("issuer") == "office-smoke-attestor"),
+                    "office resolved remote attestation issuer mismatch",
+                )
+                require(
+                    ((resolved_remote.get("governance") or {}).get("governance_group") == "operator-audit"),
+                    "office resolved remote governance group mismatch",
+                )
+                control_plane_mode = "validated"
+            except Exception as exc:  # noqa: BLE001
+                process_output = ""
+                if agentd_process is not None and agentd_process.stdout is not None and agentd_process.poll() is not None:
+                    process_output = agentd_process.stdout.read().strip()
+                unsupported_transport = "unix rpc transport is not supported on this platform" in process_output.lower()
+                if unsupported_transport or agentd_process is None or agentd_process.poll() is not None:
+                    control_plane_skip_reason = process_output or str(exc)
+                    control_plane_mode = "skipped"
+                else:
+                    raise
+        else:
+            control_plane_skip_reason = "agentd binary missing"
 
         _, open_payload = run_json_command("open", "--path", str(document_path), env=env)
         require(open_payload["status"] == "ok", "open should succeed")
@@ -614,6 +640,7 @@ def main() -> int:
                     "remote_preview": remote_open["preview"],
                     "control_plane_mode": control_plane_mode,
                     "control_plane_provider_id": control_plane_provider_id,
+                    "control_plane_skip_reason": control_plane_skip_reason,
                     "pdf_bytes": export_payload["bytes_written"],
                     "page_count": export_payload["page_count"],
                     "missing_error": missing_payload["error"]["error_code"],

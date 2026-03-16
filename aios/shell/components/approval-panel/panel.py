@@ -6,7 +6,7 @@ import json
 import time
 from pathlib import Path
 
-from prototype import default_socket, fixture_call, rpc_call
+from prototype import default_agent_socket, default_socket, fixture_call, rpc_call
 
 
 STATUS_TONES = {
@@ -22,11 +22,15 @@ def tone_for(status: str | None) -> str:
     return STATUS_TONES.get(status, "neutral")
 
 
-def list_approvals(socket_path: Path, fixture: Path | None, session_id: str | None, task_id: str | None, status: str | None) -> dict:
+def list_approvals(agent_socket_path: Path, fixture: Path | None, session_id: str | None, task_id: str | None, status: str | None) -> dict:
     if fixture is not None:
         args = argparse.Namespace(session_id=session_id, task_id=task_id, status=status, approval_ref=None)
         return fixture_call(fixture, "list", args)
-    return rpc_call(socket_path, "approval.list", {"session_id": session_id, "task_id": task_id, "status": status})
+    return rpc_call(
+        agent_socket_path,
+        "agent.approval.list",
+        {"session_id": session_id, "task_id": task_id, "status": status},
+    )
 
 
 def resolve_approval(socket_path: Path, fixture: Path | None, approval_ref: str, status: str, resolver: str, reason: str | None) -> dict:
@@ -35,9 +39,22 @@ def resolve_approval(socket_path: Path, fixture: Path | None, approval_ref: str,
         return fixture_call(fixture, "resolve", args)
     return rpc_call(
         socket_path,
-        "approval.resolve",
+        "agent.approval.resolve",
         {"approval_ref": approval_ref, "status": status, "resolver": resolver, "reason": reason},
     )
+
+
+def load_approvals_with_fallback(
+    agent_socket_path: Path,
+    fixture: Path | None,
+    session_id: str | None,
+    task_id: str | None,
+    status: str | None,
+) -> tuple[dict, str | None]:
+    try:
+        return list_approvals(agent_socket_path, fixture, session_id, task_id, status), None
+    except Exception as error:
+        return {"approvals": []}, str(error)
 
 
 def build_summary(approvals: list[dict]) -> dict:
@@ -51,7 +68,12 @@ def build_summary(approvals: list[dict]) -> dict:
     return {"total": len(approvals), "by_status": by_status, "by_lane": by_lane}
 
 
-def build_model(result: dict, session_id: str | None, task_id: str | None) -> dict:
+def build_model(
+    result: dict,
+    session_id: str | None,
+    task_id: str | None,
+    data_source_error: str | None = None,
+) -> dict:
     approvals = result.get("approvals", [])
     summary = build_summary(approvals)
     focus = next((item for item in approvals if item.get("status") == "pending"), approvals[0] if approvals else None)
@@ -90,7 +112,7 @@ def build_model(result: dict, session_id: str | None, task_id: str | None) -> di
     return {
         "component_id": "approval-panel",
         "panel_id": "approval-panel-shell",
-        "panel_kind": "shell-panel-skeleton",
+        "panel_kind": "shell-panel",
         "header": {
             "title": "Approval Panel",
             "subtitle": f"session {session_id or '-'} · task {task_id or '-'}",
@@ -126,6 +148,8 @@ def build_model(result: dict, session_id: str | None, task_id: str | None) -> di
             "focus_approval_ref": (focus or {}).get("approval_ref"),
             "approval_count": len(approvals),
             "status_summary": summary["by_status"],
+            "data_source_status": "ready" if data_source_error is None else "fallback-empty",
+            "data_source_error": data_source_error,
         },
     }
 
@@ -136,6 +160,11 @@ def render_text(panel: dict) -> str:
     lines.append(f"{header['title']} [{header['status']}]")
     lines.append(header["subtitle"])
     lines.append("badges: " + ", ".join(f"{item['label']}: {item['value']}" for item in panel["badges"]))
+    meta = panel.get("meta") or {}
+    if meta.get("data_source_status") != "ready":
+        lines.append(f"source: {meta.get('data_source_status')}")
+        if meta.get("data_source_error"):
+            lines.append(f"source_error: {meta['data_source_error']}")
     if panel["actions"]:
         lines.append("actions: " + ", ".join(action["label"] for action in panel["actions"] if action.get("enabled", True)))
     for section in panel["sections"]:
@@ -153,9 +182,10 @@ def render_text(panel: dict) -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="AIOS approval panel skeleton")
+    parser = argparse.ArgumentParser(description="AIOS approval panel")
     parser.add_argument("command", nargs="?", default="render", choices=["render", "model", "action", "watch"])
     parser.add_argument("--socket", type=Path, default=default_socket())
+    parser.add_argument("--agent-socket", type=Path, default=default_agent_socket())
     parser.add_argument("--fixture", type=Path)
     parser.add_argument("--session-id")
     parser.add_argument("--task-id")
@@ -180,7 +210,7 @@ def main() -> int:
                 target_status = "rejected"
             else:
                 raise SystemExit("--status is required for custom action")
-        result = resolve_approval(args.socket, args.fixture, args.approval_ref, target_status, args.resolver, args.reason)
+        result = resolve_approval(args.agent_socket, args.fixture, args.approval_ref, target_status, args.resolver, args.reason)
         result["target_component"] = "task-surface" if target_status == "approved" else "approval-panel"
         print(json.dumps(result, indent=2, ensure_ascii=False))
         return 0
@@ -188,8 +218,14 @@ def main() -> int:
     if args.command == "watch":
         iterations = max(1, args.iterations)
         for index in range(iterations):
-            result = list_approvals(args.socket, args.fixture, args.session_id, args.task_id, args.status)
-            model = build_model(result, args.session_id, args.task_id)
+            result, data_source_error = load_approvals_with_fallback(
+                args.agent_socket,
+                args.fixture,
+                args.session_id,
+                args.task_id,
+                args.status,
+            )
+            model = build_model(result, args.session_id, args.task_id, data_source_error)
             if args.json:
                 print(json.dumps(model, indent=2, ensure_ascii=False))
             else:
@@ -200,8 +236,14 @@ def main() -> int:
                 time.sleep(args.interval)
         return 0
 
-    result = list_approvals(args.socket, args.fixture, args.session_id, args.task_id, args.status)
-    model = build_model(result, args.session_id, args.task_id)
+    result, data_source_error = load_approvals_with_fallback(
+        args.agent_socket,
+        args.fixture,
+        args.session_id,
+        args.task_id,
+        args.status,
+    )
+    model = build_model(result, args.session_id, args.task_id, data_source_error)
     if args.command == "model" or args.json:
         print(json.dumps(model, indent=2, ensure_ascii=False))
     else:
@@ -211,3 +253,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

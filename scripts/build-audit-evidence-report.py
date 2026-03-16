@@ -217,6 +217,46 @@ def merge_domain_configs(current: dict[str, Any], discovered: dict[str, Any]) ->
     return merged
 
 
+def discover_real_machine_vendor_runtime_evidence(index_paths: list[Path]) -> list[Path]:
+    evidence_paths: list[Path] = []
+    seen: set[str] = set()
+
+    def add(path_text: str | None) -> None:
+        if not path_text:
+            return
+        candidate = Path(path_text)
+        normalized = str(candidate)
+        if normalized in seen or not candidate.is_file():
+            return
+        seen.add(normalized)
+        evidence_paths.append(candidate)
+
+    for index_path in index_paths:
+        payload = read_optional_json(index_path)
+        if not isinstance(payload, dict):
+            continue
+        artifacts = payload.get("artifacts")
+        if isinstance(artifacts, dict):
+            values = artifacts.get("vendor_runtime_evidence")
+            if isinstance(values, list):
+                for item in values:
+                    if isinstance(item, str):
+                        add(item)
+        device_runtime = payload.get("device_runtime")
+        if not isinstance(device_runtime, dict):
+            continue
+        vendor_runtime = device_runtime.get("vendor_runtime")
+        if not isinstance(vendor_runtime, dict):
+            continue
+        values = vendor_runtime.get("evidence_paths")
+        if isinstance(values, list):
+            for item in values:
+                if isinstance(item, str):
+                    add(item)
+
+    return evidence_paths
+
+
 def discover_release_signoff_domain() -> dict[str, Any]:
     validation_root = ROOT / "out" / "validation"
     platform_media_root = ROOT / "out" / "platform-media"
@@ -230,6 +270,7 @@ def discover_release_signoff_domain() -> dict[str, Any]:
         for path in platform_media_root.glob("*/bringup/reports/hardware-validation-report.md")
         if path.is_file()
     )
+    real_machine_vendor_runtime = discover_real_machine_vendor_runtime_evidence(real_machine_indexes)
 
     notes = [
         "release-signoff domain stitches validation, governance, release gate, and optional nominated-machine hardware sign-off evidence",
@@ -241,6 +282,14 @@ def discover_release_signoff_domain() -> dict[str, Any]:
     else:
         notes.append(
             "no real-machine hardware validation evidence discovered under out/platform-media/*/bringup/reports"
+        )
+    if real_machine_vendor_runtime:
+        notes.append(
+            f"discovered {len(real_machine_vendor_runtime)} vendor runtime evidence artifact(s) referenced by real-machine sign-off indexes"
+        )
+    else:
+        notes.append(
+            "no vendor runtime evidence artifacts were referenced by discovered real-machine hardware validation indexes"
         )
 
     return {
@@ -268,6 +317,13 @@ def discover_release_signoff_domain() -> dict[str, Any]:
                         "path": str(path),
                     }
                     for path in real_machine_indexes
+                ],
+                *[
+                    {
+                        "kind": "real_machine_vendor_runtime_evidence",
+                        "path": str(path),
+                    }
+                    for path in real_machine_vendor_runtime
                 ],
             ],
             "text_files": [
@@ -1025,7 +1081,27 @@ def main() -> int:
 
     approval_keys = {"approval_id", "approval_ref"}
     provider_keys = {"provider_id", "selected_provider_id"}
-    artifact_keys = {"artifact_path"}
+    artifact_keys = {
+        "artifact_path",
+        "platform_media_manifest",
+        "installer_image",
+        "recovery_image",
+        "system_image",
+        "installer_report",
+        "vendor_firmware_hook_report",
+        "evaluator_json",
+        "evaluator_markdown",
+        "support_matrix",
+        "known_limitations",
+        "installer_log",
+        "recovery_log",
+        "device_backend_state_artifact",
+        "vendor_runtime_evidence",
+        "evidence_paths",
+        "photos",
+        "boot_evidence_report",
+        "boot_evidence_markdown",
+    }
     capability_keys = {"capability_id", "operation"}
     action_keys = {"action_id"}
     status_keys = {
@@ -1034,6 +1110,7 @@ def main() -> int:
         "validation_status",
         "gate_status",
         "real_machine_signoff_status",
+        "vendor_runtime_signoff_status",
         "readiness",
     }
     event_kind_keys = {"kind"}

@@ -12,7 +12,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from aios_cargo_bins import default_aios_bin_dir
+from aios_cargo_bins import default_aios_bin_dir, resolve_binary_path
 
 
 def parse_args() -> argparse.Namespace:
@@ -35,10 +35,11 @@ def repo_root() -> Path:
 
 def resolve_binary(name: str, explicit: Path | None, bin_dir: Path | None) -> Path:
     if explicit is not None:
-        return explicit
+        return resolve_binary_path(explicit.parent, explicit.name)
     if bin_dir is not None:
-        return bin_dir / name
-    return default_aios_bin_dir(repo_root()) / name
+        return resolve_binary_path(bin_dir, name)
+    return resolve_binary_path(default_aios_bin_dir(repo_root()), name)
+
 
 
 def ensure_binary(path: Path, package: str) -> None:
@@ -69,6 +70,10 @@ def rpc_call(socket_path: Path, method: str, params: dict, timeout: float) -> di
     if response.get("error"):
         raise RuntimeError(f"RPC {method} failed: {response['error']}")
     return response["result"]
+
+
+def unix_rpc_supported() -> bool:
+    return hasattr(socket, "AF_UNIX") and os.name != "nt"
 
 
 def wait_for_socket(path: Path, timeout: float) -> None:
@@ -208,6 +213,9 @@ def make_env(root: Path) -> dict[str, str]:
 
 def main() -> int:
     args = parse_args()
+    if not unix_rpc_supported():
+        print("team-b control-plane smoke skipped: unix rpc transport unsupported on this platform")
+        return 0
     binaries = {
         "sessiond": resolve_binary("sessiond", args.sessiond, args.bin_dir),
         "policyd": resolve_binary("policyd", args.policyd, args.bin_dir),
@@ -288,8 +296,8 @@ def main() -> int:
         require(allowed["runtime_preview"]["backend_id"] == "local-cpu", "runtime preview should use local cpu")
 
         task_events = rpc_call(
-            sessiond_socket,
-            "task.events.list",
+            agentd_socket,
+            "agent.task.events.list",
             {
                 "task_id": allowed_task_id,
                 "limit": 10,
@@ -315,8 +323,8 @@ def main() -> int:
             "semantic memory should store runtime primary capability",
         )
         evidence = rpc_call(
-            sessiond_socket,
-            "session.evidence.get",
+            agentd_socket,
+            "agent.session.evidence.get",
             {
                 "session_id": session_id,
                 "limit": 20,
@@ -364,8 +372,8 @@ def main() -> int:
         require(bool(approval_target_hash), "high-risk approval flow should bind portal target_hash")
 
         approvals = rpc_call(
-            policyd_socket,
-            "approval.list",
+            agentd_socket,
+            "agent.approval.list",
             {
                 "session_id": session_id,
                 "task_id": approval_task_id,
@@ -376,8 +384,8 @@ def main() -> int:
         require(any(item["approval_ref"] == approval_ref for item in approvals), "pending approval not found")
 
         approved = rpc_call(
-            policyd_socket,
-            "approval.resolve",
+            agentd_socket,
+            "agent.approval.resolve",
             {
                 "approval_ref": approval_ref,
                 "status": "approved",
@@ -388,9 +396,176 @@ def main() -> int:
         )
         require(approved["status"] == "approved", "approval should resolve to approved")
 
+        resumed = rpc_call(
+            agentd_socket,
+            "agent.task.resume",
+            {
+                "task_id": approval_task_id,
+                "approval_ref": approval_ref,
+            },
+            timeout=args.timeout,
+        )
+        require(resumed["task"]["state"] == "completed", "agent.task.resume should complete the approved task")
+        require(
+            resumed["execution_token"].get("approval_ref") == approval_ref,
+            "agent.task.resume should issue an approval-bound execution token",
+        )
+        require(
+            resumed["provider_execution"]["status"] == "completed",
+            "agent.task.resume should execute the provider successfully",
+        )
+        require(
+            resumed["provider_execution"]["result"].get("status") == "deleted",
+            "agent.task.resume should delete the approved target",
+        )
+        require(not danger_path.exists(), "agent.task.resume should remove the approved target")
+
+        agent_task_detail = rpc_call(
+            agentd_socket,
+            "agent.task.get",
+            {"task_id": approval_task_id, "event_limit": 10},
+            timeout=args.timeout,
+        )
+        require(agent_task_detail["task"]["task_id"] == approval_task_id, "agent.task.get should return the requested task")
+        require(
+            agent_task_detail.get("plan", {}).get("candidate_capabilities", [None])[0] == "system.file.bulk_delete",
+            "agent.task.get should include the primary delete capability",
+        )
+        require(
+            any(item.get("approval_ref") == approval_ref for item in agent_task_detail.get("approvals", [])),
+            "agent.task.get should include task approvals",
+        )
+        require(
+            (agent_task_detail.get("provider_execution") or {}).get("status") == "completed",
+            "agent.task.get should expose provider execution outcome",
+        )
+
+        agent_task_list = rpc_call(
+            agentd_socket,
+            "agent.task.list",
+            {"session_id": session_id, "limit": 20},
+            timeout=args.timeout,
+        )
+        require(
+            any(item["task_id"] == approval_task_id for item in agent_task_list.get("tasks", [])),
+            "agent.task.list should include the approved task",
+        )
+
+        agent_task_events = rpc_call(
+            agentd_socket,
+            "agent.task.events.list",
+            {"task_id": approval_task_id, "limit": 10, "reverse": True},
+            timeout=args.timeout,
+        )
+        require(
+            any(event["to_state"] == "completed" for event in agent_task_events.get("events", [])),
+            "agent.task.events.list should include completed transition",
+        )
+
+        agent_task_plan = rpc_call(
+            agentd_socket,
+            "agent.task.plan.get",
+            {"task_id": approval_task_id},
+            timeout=args.timeout,
+        )
+        require(agent_task_plan["task_id"] == approval_task_id, "agent.task.plan.get should return the task plan")
+
+        agent_session_evidence = rpc_call(
+            agentd_socket,
+            "agent.session.evidence.get",
+            {"session_id": session_id, "limit": 20},
+            timeout=args.timeout,
+        )
+        require(
+            any(item["task_id"] == approval_task_id for item in agent_session_evidence.get("tasks", [])),
+            "agent.session.evidence.get should include the resumed task",
+        )
+
+        agent_session_export = rpc_call(
+            agentd_socket,
+            "agent.session.evidence.export",
+            {"session_id": session_id, "limit": 20, "reason": "team-b-smoke"},
+            timeout=args.timeout,
+        )
+        session_export_path = Path(agent_session_export["export_path"])
+        require(session_export_path.exists(), "agent.session.evidence.export should write an export bundle")
+        session_export_payload = json.loads(session_export_path.read_text())
+        require(
+            session_export_payload["counts"]["task_count"] >= 2,
+            "agent.session.evidence.export should retain task counts",
+        )
+        require(
+            any(item["task_id"] == approval_task_id for item in session_export_payload["evidence"].get("tasks", [])),
+            "agent.session.evidence.export should retain the resumed task",
+        )
+
+
+        agent_approval = rpc_call(
+            agentd_socket,
+            "agent.approval.get",
+            {"approval_ref": approval_ref},
+            timeout=args.timeout,
+        )
+        require(agent_approval["status"] == "approved", "agent.approval.get should expose approval status")
+
+        agent_approval_list = rpc_call(
+            agentd_socket,
+            "agent.approval.list",
+            {"session_id": session_id, "task_id": approval_task_id},
+            timeout=args.timeout,
+        )
+        require(
+            any(item["approval_ref"] == approval_ref for item in agent_approval_list.get("approvals", [])),
+            "agent.approval.list should include the approved record",
+        )
+
+        agent_portal_handles = rpc_call(
+            agentd_socket,
+            "agent.portal.handle.list",
+            {"session_id": session_id},
+            timeout=args.timeout,
+        )
+        require(
+            any(
+                item["handle_id"] == needs_approval["portal_handle"]["handle_id"]
+                for item in agent_portal_handles.get("handles", [])
+            ),
+            "agent.portal.handle.list should include the destructive task handle",
+        )
+
+        agent_audit = rpc_call(
+            agentd_socket,
+            "agent.audit.query",
+            {"session_id": session_id, "task_id": approval_task_id, "limit": 10, "reverse": True},
+            timeout=args.timeout,
+        )
+        require(
+            any(item["decision"] == "approval-approved" for item in agent_audit.get("entries", [])),
+            "agent.audit.query should expose approval-approved audit entries",
+        )
+
+        agent_audit_export = rpc_call(
+            agentd_socket,
+            "agent.audit.export",
+            {"session_id": session_id, "task_id": approval_task_id, "limit": 10, "reverse": True, "reason": "team-b-smoke"},
+            timeout=args.timeout,
+        )
+        audit_export_path = Path(agent_audit_export["export_path"])
+        require(audit_export_path.exists(), "agent.audit.export should write an export bundle")
+        audit_export_payload = json.loads(audit_export_path.read_text())
+        require(
+            any(item["decision"] == "approval-approved" for item in audit_export_payload.get("entries", [])),
+            "agent.audit.export should retain approval-approved audit entries",
+        )
+        require(
+            audit_export_payload["audit_store"]["active_segment_path"] == env["AIOS_POLICYD_AUDIT_LOG"],
+            "agent.audit.export should retain policyd active segment path",
+        )
+
+
         token = rpc_call(
-            policyd_socket,
-            "policy.token.issue",
+            agentd_socket,
+            "agent.policy.token.issue",
             {
                 "user_id": "user-team-b",
                 "session_id": session_id,
@@ -405,15 +580,15 @@ def main() -> int:
             timeout=args.timeout,
         )
         verified = rpc_call(
-            policyd_socket,
-            "policy.token.verify",
+            agentd_socket,
+            "agent.policy.token.verify",
             {"token": token, "target_hash": approval_target_hash},
             timeout=args.timeout,
         )
         require(verified["valid"] is True, "issued token should verify")
         consumed = rpc_call(
-            policyd_socket,
-            "policy.token.verify",
+            agentd_socket,
+            "agent.policy.token.verify",
             {"token": token, "target_hash": approval_target_hash, "consume": True},
             timeout=args.timeout,
         )
@@ -421,8 +596,8 @@ def main() -> int:
         require(consumed["consumed"] is True, "high-risk token should report consumed=true")
 
         reused = rpc_call(
-            policyd_socket,
-            "policy.token.verify",
+            agentd_socket,
+            "agent.policy.token.verify",
             {"token": token, "target_hash": approval_target_hash, "consume": True},
             timeout=args.timeout,
         )
@@ -433,8 +608,8 @@ def main() -> int:
         )
 
         audit_entries = rpc_call(
-            policyd_socket,
-            "policy.audit.query",
+            agentd_socket,
+            "agent.audit.query",
             {
                 "session_id": session_id,
                 "task_id": approval_task_id,

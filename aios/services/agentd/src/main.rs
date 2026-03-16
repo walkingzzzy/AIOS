@@ -1,5 +1,6 @@
 mod clients;
 mod config;
+mod execution;
 mod planner;
 mod portal;
 mod providers;
@@ -44,6 +45,14 @@ impl AppState {
                         .map(|path| path.display().to_string())
                         .collect::<Vec<_>>()
                         .join(":")
+                ),
+                format!(
+                    "system_intent_provider_socket={}",
+                    self.config.system_intent_provider_socket.display()
+                ),
+                format!(
+                    "system_files_provider_socket={}",
+                    self.config.system_files_provider_socket.display()
                 ),
             ],
         }

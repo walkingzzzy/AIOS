@@ -12,7 +12,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from aios_cargo_bins import default_aios_bin_dir
+from aios_cargo_bins import default_aios_bin_dir, resolve_binary_path
 
 
 def parse_args() -> argparse.Namespace:
@@ -33,10 +33,10 @@ def repo_root() -> Path:
 
 def resolve_binary(name: str, explicit: Path | None, bin_dir: Path | None) -> Path:
     if explicit is not None:
-        return explicit
+        return resolve_binary_path(explicit.parent, explicit.name)
     if bin_dir is not None:
-        return bin_dir / name
-    return default_aios_bin_dir(repo_root()) / name
+        return resolve_binary_path(bin_dir, name)
+    return resolve_binary_path(default_aios_bin_dir(repo_root()), name)
 
 
 def ensure_binaries(paths: dict[str, Path]) -> None:
@@ -71,6 +71,10 @@ def rpc_response(socket_path: Path, method: str, params: dict, timeout: float) -
     return json.loads(data.decode("utf-8"))
 
 
+def unix_rpc_supported() -> bool:
+    return hasattr(socket, "AF_UNIX") and os.name != "nt"
+
+
 def wait_for_socket(path: Path, timeout: float) -> None:
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -98,7 +102,7 @@ def wait_for_provider_health(socket_path: Path, provider_id: str, expected_statu
     while time.time() < deadline:
         result = rpc_call(
             socket_path,
-            "provider.health.get",
+            "agent.provider.health.get",
             {"provider_id": provider_id},
             timeout=min(timeout, 1.5),
         )
@@ -207,6 +211,9 @@ def make_env(root: Path) -> dict[str, str]:
 
 def main() -> int:
     args = parse_args()
+    if not unix_rpc_supported():
+        print("system intent provider smoke skipped: unix rpc transport unsupported on this platform")
+        return 0
     binaries = {
         "sessiond": resolve_binary("sessiond", args.sessiond, args.bin_dir),
         "policyd": resolve_binary("policyd", args.policyd, args.bin_dir),
@@ -246,8 +253,8 @@ def main() -> int:
 
         intent = "Open /tmp/report.md, summarize the findings, then decide whether manual review is needed"
         session_result = rpc_call(
-            sockets["sessiond"],
-            "session.create",
+            sockets["agentd"],
+            "agent.session.create",
             {"user_id": "system-intent-smoke", "metadata": {"initial_intent": intent}},
             timeout=args.timeout,
         )
@@ -263,8 +270,8 @@ def main() -> int:
             "next_action": "inspect-bound-target",
         }
         rpc_call(
-            sockets["sessiond"],
-            "task.plan.put",
+            sockets["agentd"],
+            "agent.task.plan.put",
             {"task_id": task_id, "plan": plan},
             timeout=args.timeout,
         )
@@ -312,8 +319,8 @@ def main() -> int:
 
         heuristic_intent = "Open /tmp/notes.txt and summarize the result locally"
         heuristic_session = rpc_call(
-            sockets["sessiond"],
-            "session.create",
+            sockets["agentd"],
+            "agent.session.create",
             {"user_id": "system-intent-smoke", "metadata": {"initial_intent": heuristic_intent}},
             timeout=args.timeout,
         )

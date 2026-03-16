@@ -32,17 +32,17 @@ def require(condition: bool, message: str) -> None:
 
 
 def load_yaml(path: Path) -> dict[str, Any]:
-    return yaml.safe_load(path.read_text()) or {}
+    return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
 def write_markdown(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content + "\n")
+    path.write_text(content + "\n", encoding="utf-8")
 
 
 def result(name: str, detail: str) -> dict[str, str]:
@@ -109,7 +109,7 @@ def validate_nominations(payload: dict[str, Any]) -> list[dict[str, str]]:
 
 def validate_doc(doc_path: Path) -> list[dict[str, str]]:
     require(doc_path.exists(), f"doc missing: {doc_path}")
-    text = doc_path.read_text()
+    text = doc_path.read_text(encoding="utf-8")
     for needle in [
         "`P5-HW-001`",
         "`framework-laptop-13-amd-7040`",

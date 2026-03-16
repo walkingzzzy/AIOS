@@ -41,8 +41,16 @@ jobs:
             scripts/test-gpu-backend-support-matrix-smoke.py \
             scripts/test-tier1-machine-nominations-smoke.py \
             scripts/build-default-hardware-evidence-index.py \
+            scripts/test-release-gate-smoke.py \
+            scripts/collect-aios-device-validation.py \
+            scripts/render-aios-hardware-validation-report.py \
+            scripts/build-aios-platform-media.py \
+            scripts/test-device-validation-collector-smoke.py \
+            scripts/test-hardware-validation-report-smoke.py \
+            scripts/test-platform-media-smoke.py \
             scripts/test-image-build-strategy-smoke.py \
             scripts/test-ci-artifact-governance-smoke.py \
+            scripts/test-compat-registration-contract-smoke.py \
             scripts/check-release-gate.py \
             scripts/build-governance-evidence-index.py \
             scripts/build-observability-correlation-report.py \
@@ -74,12 +82,20 @@ jobs:
             scripts/test-runtimed-backend-smoke.py \
             scripts/test-runtimed-worker-contract-smoke.py \
             scripts/test-runtimed-managed-worker-smoke.py \
+            scripts/test-runtimed-events-smoke.py \
             scripts/test-shell-panels-smoke.py \
             scripts/test-shellctl-smoke.py \
             scripts/test-shell-control-clients-live-smoke.py \
             scripts/test-shell-session-policy-registry-flow-smoke.py \
             scripts/test-shell-desktop-smoke.py \
             scripts/test-shell-session-smoke.py \
+            scripts/test-shell-panel-bridge-service-smoke.py \
+            scripts/test-shell-panel-clients-smoke.py \
+            scripts/test-shell-panel-embedding-live-smoke.py \
+            scripts/test-shell-acceptance-smoke.py \
+            scripts/test-shell-stability-smoke.py \
+            scripts/test-shell-compositor-smoke.py \
+            scripts/test-shell-compositor-acceptance-smoke.py \
             scripts/test-deviced-smoke.py \
             scripts/test-deviced-continuous-native-smoke.py \
             aios/compat/browser/runtime/browser_provider.py \
@@ -87,11 +103,16 @@ jobs:
             aios/compat/mcp-bridge/runtime/mcp_bridge_provider.py \
             aios/compat/code-sandbox/runtime/aios_sandbox_executor.py \
             aios/shell/runtime/shell_control_provider.py \
+            aios/shell/runtime/shell_panel_bridge_service.py \
+            aios/shell/runtime/shell_panel_clients_gtk.py \
+            aios/shell/runtime/panel_actions.py \
+            aios/shell/runtime/shell_snapshot.py \
             aios/shell/runtime/screen_capture_portal_provider.py \
             aios/shell/runtime/shell_desktop.py \
             aios/shell/components/portal-chooser/prototype.py \
             aios/shell/components/portal-chooser/client.py \
-            aios/shell/components/portal-chooser/panel.py
+            aios/shell/components/portal-chooser/panel.py \
+            aios/shell/components/portal-chooser/standalone.py
 
       - name: Cargo test
         working-directory: aios
@@ -114,6 +135,18 @@ jobs:
 
       - name: Build default Tier1 hardware evidence
         run: python3 scripts/build-default-hardware-evidence-index.py
+
+      - name: Release gate vendor runtime smoke
+        run: python3 scripts/test-release-gate-smoke.py
+
+      - name: Device validation collector smoke
+        run: python3 scripts/test-device-validation-collector-smoke.py
+
+      - name: Hardware validation report smoke
+        run: python3 scripts/test-hardware-validation-report-smoke.py
+
+      - name: Platform media smoke
+        run: python3 scripts/test-platform-media-smoke.py
 
       - name: Image build strategy smoke
         run: python3 scripts/test-image-build-strategy-smoke.py
@@ -148,6 +181,9 @@ jobs:
       - name: Provider registry smoke
         run: python3 scripts/test-provider-registry-smoke.py --bin-dir aios/target/debug
 
+      - name: Compat registration contract smoke
+        run: python3 scripts/test-compat-registration-contract-smoke.py
+
       - name: Device metadata provider smoke
         run: python3 scripts/test-device-metadata-provider-smoke.py --bin-dir aios/target/debug
 
@@ -159,6 +195,9 @@ jobs:
 
       - name: Runtimed managed worker smoke
         run: python3 scripts/test-runtimed-managed-worker-smoke.py --bin-dir aios/target/debug
+
+      - name: Runtimed events smoke
+        run: python3 scripts/test-runtimed-events-smoke.py --bin-dir aios/target/debug
 
       - name: Runtime local inference provider smoke
         run: python3 scripts/test-runtime-local-inference-provider-smoke.py --bin-dir aios/target/debug
@@ -195,6 +234,27 @@ jobs:
 
       - name: Shell session smoke
         run: python3 scripts/test-shell-session-smoke.py
+
+      - name: Shell panel bridge service smoke
+        run: python3 scripts/test-shell-panel-bridge-service-smoke.py
+
+      - name: Shell panel clients smoke
+        run: python3 scripts/test-shell-panel-clients-smoke.py
+
+      - name: Shell panel embedding live smoke
+        run: python3 scripts/test-shell-panel-embedding-live-smoke.py
+
+      - name: Shell acceptance smoke
+        run: python3 scripts/test-shell-acceptance-smoke.py
+
+      - name: Shell stability smoke
+        run: python3 scripts/test-shell-stability-smoke.py
+
+      - name: Shell compositor smoke
+        run: python3 scripts/test-shell-compositor-smoke.py
+
+      - name: Shell compositor acceptance smoke
+        run: python3 scripts/test-shell-compositor-acceptance-smoke.py
 
       - name: Deviced smoke
         run: python3 scripts/test-deviced-smoke.py --bin-dir aios/target/debug
@@ -277,6 +337,8 @@ jobs:
             out/validation/tier1-hardware-known-limitations.md
             out/validation/tier1-hardware-validation-report.md
             out/validation/tier1-hardware-evidence-index.json
+            out/validation/release-gate-vendor-runtime-smoke-report.json
+            out/validation/release-gate-vendor-runtime-smoke-report.md
             out/validation/image-build-strategy-report.json
             out/validation/image-build-strategy-report.md
             out/validation/ci-artifact-governance-report.json
@@ -394,3 +456,8 @@ jobs:
           if-no-files-found: warn
           path: |
             out/aios-system-delivery
+
+
+
+
+

@@ -15,7 +15,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from aios_cargo_bins import default_aios_bin_dir
+from aios_cargo_bins import default_aios_bin_dir, resolve_binary_path
 
 
 COMPAT_PROVIDERS = {
@@ -106,6 +106,9 @@ COMPAT_PROVIDERS = {
             "permission-manifest",
             "bridge-result-protocol-v1",
             "audit-jsonl",
+            "remote-register",
+            "remote-list",
+            "remote-control-plane-register",
         ],
         "capabilities": [
             "compat.mcp.call",
@@ -157,10 +160,9 @@ def repo_root() -> Path:
 
 def resolve_binary(name: str, explicit: Path | None, bin_dir: Path | None) -> Path:
     if explicit is not None:
-        return explicit
-    if bin_dir is not None:
-        return bin_dir / name
-    return default_aios_bin_dir(repo_root()) / name
+        return resolve_binary_path(explicit.parent, explicit.name)
+    base_dir = bin_dir or default_aios_bin_dir(repo_root())
+    return resolve_binary_path(base_dir, name)
 
 
 def ensure_binaries(paths: dict[str, Path]) -> None:
@@ -196,6 +198,10 @@ def rpc_call(socket_path: Path, method: str, params: dict, timeout: float) -> di
     return response["result"]
 
 
+def unix_rpc_supported() -> bool:
+    return hasattr(socket, "AF_UNIX") and os.name != "nt"
+
+
 def wait_for_socket(path: Path, timeout: float) -> None:
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -221,6 +227,7 @@ def issue_execution_token(
     socket_path: Path,
     capability_id: str,
     *,
+    approval_socket_path: Path | None = None,
     session_id: str,
     task_id: str,
     timeout: float,
@@ -243,8 +250,8 @@ def issue_execution_token(
         approval_ref = evaluation.get("approval_ref")
         require(approval_ref, f"policy.evaluate did not emit approval_ref for {capability_id}")
         rpc_call(
-            socket_path,
-            "approval.resolve",
+            approval_socket_path or socket_path,
+            "agent.approval.resolve" if approval_socket_path is not None else "approval.resolve",
             {
                 "approval_ref": approval_ref,
                 "status": "approved",
@@ -444,6 +451,9 @@ def run_json_command(command: list[str], *, check: bool = True, env: dict[str, s
 
 def main() -> int:
     args = parse_args()
+    if not unix_rpc_supported():
+        print("compat runtime smoke skipped: unix rpc transport unsupported on this platform")
+        return 0
     binaries = {
         "agentd": resolve_binary("agentd", args.agentd, args.bin_dir),
         "policyd": resolve_binary("policyd", args.policyd, args.bin_dir),
@@ -473,7 +483,7 @@ def main() -> int:
 
         compat_discovery = rpc_call(
             socket_path,
-            "provider.discover",
+            "agent.provider.discover",
             {
                 "kind": "compat-provider",
                 "include_disabled": False,
@@ -534,7 +544,7 @@ def main() -> int:
 
             descriptor_lookup = rpc_call(
                 socket_path,
-                "provider.get_descriptor",
+                "agent.provider.get_descriptor",
                 {"provider_id": provider_id},
                 timeout=args.timeout,
             )
@@ -662,7 +672,7 @@ def main() -> int:
 
             resolved = rpc_call(
                 socket_path,
-                "provider.resolve_capability",
+                "agent.provider.resolve_capability",
                 {
                     "capability_id": expected_capabilities[0],
                     "preferred_kind": "compat-provider",
@@ -713,6 +723,7 @@ def main() -> int:
         browser_token = issue_execution_token(
             policyd_socket_path,
             "compat.browser.navigate",
+            approval_socket_path=socket_path,
             session_id="compat-browser-session",
             task_id="compat-browser-task",
             timeout=args.timeout,
@@ -747,6 +758,7 @@ def main() -> int:
         office_token = issue_execution_token(
             policyd_socket_path,
             "compat.document.open",
+            approval_socket_path=socket_path,
             session_id="compat-office-session",
             task_id="compat-office-task",
             timeout=args.timeout,
@@ -776,6 +788,7 @@ def main() -> int:
         bridge_token = issue_execution_token(
             policyd_socket_path,
             "compat.mcp.call",
+            approval_socket_path=socket_path,
             session_id="compat-bridge-session",
             task_id="compat-bridge-task",
             timeout=args.timeout,
@@ -814,6 +827,7 @@ def main() -> int:
             sandbox_token = issue_execution_token(
                 policyd_socket_path,
                 "compat.code.execute",
+                approval_socket_path=socket_path,
                 session_id="compat-sandbox-session",
                 task_id="compat-sandbox-task",
                 timeout=args.timeout,
@@ -877,6 +891,7 @@ def main() -> int:
             timeout_token = issue_execution_token(
                 policyd_socket_path,
                 "compat.code.execute",
+                approval_socket_path=socket_path,
                 session_id="compat-sandbox-timeout-session",
                 task_id="compat-sandbox-timeout-task",
                 timeout=args.timeout,

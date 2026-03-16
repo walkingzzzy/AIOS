@@ -58,6 +58,10 @@ impl AppState {
                     self.audit_writer.archive_dir().display()
                 ),
                 format!(
+                    "audit_export_dir={}",
+                    self.config.audit_export_dir.display()
+                ),
+                format!(
                     "observability_log={}",
                     self.config.observability_log_path.display()
                 ),

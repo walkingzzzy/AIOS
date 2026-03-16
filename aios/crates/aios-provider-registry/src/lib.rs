@@ -414,13 +414,11 @@ fn remote_registration_status(
                 .last_heartbeat_at
                 .as_deref()
                 .unwrap_or(remote.registered_at.as_str());
-            let parsed = chrono::DateTime::parse_from_rfc3339(heartbeat)
-                .with_context(|| format!("invalid remote registration heartbeat timestamp: {heartbeat}"))?;
+            let parsed = chrono::DateTime::parse_from_rfc3339(heartbeat).with_context(|| {
+                format!("invalid remote registration heartbeat timestamp: {heartbeat}")
+            })?;
             let ttl = ttl_seconds.min(i64::MAX as u64) as i64;
-            if parsed.with_timezone(&Utc)
-                + chrono::Duration::seconds(ttl)
-                <= Utc::now()
-            {
+            if parsed.with_timezone(&Utc) + chrono::Duration::seconds(ttl) <= Utc::now() {
                 return Ok("stale".to_string());
             }
         }

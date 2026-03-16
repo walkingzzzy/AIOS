@@ -37,10 +37,10 @@ impl Config {
         let audit_log_path = std::env::var_os("AIOS_SYSTEM_FILES_PROVIDER_AUDIT_LOG")
             .map(PathBuf::from)
             .unwrap_or_else(|| paths.state_dir.join("audit.jsonl"));
-        let observability_log_path = env_path_or(
-            "AIOS_SYSTEM_FILES_PROVIDER_OBSERVABILITY_LOG",
-            || paths.state_dir.join("observability.jsonl"),
-        );
+        let observability_log_path =
+            env_path_or("AIOS_SYSTEM_FILES_PROVIDER_OBSERVABILITY_LOG", || {
+                paths.state_dir.join("observability.jsonl")
+            });
 
         let agentd_socket = std::env::var_os("AIOS_SYSTEM_FILES_PROVIDER_AGENTD_SOCKET")
             .map(PathBuf::from)

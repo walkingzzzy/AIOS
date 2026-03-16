@@ -72,6 +72,9 @@
     "degradation_policy": { "type": "string" },
     "compat_permission_manifest": {
       "$ref": "aios/compat-permission-manifest.schema.json"
+    },
+    "remote_registration": {
+      "$ref": "aios/provider-remote-registration.schema.json"
     }
   },
   "additionalProperties": true

@@ -9,9 +9,21 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from jsonschema import Draft202012Validator
+
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OUTPUT_PREFIX = ROOT / "out" / "validation" / "cross-service-correlation-report"
+CORRELATION_REPORT_SCHEMA = ROOT / "aios" / "observability" / "schemas" / "cross-service-correlation-report.schema.json"
+PROVIDER_KEYS = {"provider_id", "selected_provider_id"}
+RUNTIME_SERVICE_KEYS = {"runtime_service_id"}
+PROVIDER_STATUS_KEYS = {"provider_status"}
+ARTIFACT_KEYS = {
+    "artifact_path",
+    "evidence_path",
+    "evidence_paths",
+    "vendor_runtime_evidence",
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -25,6 +37,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--limit", type=int, default=100)
     parser.add_argument("--output-prefix", type=Path, default=DEFAULT_OUTPUT_PREFIX)
     return parser.parse_args()
+
+
+def load_json(path: Path) -> Any:
+    return json.loads(path.read_text())
+
+
+def build_validator(path: Path) -> Draft202012Validator:
+    schema = load_json(path)
+    Draft202012Validator.check_schema(schema)
+    return Draft202012Validator(schema, format_checker=Draft202012Validator.FORMAT_CHECKER)
 
 
 def read_jsonl(path: Path | None) -> list[dict[str, Any]]:
@@ -62,6 +84,25 @@ def parse_json_column(value: Any, fallback: Any) -> Any:
     if value in (None, ""):
         return fallback
     return json.loads(value)
+
+
+def collect_strings(value: Any, keys: set[str]) -> set[str]:
+    found: set[str] = set()
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in keys:
+                if isinstance(item, str) and item:
+                    found.add(item)
+                elif isinstance(item, list):
+                    for child in item:
+                        if isinstance(child, str) and child:
+                            found.add(child)
+            if isinstance(item, (dict, list)):
+                found.update(collect_strings(item, keys))
+    elif isinstance(value, list):
+        for item in value:
+            found.update(collect_strings(item, keys))
+    return found
 
 
 def task_id_from_memory_payload(payload: Any) -> str | None:
@@ -103,19 +144,25 @@ def build_markdown(report: dict[str, Any]) -> str:
         f"- Observability records: `{report['summary']['observability_record_count']}`",
         f"- Working memory entries: `{report['summary']['working_memory_count']}`",
         f"- Episodic entries: `{report['summary']['episodic_entry_count']}`",
+        f"- Providers: `{', '.join(report['summary']['provider_ids']) or '-'}`",
+        f"- Runtime services: `{', '.join(report['summary']['runtime_service_ids']) or '-'}`",
+        f"- Provider statuses: `{', '.join(report['summary']['provider_statuses']) or '-'}`",
+        f"- Artifacts: `{', '.join(report['summary']['artifact_paths']) or '-'}`",
         "",
         "## Tasks",
         "",
-        "| Task | State | Audit Decisions | Runtime Events | Transitions |",
-        "|------|-------|-----------------|----------------|-------------|",
+        "| Task | State | Audit Decisions | Runtime Events | Providers | Runtime Services | Transitions |",
+        "|------|-------|-----------------|----------------|-----------|------------------|-------------|",
     ]
     for item in report["correlations"]:
         lines.append(
-            "| `{task_id}` | `{state}` | `{audit}` | `{runtime}` | `{transitions}` |".format(
+            "| `{task_id}` | `{state}` | `{audit}` | `{runtime}` | `{providers}` | `{runtime_services}` | `{transitions}` |".format(
                 task_id=item["task_id"],
                 state=item.get("state", "unknown"),
                 audit=", ".join(item["audit_decisions"]) or "-",
                 runtime=", ".join(item["runtime_event_kinds"]) or "-",
+                providers=", ".join(item["provider_ids"]) or "-",
+                runtime_services=", ".join(item["runtime_service_ids"]) or "-",
                 transitions=", ".join(item["state_transitions"]) or "-",
             )
         )
@@ -127,6 +174,7 @@ def build_markdown(report: dict[str, Any]) -> str:
 
 def main() -> int:
     args = parse_args()
+    validator = build_validator(CORRELATION_REPORT_SCHEMA)
     connection = sqlite3.connect(args.session_db)
     connection.row_factory = sqlite3.Row
 
@@ -283,6 +331,28 @@ def main() -> int:
             f"{item['from_state']}->{item['to_state']}"
             for item in task.get("task_events", [])
         ]
+        provider_ids = sorted(
+            collect_strings(task_audits, PROVIDER_KEYS)
+            | collect_strings(task_runtime, PROVIDER_KEYS)
+            | collect_strings(task_remote, PROVIDER_KEYS)
+            | collect_strings(task_observability, PROVIDER_KEYS)
+        )
+        runtime_service_ids = sorted(
+            collect_strings(task_runtime, RUNTIME_SERVICE_KEYS)
+            | collect_strings(task_remote, RUNTIME_SERVICE_KEYS)
+            | collect_strings(task_observability, RUNTIME_SERVICE_KEYS)
+        )
+        provider_statuses = sorted(
+            collect_strings(task_runtime, PROVIDER_STATUS_KEYS)
+            | collect_strings(task_remote, PROVIDER_STATUS_KEYS)
+            | collect_strings(task_observability, PROVIDER_STATUS_KEYS)
+        )
+        artifact_paths = sorted(
+            collect_strings(task_audits, ARTIFACT_KEYS)
+            | collect_strings(task_runtime, ARTIFACT_KEYS)
+            | collect_strings(task_remote, ARTIFACT_KEYS)
+            | collect_strings(task_observability, ARTIFACT_KEYS)
+        )
         correlations.append(
             {
                 "task_id": task_id,
@@ -295,6 +365,10 @@ def main() -> int:
                 "working_memory_refs": sorted(memory_refs_by_task.get(task_id, [])),
                 "episodic_summaries": episodic_by_task.get(task_id, []),
                 "approval_refs": approval_refs_from_audit(task_audits),
+                "provider_ids": provider_ids,
+                "runtime_service_ids": runtime_service_ids,
+                "provider_statuses": provider_statuses,
+                "artifact_paths": artifact_paths,
             }
         )
 
@@ -320,6 +394,28 @@ def main() -> int:
             "task_states": sorted({item["state"] for item in tasks}),
             "audit_decisions": sorted({str(item.get("decision")) for item in audit_entries if item.get("decision")}),
             "runtime_event_kinds": sorted({str(item.get("kind")) for item in runtime_events if item.get("kind")}),
+            "provider_ids": sorted(
+                collect_strings(audit_entries, PROVIDER_KEYS)
+                | collect_strings(runtime_events, PROVIDER_KEYS)
+                | collect_strings(remote_audits, PROVIDER_KEYS)
+                | collect_strings(observability_records, PROVIDER_KEYS)
+            ),
+            "runtime_service_ids": sorted(
+                collect_strings(runtime_events, RUNTIME_SERVICE_KEYS)
+                | collect_strings(remote_audits, RUNTIME_SERVICE_KEYS)
+                | collect_strings(observability_records, RUNTIME_SERVICE_KEYS)
+            ),
+            "provider_statuses": sorted(
+                collect_strings(runtime_events, PROVIDER_STATUS_KEYS)
+                | collect_strings(remote_audits, PROVIDER_STATUS_KEYS)
+                | collect_strings(observability_records, PROVIDER_STATUS_KEYS)
+            ),
+            "artifact_paths": sorted(
+                collect_strings(audit_entries, ARTIFACT_KEYS)
+                | collect_strings(runtime_events, ARTIFACT_KEYS)
+                | collect_strings(remote_audits, ARTIFACT_KEYS)
+                | collect_strings(observability_records, ARTIFACT_KEYS)
+            ),
         },
         "tasks": tasks,
         "working_memory": working_memory,
@@ -338,6 +434,8 @@ def main() -> int:
         ],
     }
 
+    validator.validate(report)
+
     json_path = args.output_prefix.with_suffix(".json")
     markdown_path = args.output_prefix.with_suffix(".md")
     json_path.parent.mkdir(parents=True, exist_ok=True)
@@ -353,6 +451,8 @@ def main() -> int:
                 "task_count": report["summary"]["task_count"],
                 "audit_entry_count": report["summary"]["audit_entry_count"],
                 "runtime_event_count": report["summary"]["runtime_event_count"],
+                "provider_ids": report["summary"]["provider_ids"],
+                "runtime_service_ids": report["summary"]["runtime_service_ids"],
             },
             indent=2,
             ensure_ascii=False,

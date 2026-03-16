@@ -1,17 +1,21 @@
+use std::{collections::HashMap, path::Path, sync::Arc, time::Duration};
+
+#[cfg(unix)]
 use std::{
-    collections::HashMap,
     io::{BufRead, BufReader as StdBufReader, Write},
     os::unix::net::UnixStream as BlockingUnixStream,
-    path::Path,
-    sync::Arc,
-    time::Duration,
 };
 
-use aios_core::logging::{self as core_logging, TraceContext};
+#[cfg(unix)]
+use aios_core::logging as core_logging;
+use aios_core::logging::TraceContext;
+#[cfg(unix)]
 use anyhow::Context;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
+
+#[cfg(unix)]
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::{UnixListener, UnixStream},
@@ -294,6 +298,7 @@ impl RpcRouter {
     }
 }
 
+#[cfg(unix)]
 pub async fn serve_unix<P>(socket_path: P, router: Arc<RpcRouter>) -> anyhow::Result<()>
 where
     P: AsRef<Path>,
@@ -331,6 +336,14 @@ where
     }
 }
 
+#[cfg(not(unix))]
+pub async fn serve_unix<P>(socket_path: P, _router: Arc<RpcRouter>) -> anyhow::Result<()>
+where
+    P: AsRef<Path>,
+{
+    Err(unix_rpc_unsupported(socket_path.as_ref()))
+}
+
 pub fn call_unix<Request, Response, P>(
     socket_path: P,
     method: &str,
@@ -344,6 +357,7 @@ where
     call_unix_with_timeout(socket_path, method, params, Duration::from_secs(5))
 }
 
+#[cfg(unix)]
 pub fn call_unix_with_timeout<Request, Response, P>(
     socket_path: P,
     method: &str,
@@ -379,7 +393,10 @@ where
     stream.set_write_timeout(Some(timeout))?;
 
     stream.write_all(serde_json::to_string(&request)?.as_bytes())?;
-    stream.write_all(b"\n")?;
+    stream.write_all(
+        b"
+",
+    )?;
     stream.flush()?;
 
     let mut response_line = String::new();
@@ -422,6 +439,30 @@ where
     Ok(serde_json::from_value(result)?)
 }
 
+#[cfg(not(unix))]
+pub fn call_unix_with_timeout<Request, Response, P>(
+    socket_path: P,
+    _method: &str,
+    _params: &Request,
+    _timeout: Duration,
+) -> anyhow::Result<Response>
+where
+    Request: Serialize,
+    Response: DeserializeOwned,
+    P: AsRef<Path>,
+{
+    Err(unix_rpc_unsupported(socket_path.as_ref()))
+}
+
+#[cfg(not(unix))]
+fn unix_rpc_unsupported(socket_path: &Path) -> anyhow::Error {
+    anyhow::anyhow!(
+        "unix rpc transport is not supported on this platform: {}",
+        socket_path.display()
+    )
+}
+
+#[cfg(unix)]
 fn log_trace_event(
     service: &str,
     event: &str,
@@ -486,6 +527,7 @@ mod tests {
     }
 }
 
+#[cfg(unix)]
 async fn handle_connection(stream: UnixStream, router: Arc<RpcRouter>) -> anyhow::Result<()> {
     let (reader, mut writer) = stream.into_split();
     let mut lines = BufReader::new(reader).lines();

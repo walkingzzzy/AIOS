@@ -5,8 +5,9 @@ use serde_json::Value;
 
 use aios_contracts::{
     methods, ApprovalCreateRequest, ApprovalGetRequest, ApprovalListRequest,
-    ApprovalResolveRequest, AuditQueryRequest, ExecutionToken, PolicyEvaluateEnvelope,
-    PolicyEvaluateRequest, ServiceContractResponse, TokenIssueRequest, TokenVerifyRequest,
+    ApprovalResolveRequest, AuditExportRequest, AuditQueryRequest, ExecutionToken,
+    PolicyEvaluateEnvelope, PolicyEvaluateRequest, ServiceContractResponse, TokenIssueRequest,
+    TokenVerifyRequest,
 };
 use aios_rpc::{RpcError, RpcResult, RpcRouter};
 
@@ -217,6 +218,20 @@ pub fn build_router(state: AppState) -> Arc<RpcRouter> {
         json(response)
     });
 
+    let audit_export_state = state.clone();
+    router.register_method(methods::POLICY_AUDIT_EXPORT, move |params| {
+        let request: AuditExportRequest = parse_params(params)?;
+        let response = audit_export_state
+            .audit_writer
+            .export(
+                &audit_export_state.config.service_id,
+                &audit_export_state.config.audit_export_dir,
+                &request,
+            )
+            .map_err(|error| RpcError::Internal(error.to_string()))?;
+        json(response)
+    });
+
     let verify_state = state.clone();
     router.register_method(methods::POLICY_TOKEN_VERIFY, move |params| {
         let request: TokenVerifyRequest = parse_params(params)?;
@@ -338,8 +353,9 @@ mod tests {
         config::Config,
         evaluator::PolicyProfile,
         observability::ObservabilitySink,
-        token, AppState,
+        token,
         token_usage::TokenUsageStore,
+        AppState,
     };
 
     use super::build_router;
@@ -383,6 +399,7 @@ mod tests {
                 audit_log_path: audit_log_path.clone(),
                 audit_index_path: audit_index_path.clone(),
                 audit_archive_dir: audit_archive_dir.clone(),
+                audit_export_dir: state_dir.join("audit-exports"),
                 observability_log_path: observability_log_path.clone(),
                 token_key_path: token_key_path.clone(),
                 token_usage_dir: root.join("token-usage"),
@@ -801,7 +818,10 @@ mod tests {
                 }
             }),
         );
-        assert_eq!(error_code(&constraint_error), "approval_constraints_mismatch");
+        assert_eq!(
+            error_code(&constraint_error),
+            "approval_constraints_mismatch"
+        );
 
         let audit: AuditQueryResponse = rpc_success(
             &harness.router,
@@ -818,8 +838,14 @@ mod tests {
             .filter(|entry| entry.decision == "approval-scope-mismatch")
             .collect::<Vec<_>>();
         assert_eq!(mismatches.len(), 2);
-        assert_eq!(mismatches[0].result["scope_mismatch"]["mismatch_type"], "constraints");
-        assert_eq!(mismatches[1].result["scope_mismatch"]["mismatch_type"], "target_hash");
+        assert_eq!(
+            mismatches[0].result["scope_mismatch"]["mismatch_type"],
+            "constraints"
+        );
+        assert_eq!(
+            mismatches[1].result["scope_mismatch"]["mismatch_type"],
+            "target_hash"
+        );
         Ok(())
     }
 

@@ -175,6 +175,24 @@ def backend_status_evidence(snapshot: dict[str, Any] | None) -> dict[str, Any]:
     )
 
 
+def recovery_evidence(snapshot: dict[str, Any] | None) -> dict[str, Any]:
+    meta = surface_model_meta(snapshot, "recovery-surface")
+    header = surface_header(snapshot, "recovery-surface")
+    if not meta and not header:
+        return {}
+    return prune_empty(
+        {
+            "status": header.get("status"),
+            "tone": header.get("tone"),
+            "panel_state": meta.get("panel_state"),
+            "recovery_point_count": meta.get("recovery_point_count"),
+            "diagnostic_bundle_count": meta.get("diagnostic_bundle_count"),
+            "latest_recovery_id": meta.get("latest_recovery_id"),
+            "data_source_status": meta.get("data_source_status"),
+        }
+    )
+
+
 def derive_route_evidence(records: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     routes: list[dict[str, Any]] = []
     for record in records or []:
@@ -229,6 +247,7 @@ def build_evidence(
     layout = merge_non_empty(layout_evidence(snapshot), provided.get("layout"))
     restore = merge_non_empty(restore_evidence(snapshot), provided.get("restore"))
     chooser = merge_non_empty(chooser_evidence(snapshot), provided.get("chooser"))
+    recovery = merge_non_empty(recovery_evidence(snapshot), provided.get("recovery"))
     backend_status = merge_non_empty(
         backend_status_evidence(snapshot),
         provided.get("backend_status"),
@@ -244,10 +263,19 @@ def build_evidence(
         "layout": prune_empty(layout),
         "restore": prune_empty(restore),
         "chooser": prune_empty(chooser),
+        "recovery": prune_empty(recovery),
         "backend_status": prune_empty(backend_status),
         "routes": routes,
         "modal_timeline": normalize_modal_timeline(modal_timeline),
     }
+    handled_keys = {"layout", "restore", "chooser", "recovery", "backend_status", "routes", "modal_timeline"}
+    for key, value in provided.items():
+        if key in handled_keys or value in (None, "", [], {}):
+            continue
+        if isinstance(value, dict):
+            payload[key] = prune_empty(value)
+        else:
+            payload[key] = value
     return prune_empty(payload)
 
 

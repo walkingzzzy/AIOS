@@ -45,6 +45,14 @@ worker_support:
     - managed_worker_status
     - managed_worker_source
     - managed_worker_detail
+    - backend_availability
+    - backend_activation
+    - backend_health_state
+    - backend_reason
+    - backend_worker_state
+    - backend_command_source
+    - backend_socket_path
+    - backend_fallback
 inputs:
   - runtime_request
   - runtime_profile
@@ -60,9 +68,9 @@ dependencies:
     - gpu-provider
     - npu-provider
 blockers:
-  - no-vendor-gpu-runtime
-  - no-vendor-npu-runtime
+  - no-release-grade-gpu-signoff
+  - no-release-grade-npu-signoff
 next_milestones:
-  - integrate-vendor-gpu-runtime-on-managed-worker-path
-  - define-vendor-npu-runtime-on-managed-worker-path
+  - collect-real-machine-vendor-gpu-evidence
+  - collect-real-machine-vendor-npu-evidence
   - harden-observability-sink-consumers

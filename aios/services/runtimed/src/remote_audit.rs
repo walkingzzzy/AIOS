@@ -15,6 +15,13 @@ pub struct RemoteAuditWriter {
     sink: Option<ObservabilitySink>,
 }
 
+fn response_artifact_path(response: &RuntimeInferResponse) -> Option<String> {
+    response.notes.iter().find_map(|note| {
+        note.strip_prefix("vendor_evidence_path=")
+            .map(str::to_string)
+    })
+}
+
 impl RemoteAuditWriter {
     pub fn new(path: PathBuf) -> Self {
         Self { path, sink: None }
@@ -63,6 +70,10 @@ impl RemoteAuditWriter {
             "degraded": response.degraded,
             "rejected": response.rejected,
             "estimated_latency_ms": response.estimated_latency_ms,
+            "provider_id": response.provider_id,
+            "runtime_service_id": response.runtime_service_id,
+            "provider_status": response.provider_status,
+            "artifact_path": response_artifact_path(response),
             "taint_summary": token.taint_summary,
             "result": {
                 "reason": response.reason,
@@ -190,12 +201,14 @@ mod tests {
                 rejected: false,
                 reason: Some("ok".to_string()),
                 estimated_latency_ms: Some(42),
-                provider_id: None,
-                runtime_service_id: None,
-                provider_status: None,
+                provider_id: Some("nvidia.jetson.tensorrt".to_string()),
+                runtime_service_id: Some("aios-runtimed.jetson-vendor-helper".to_string()),
+                provider_status: Some("available".to_string()),
                 queue_saturated: None,
                 runtime_budget: None,
-                notes: Vec::new(),
+                notes: vec![
+                    "vendor_evidence_path=/var/lib/aios/runtimed/vendor-execution.json".to_string(),
+                ],
             },
         )?;
 
@@ -205,6 +218,11 @@ mod tests {
         assert_eq!(entry["status"], "completed");
         assert_eq!(entry["actual_backend"], "attested-remote");
         assert_eq!(entry["execution_location"], "attested_remote");
+        assert_eq!(entry["provider_id"], "nvidia.jetson.tensorrt");
+        assert_eq!(
+            entry["artifact_path"],
+            "/var/lib/aios/runtimed/vendor-execution.json"
+        );
 
         let _ = fs::remove_dir_all(root);
         Ok(())

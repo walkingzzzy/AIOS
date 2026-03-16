@@ -37,6 +37,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--evaluator-md", default="")
     parser.add_argument("--support-matrix", default="")
     parser.add_argument("--known-limitations", default="")
+    parser.add_argument("--deviced-health", default="")
+    parser.add_argument("--device-backend-overall-status", default="")
+    parser.add_argument("--device-backend-available-count", default="")
+    parser.add_argument("--device-ui-tree-support", default="")
+    parser.add_argument("--device-metadata-status", default="")
+    parser.add_argument("--device-metadata-backend-status", default="")
+    parser.add_argument("--device-available-modalities", default="")
+    parser.add_argument("--device-backend-state-artifact", default="")
+    parser.add_argument("--device-release-grade-backend-ids", default="")
+    parser.add_argument("--device-release-grade-backend-origins", default="")
+    parser.add_argument("--device-release-grade-backend-stacks", default="")
+    parser.add_argument("--device-release-grade-contract-kinds", default="")
+    parser.add_argument(
+        "--vendor-runtime-evidence",
+        action="append",
+        default=[],
+        help="Optional vendor runtime evidence JSON path; may be repeated",
+    )
     parser.add_argument("--photo", action="append", default=[])
     parser.add_argument("--note", action="append", default=[])
     parser.add_argument("--operator", default="")
@@ -53,7 +71,7 @@ def parse_args() -> argparse.Namespace:
 def load_profile(path: Path | None) -> dict[str, Any]:
     if path is None:
         return {}
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     if not text.strip():
         return {}
     if yaml is not None:
@@ -64,17 +82,17 @@ def load_profile(path: Path | None) -> dict[str, Any]:
 def load_json(path: Path | None) -> dict[str, Any]:
     if path is None:
         return {}
-    return json.loads(path.read_text())
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def write_text(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content)
+    path.write_text(content, encoding="utf-8")
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
 def final_record(evaluator: dict[str, Any]) -> dict[str, Any]:
@@ -96,6 +114,233 @@ def resolved_date(raw_date: str | None) -> str:
     return datetime.now(timezone.utc).date().isoformat()
 
 
+def sorted_join(values: set[str]) -> str:
+    if not values:
+        return ""
+    return ",".join(sorted(values))
+
+
+def note_value(notes: list[object], prefix: str) -> str | None:
+    for note in notes:
+        if not isinstance(note, str):
+            continue
+        if note.startswith(prefix):
+            return note[len(prefix) :]
+    return None
+
+
+def append_unique_path(paths: list[Path], seen: set[str], path_text: str | None) -> None:
+    if not path_text:
+        return
+    candidate = str(Path(path_text))
+    if candidate in seen:
+        return
+    seen.add(candidate)
+    paths.append(Path(candidate))
+
+
+def backend_evidence_paths(payload: dict[str, Any]) -> list[Path]:
+    paths: list[Path] = []
+    seen: set[str] = set()
+
+    notes = payload.get("notes")
+    if isinstance(notes, list):
+        for note in notes:
+            if not isinstance(note, str):
+                continue
+            if note.startswith("backend_evidence_artifact[") and "=" in note:
+                append_unique_path(paths, seen, note.split("=", 1)[1])
+
+    statuses = payload.get("statuses")
+    if isinstance(statuses, list):
+        for status in statuses:
+            if not isinstance(status, dict):
+                continue
+            details = status.get("details")
+            if not isinstance(details, list):
+                continue
+            append_unique_path(paths, seen, note_value(details, "evidence_artifact="))
+
+    evidence_artifacts = payload.get("evidence_artifacts")
+    if isinstance(evidence_artifacts, list):
+        for artifact in evidence_artifacts:
+            if not isinstance(artifact, dict):
+                continue
+            artifact_path = artifact.get("artifact_path")
+            if isinstance(artifact_path, str):
+                append_unique_path(paths, seen, artifact_path)
+
+    return paths
+
+
+def vendor_runtime_evidence_paths_from_payload(payload: dict[str, Any]) -> list[Path]:
+    paths: list[Path] = []
+    seen: set[str] = set()
+
+    notes = payload.get("notes")
+    if isinstance(notes, list):
+        for note in notes:
+            if not isinstance(note, str):
+                continue
+            if note.startswith("vendor_evidence_path="):
+                append_unique_path(paths, seen, note.split("=", 1)[1])
+
+    statuses = payload.get("statuses")
+    if isinstance(statuses, list):
+        for status in statuses:
+            if not isinstance(status, dict):
+                continue
+            details = status.get("details")
+            if not isinstance(details, list):
+                continue
+            append_unique_path(paths, seen, note_value(details, "vendor_evidence_path="))
+
+    stack: list[Any] = [payload]
+    while stack:
+        current = stack.pop()
+        if isinstance(current, dict):
+            for key, value in current.items():
+                if key == "vendor_evidence_path" and isinstance(value, str):
+                    append_unique_path(paths, seen, value)
+                elif isinstance(value, (dict, list)):
+                    stack.append(value)
+        elif isinstance(current, list):
+            stack.extend(current)
+
+    return paths
+
+
+def collect_vendor_runtime_evidence_paths(args: argparse.Namespace) -> list[Path]:
+    paths: list[Path] = []
+    seen: set[str] = set()
+
+    for item in args.vendor_runtime_evidence:
+        append_unique_path(paths, seen, item)
+
+    if args.device_backend_state_artifact:
+        artifact_path = Path(args.device_backend_state_artifact)
+        if artifact_path.exists():
+            try:
+                backend_state = json.loads(artifact_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                backend_state = {}
+            if isinstance(backend_state, dict):
+                for evidence_path in vendor_runtime_evidence_paths_from_payload(backend_state):
+                    append_unique_path(paths, seen, str(evidence_path))
+
+    return paths
+
+
+def derive_release_grade_summary(args: argparse.Namespace) -> dict[str, str]:
+    backend_ids: set[str] = set()
+    origins: set[str] = set()
+    stacks: set[str] = set()
+    contract_kinds: set[str] = set()
+
+    if args.device_backend_state_artifact:
+        artifact_path = Path(args.device_backend_state_artifact)
+        if artifact_path.exists():
+            try:
+                backend_state = json.loads(artifact_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                backend_state = {}
+            if isinstance(backend_state, dict):
+                for evidence_path in backend_evidence_paths(backend_state):
+                    if not evidence_path.exists():
+                        continue
+                    try:
+                        evidence_payload = json.loads(evidence_path.read_text(encoding="utf-8"))
+                    except (OSError, json.JSONDecodeError):
+                        continue
+                    if not isinstance(evidence_payload, dict):
+                        continue
+                    backend_id = evidence_payload.get("release_grade_backend_id") or evidence_payload.get(
+                        "release_grade_backend"
+                    )
+                    origin = evidence_payload.get("release_grade_backend_origin")
+                    stack = evidence_payload.get("release_grade_backend_stack")
+                    contract_kind = evidence_payload.get("release_grade_contract_kind") or evidence_payload.get(
+                        "contract_kind"
+                    )
+                    if isinstance(backend_id, str) and backend_id:
+                        backend_ids.add(backend_id)
+                    if isinstance(origin, str) and origin:
+                        origins.add(origin)
+                    if isinstance(stack, str) and stack:
+                        stacks.add(stack)
+                    if isinstance(contract_kind, str) and contract_kind:
+                        contract_kinds.add(contract_kind)
+
+    return {
+        "backend_ids": args.device_release_grade_backend_ids or sorted_join(backend_ids),
+        "origins": args.device_release_grade_backend_origins or sorted_join(origins),
+        "stacks": args.device_release_grade_backend_stacks or sorted_join(stacks),
+        "contract_kinds": args.device_release_grade_contract_kinds or sorted_join(contract_kinds),
+    }
+
+
+def summarize_vendor_runtime_evidence(args: argparse.Namespace) -> dict[str, Any]:
+    provider_ids: set[str] = set()
+    runtime_service_ids: set[str] = set()
+    provider_statuses: set[str] = set()
+    provider_kinds: set[str] = set()
+    backend_ids: set[str] = set()
+    runtime_binaries: set[str] = set()
+    engine_paths: set[str] = set()
+    contract_kinds: set[str] = set()
+    loaded_paths: list[str] = []
+    issues: list[str] = []
+
+    for evidence_path in collect_vendor_runtime_evidence_paths(args):
+        if not evidence_path.exists():
+            issues.append(f"vendor runtime evidence missing: {evidence_path}")
+            continue
+        try:
+            payload = json.loads(evidence_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            issues.append(f"vendor runtime evidence unreadable: {evidence_path} ({exc})")
+            continue
+        if not isinstance(payload, dict):
+            issues.append(f"vendor runtime evidence payload is not an object: {evidence_path}")
+            continue
+        loaded_paths.append(str(evidence_path))
+        for value, target in [
+            (payload.get("provider_id"), provider_ids),
+            (payload.get("runtime_service_id"), runtime_service_ids),
+            (payload.get("provider_status"), provider_statuses),
+            (payload.get("provider_kind"), provider_kinds),
+            (payload.get("backend_id"), backend_ids),
+            (payload.get("runtime_binary"), runtime_binaries),
+            (payload.get("engine_path"), engine_paths),
+            (payload.get("contract_kind"), contract_kinds),
+        ]:
+            if isinstance(value, str) and value:
+                target.add(value)
+
+    declared_paths = collect_vendor_runtime_evidence_paths(args)
+    if not declared_paths:
+        signoff_status = "not-attached"
+    elif issues:
+        signoff_status = "incomplete"
+    else:
+        signoff_status = "evidence-attached"
+
+    return {
+        "signoff_status": signoff_status,
+        "evidence_count": len(loaded_paths),
+        "evidence_paths": loaded_paths,
+        "provider_ids": sorted(provider_ids),
+        "runtime_service_ids": sorted(runtime_service_ids),
+        "provider_statuses": sorted(provider_statuses),
+        "provider_kinds": sorted(provider_kinds),
+        "backend_ids": sorted(backend_ids),
+        "runtime_binaries": sorted(runtime_binaries),
+        "engine_paths": sorted(engine_paths),
+        "contract_kinds": sorted(contract_kinds),
+        "issues": issues,
+    }
+
+
 def render_report(
     profile: dict[str, Any],
     evaluator: dict[str, Any],
@@ -103,13 +348,11 @@ def render_report(
     status: str,
 ) -> str:
     final = final_record(evaluator)
-    platform_id = (
-        profile.get("platform_media_id")
-        or profile.get("id")
-        or "unknown-platform"
-    )
+    release_grade_summary = derive_release_grade_summary(args)
+    vendor_runtime = summarize_vendor_runtime_evidence(args)
+    platform_id = profile.get("platform_media_id") or profile.get("id") or "unknown-platform"
     boot_ids = ", ".join(evaluator.get("unique_boot_ids", [])) or "-"
-    issues = open_issues(evaluator, args.note)
+    issues = open_issues(evaluator, args.note) + vendor_runtime["issues"]
     issue_lines = ["- None"] if not issues else [f"- {item}" for item in issues]
     report_lines = [
         f"# {platform_id} Hardware Validation Report",
@@ -147,6 +390,29 @@ def render_report(
         f"- Boot evidence directory collected: {evaluator.get('input_dir', '-')}",
         f"- Boot IDs observed: {boot_ids}",
         "",
+        "## Device And Multimodal Validation",
+        "",
+        f"- deviced health: {args.deviced_health or '-'}",
+        f"- device.state.get overall backend status: {args.device_backend_overall_status or '-'}",
+        f"- device.state.get available backend count: {args.device_backend_available_count or '-'}",
+        f"- device.state.get ui_tree current support: {args.device_ui_tree_support or '-'}",
+        f"- device.metadata.get readiness status: {args.device_metadata_status or '-'}",
+        f"- device.metadata.get backend overall status: {args.device_metadata_backend_status or '-'}",
+        f"- device.metadata.get available modalities: {args.device_available_modalities or '-'}",
+        f"- release-grade backend ids: {release_grade_summary['backend_ids'] or '-'}",
+        f"- release-grade backend origins: {release_grade_summary['origins'] or '-'}",
+        f"- release-grade backend stacks: {release_grade_summary['stacks'] or '-'}",
+        f"- release-grade contract kinds: {release_grade_summary['contract_kinds'] or '-'}",
+        f"- backend-state artifact attached: {args.device_backend_state_artifact or '-'}",
+        f"- vendor runtime sign-off status: {vendor_runtime['signoff_status']}",
+        f"- vendor runtime provider ids: {','.join(vendor_runtime['provider_ids']) or '-'}",
+        f"- vendor runtime service ids: {','.join(vendor_runtime['runtime_service_ids']) or '-'}",
+        f"- vendor runtime statuses: {','.join(vendor_runtime['provider_statuses']) or '-'}",
+        f"- vendor runtime kinds: {','.join(vendor_runtime['provider_kinds']) or '-'}",
+        f"- vendor runtime backend ids: {','.join(vendor_runtime['backend_ids']) or '-'}",
+        f"- vendor runtime evidence count: {vendor_runtime['evidence_count']}",
+        f"- vendor runtime evidence attached: {','.join(vendor_runtime['evidence_paths']) or '-'}",
+        "",
         "## Rollback Outcome",
         "",
         "- Rollback trigger used: pending",
@@ -161,6 +427,7 @@ def render_report(
         f"- Installer log: {args.installer_log or '-'}",
         f"- Recovery log: {args.recovery_log or '-'}",
         f"- Photos / serial captures: {', '.join(args.photo) if args.photo else '-'}",
+        f"- Vendor runtime evidence: {', '.join(vendor_runtime['evidence_paths']) or '-'}",
         "",
         "## Open Issues",
         "",
@@ -183,6 +450,9 @@ def build_evidence_index(
     status: str,
 ) -> dict[str, Any]:
     final = final_record(evaluator)
+    release_grade_summary = derive_release_grade_summary(args)
+    vendor_runtime = summarize_vendor_runtime_evidence(args)
+    notes = open_issues(evaluator, args.note) + vendor_runtime["issues"]
     return {
         "platform_id": profile.get("platform_media_id") or profile.get("id") or "unknown-platform",
         "profile": None if args.profile is None else str(args.profile),
@@ -208,10 +478,35 @@ def build_evidence_index(
             "known_limitations": args.known_limitations,
             "installer_log": args.installer_log,
             "recovery_log": args.recovery_log,
+            "device_backend_state_artifact": args.device_backend_state_artifact,
+            "vendor_runtime_evidence": vendor_runtime["evidence_paths"],
             "photos": args.photo,
         },
+        "device_runtime": {
+            "backend_state_artifact": args.device_backend_state_artifact or None,
+            "release_grade_backends": {
+                "backend_ids": release_grade_summary["backend_ids"],
+                "origins": release_grade_summary["origins"],
+                "stacks": release_grade_summary["stacks"],
+                "contract_kinds": release_grade_summary["contract_kinds"],
+            },
+            "vendor_runtime": {
+                "vendor_runtime_signoff_status": vendor_runtime["signoff_status"],
+                "evidence_count": vendor_runtime["evidence_count"],
+                "evidence_paths": vendor_runtime["evidence_paths"],
+                "provider_ids": vendor_runtime["provider_ids"],
+                "runtime_service_ids": vendor_runtime["runtime_service_ids"],
+                "provider_statuses": vendor_runtime["provider_statuses"],
+                "provider_kinds": vendor_runtime["provider_kinds"],
+                "backend_ids": vendor_runtime["backend_ids"],
+                "runtime_binaries": vendor_runtime["runtime_binaries"],
+                "engine_paths": vendor_runtime["engine_paths"],
+                "contract_kinds": vendor_runtime["contract_kinds"],
+                "issues": vendor_runtime["issues"],
+            },
+        },
         "checks": evaluator.get("checks", []),
-        "notes": open_issues(evaluator, args.note),
+        "notes": notes,
         "operator": args.operator,
         "date": resolved_date(args.date),
     }

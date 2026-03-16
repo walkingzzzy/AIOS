@@ -13,7 +13,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from aios_cargo_bins import default_aios_bin_dir
+from aios_cargo_bins import default_aios_bin_dir, resolve_binary_path
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -34,10 +34,10 @@ def parse_args() -> argparse.Namespace:
 
 def resolve_binary(name: str, explicit: Path | None, bin_dir: Path | None) -> Path:
     if explicit is not None:
-        return explicit
+        return resolve_binary_path(explicit.parent, explicit.name)
     if bin_dir is not None:
-        return bin_dir / name
-    return default_aios_bin_dir(ROOT) / name
+        return resolve_binary_path(bin_dir, name)
+    return resolve_binary_path(default_aios_bin_dir(ROOT), name)
 
 
 def ensure_binary(path: Path, package: str) -> None:
@@ -46,6 +46,9 @@ def ensure_binary(path: Path, package: str) -> None:
     print(f"Missing binary: {path}")
     print(f"Build it first, for example: cargo build -p {package}")
     raise SystemExit(2)
+
+def unix_rpc_supported() -> bool:
+    return hasattr(socket, "AF_UNIX") and os.name != "nt"
 
 
 def rpc_call(socket_path: Path, method: str, params: dict, timeout: float) -> dict:
@@ -229,6 +232,9 @@ def write_shell_profile(path: Path, env: dict[str, str]) -> None:
 
 def main() -> int:
     args = parse_args()
+    if not unix_rpc_supported():
+        print("shell session/policy/registry flow smoke skipped: unix rpc transport unsupported on this platform")
+        return 0
     binaries = {
         "sessiond": resolve_binary("sessiond", args.sessiond, args.bin_dir),
         "policyd": resolve_binary("policyd", args.policyd, args.bin_dir),
@@ -258,8 +264,8 @@ def main() -> int:
             wait_for_health(socket_path, args.timeout)
 
         session = rpc_call(
-            sessiond_socket,
-            "session.create",
+            agentd_socket,
+            "agent.session.create",
             {"user_id": "shell-live-user", "metadata": {"source": "shell-flow-smoke"}},
             timeout=args.timeout,
         )["session"]
@@ -267,7 +273,7 @@ def main() -> int:
 
         provider_resolution = rpc_call(
             agentd_socket,
-            "provider.resolve_capability",
+            "agent.provider.resolve_capability",
             {
                 "capability_id": "provider.fs.open",
                 "require_healthy": True,
@@ -476,3 +482,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

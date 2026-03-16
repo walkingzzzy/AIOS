@@ -11,6 +11,7 @@ pub struct Config {
     pub observability_log_path: PathBuf,
     pub migrations_dir: PathBuf,
     pub portal_state_dir: PathBuf,
+    pub evidence_export_dir: PathBuf,
     pub portal_default_ttl_seconds: u64,
 }
 
@@ -32,6 +33,10 @@ impl Config {
             aios_core::config::env_path_or("AIOS_SESSIOND_PORTAL_STATE_DIR", || {
                 paths.state_dir.join("portal")
             });
+        let evidence_export_dir =
+            aios_core::config::env_path_or("AIOS_SESSIOND_EVIDENCE_EXPORT_DIR", || {
+                paths.state_dir.join("evidence-exports")
+            });
         let portal_default_ttl_seconds =
             aios_core::config::env_u64_or("AIOS_SESSIOND_PORTAL_DEFAULT_TTL_SECONDS", 300);
 
@@ -43,6 +48,7 @@ impl Config {
             observability_log_path,
             migrations_dir,
             portal_state_dir,
+            evidence_export_dir,
             portal_default_ttl_seconds,
         })
     }

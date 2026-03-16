@@ -186,16 +186,36 @@ def component_base_args(profile: dict, component: str) -> list[str]:
     paths = profile.get("paths", {})
     compositor = profile.get("compositor", {}) or {}
     if component == "launcher":
-        return ["--socket", paths.get("sessiond_socket", "/run/aios/sessiond/sessiond.sock")]
-    if component == "task-surface":
-        return [
+        command = [
             "--socket",
             paths.get("sessiond_socket", "/run/aios/sessiond/sessiond.sock"),
             "--agent-socket",
             paths.get("agentd_socket", str(agentd_socket(profile))),
         ]
+        if compositor.get("runtime_state_path"):
+            command.extend(["--compositor-runtime-state", compositor["runtime_state_path"]])
+        if compositor.get("window_state_path"):
+            command.extend(["--compositor-window-state", compositor["window_state_path"]])
+        return command
+    if component == "task-surface":
+        command = [
+            "--socket",
+            paths.get("sessiond_socket", "/run/aios/sessiond/sessiond.sock"),
+            "--agent-socket",
+            paths.get("agentd_socket", str(agentd_socket(profile))),
+        ]
+        if compositor.get("runtime_state_path"):
+            command.extend(["--compositor-runtime-state", compositor["runtime_state_path"]])
+        if compositor.get("window_state_path"):
+            command.extend(["--compositor-window-state", compositor["window_state_path"]])
+        return command
     if component == "approval-panel":
-        return ["--socket", paths.get("policyd_socket", "/run/aios/policyd/policyd.sock")]
+        return [
+            "--socket",
+            paths.get("policyd_socket", "/run/aios/policyd/policyd.sock"),
+            "--agent-socket",
+            paths.get("agentd_socket", str(agentd_socket(profile))),
+        ]
     if component == "recovery-surface":
         return [
             "--socket",
@@ -215,6 +235,8 @@ def component_base_args(profile: dict, component: str) -> list[str]:
             paths.get("device_backend_state", "/var/lib/aios/deviced/backend-state.json"),
             "--deviced-socket",
             paths.get("deviced_socket", "/run/aios/deviced/deviced.sock"),
+            "--agent-socket",
+            paths.get("agentd_socket", str(agentd_socket(profile))),
             "--policy-socket",
             paths.get("policyd_socket", "/run/aios/policyd/policyd.sock"),
         ]
@@ -235,6 +257,10 @@ def component_base_args(profile: dict, component: str) -> list[str]:
             value = paths.get(key)
             if value:
                 command.extend([flag, value])
+        if compositor.get("runtime_state_path"):
+            command.extend(["--compositor-runtime-state", compositor["runtime_state_path"]])
+        if compositor.get("window_state_path"):
+            command.extend(["--compositor-window-state", compositor["window_state_path"]])
         return command
     if component == "operator-audit":
         command: list[str] = []
@@ -266,6 +292,8 @@ def component_base_args(profile: dict, component: str) -> list[str]:
         return [
             "--socket",
             paths.get("sessiond_socket", "/run/aios/sessiond/sessiond.sock"),
+            "--agent-socket",
+            paths.get("agentd_socket", str(agentd_socket(profile))),
             "--policy-socket",
             paths.get("policyd_socket", str(policyd_socket(profile))),
             "--deviced-socket",
@@ -697,7 +725,7 @@ def main() -> int:
     component_parser.add_argument("--allow-disabled", action="store_true")
     component_parser.add_argument("args", nargs=argparse.REMAINDER)
 
-    panel_parser = subparsers.add_parser("panel", help="Run a shell panel skeleton entrypoint")
+    panel_parser = subparsers.add_parser("panel", help="Run a shell formal panel entrypoint")
     panel_parser.add_argument("name")
     panel_parser.add_argument("--allow-disabled", action="store_true")
     panel_parser.add_argument("args", nargs=argparse.REMAINDER)
@@ -832,3 +860,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

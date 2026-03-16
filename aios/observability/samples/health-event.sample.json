@@ -28,5 +28,27 @@
   },
   "notes": [
     "health probe snapshot persisted"
-  ]
+  ],
+  "provider_id": "nvidia.jetson.tensorrt",
+  "provider_ids": [
+    "nvidia.jetson.tensorrt"
+  ],
+  "runtime_service_id": "aios-runtimed.jetson-vendor-helper",
+  "runtime_service_ids": [
+    "aios-runtimed.jetson-vendor-helper"
+  ],
+  "provider_status": "available",
+  "provider_statuses": [
+    "available"
+  ],
+  "backend_id": "local-gpu",
+  "backend_ids": [
+    "local-gpu"
+  ],
+  "artifact_paths": [
+    "state/health-probe.json",
+    "state/vendor-execution.json"
+  ],
+  "evidence_count": 1,
+  "vendor_runtime_signoff_status": "evidence-attached"
 }

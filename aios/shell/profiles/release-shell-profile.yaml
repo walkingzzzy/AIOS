@@ -47,3 +47,8 @@ compositor:
   runtime_state_path: /var/lib/aios/shell/compositor/release-state.json
   runtime_state_refresh_ticks: 1
   drm_disable_connectors: false
+  workspace_toplevel_mode: fullscreen
+  workspace_count: 4
+  default_workspace_index: 0
+  output_layout_mode: horizontal
+  window_state_path: /var/lib/aios/shell/compositor/release-windows.json

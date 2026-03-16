@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aios/hardware/hardware-profile.schema.json",
+  "title": "AIOS Hardware Profile",
+  "type": "object",
+  "required": ["id", "platform_tier"],
+  "properties": {
+    "id": { "type": "string", "minLength": 1 },
+    "platform_tier": {
+      "type": "string",
+      "enum": ["tier0", "tier1"]
+    },
+    "vendor_id": { "type": "string", "minLength": 1 },
+    "model": { "type": "string", "minLength": 1 },
+    "arch": { "type": "string", "minLength": 1 },
+    "boot": { "type": "string", "minLength": 1 },
+    "gpu": { "type": "string", "minLength": 1 },
+    "npu": { "type": "string", "minLength": 1 },
+    "wifi": { "type": "string", "minLength": 1 },
+    "bluetooth": { "type": "string", "minLength": 1 },
+    "audio": { "type": "string", "minLength": 1 },
+    "camera": { "type": "string", "minLength": 1 },
+    "updated_platform_profile": { "type": "string", "minLength": 1 },
+    "canonical_hardware_profile_id": { "type": "string", "minLength": 1 },
+    "platform_media_id": { "type": "string", "minLength": 1 },
+    "runtime_profile": { "type": "string", "minLength": 1 },
+    "bringup_status": { "type": "string", "minLength": 1 },
+    "hardware_evidence_required": { "type": "boolean" },
+    "cpu_only_runtime_required": { "type": "boolean" },
+    "virtio_disk": { "type": "boolean" },
+    "virtio_net": { "type": "boolean" },
+    "virtio_display": { "type": "boolean" },
+    "release_track_intent": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "notes": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "boot_evidence_expectations": {
+      "type": "object",
+      "properties": {
+        "min_boots": { "type": "integer", "minimum": 1 },
+        "expect_slot_transition": {
+          "type": ["string", "null"],
+          "pattern": "^[^:]+:[^:]+$"
+        },
+        "expect_last_good_slot": { "type": ["string", "null"], "minLength": 1 },
+        "require_boot_success": { "type": "boolean" },
+        "require_deployment_state": { "type": "boolean" },
+        "require_boot_state": { "type": "boolean" },
+        "require_bootctl_status": { "type": "boolean" },
+        "require_firmware_status": { "type": "boolean" },
+        "require_sysupdate_listing": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "hardware_evidence_required": { "const": true }
+        },
+        "required": ["hardware_evidence_required"]
+      },
+      "then": {
+        "required": ["updated_platform_profile"]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "platform_tier": { "const": "tier1" }
+        }
+      },
+      "then": {
+        "required": ["arch"]
+      }
+    }
+  ],
+  "additionalProperties": false
+}

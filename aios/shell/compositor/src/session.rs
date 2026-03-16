@@ -1,11 +1,12 @@
 use crate::config::Config;
 use crate::panel_snapshot::PanelSnapshot;
 use crate::surfaces::{
-    placeholder_surfaces, placement_stacking_layer, placement_z_index, surface_focus_policy,
+    panel_slot_surfaces, placement_stacking_layer, placement_z_index, surface_focus_policy,
     surface_placement, surface_pointer_policy, Surface,
 };
 use serde::Serialize;
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const PANEL_ACTION_EVENT_HISTORY_LIMIT: usize = 16;
@@ -29,7 +30,42 @@ pub struct PanelActionEvent {
     pub payload: Option<Value>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
+pub struct OutputLayoutSummary {
+    pub output_id: String,
+    pub connector_name: Option<String>,
+    pub label: String,
+    pub layout_x: i32,
+    pub layout_y: i32,
+    pub layout_width: i32,
+    pub layout_height: i32,
+    pub primary: bool,
+    pub active: bool,
+    pub renderable: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ManagedWindowSummary {
+    pub window_key: String,
+    pub surface_id: String,
+    pub app_id: Option<String>,
+    pub title: Option<String>,
+    pub slot_id: Option<String>,
+    pub output_id: String,
+    pub workspace_id: String,
+    pub window_policy: String,
+    pub floating: bool,
+    pub visible: bool,
+    pub minimized: bool,
+    pub persisted: bool,
+    pub interaction_state: String,
+    pub layout_x: i32,
+    pub layout_y: i32,
+    pub layout_width: i32,
+    pub layout_height: i32,
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub struct SessionState {
     pub service_id: String,
     pub runtime: String,
@@ -53,9 +89,45 @@ pub struct SessionState {
     pub runtime_state_status: String,
     pub session_control_status: String,
     pub drm_device_path: Option<String>,
+    pub drm_connector_name: Option<String>,
+    pub drm_output_width: Option<i32>,
+    pub drm_output_height: Option<i32>,
+    pub drm_refresh_millihz: Option<i32>,
     pub output_count: u32,
     pub connected_output_count: u32,
     pub primary_output_name: Option<String>,
+    pub output_layout_mode: String,
+    pub active_output_id: Option<String>,
+    pub outputs: Vec<OutputLayoutSummary>,
+    pub renderable_output_count: u32,
+    pub non_renderable_output_count: u32,
+    pub release_grade_output_status: String,
+    pub window_manager_status: String,
+    pub window_state_path: Option<String>,
+    pub workspace_count: u32,
+    pub active_workspace_index: u32,
+    pub active_workspace_id: String,
+    pub workspace_switch_count: u32,
+    pub managed_window_count: u32,
+    pub visible_window_count: u32,
+    pub floating_window_count: u32,
+    pub minimized_window_count: u32,
+    pub window_move_count: u32,
+    pub window_resize_count: u32,
+    pub window_minimize_count: u32,
+    pub window_restore_count: u32,
+    pub last_minimized_window_key: Option<String>,
+    pub last_restored_window_key: Option<String>,
+    pub workspace_window_counts: BTreeMap<String, u32>,
+    pub drag_state: String,
+    pub resize_state: String,
+    pub managed_windows: Vec<ManagedWindowSummary>,
+    pub workspace_toplevel_mode: String,
+    pub modal_surface_count: u32,
+    pub blocked_surface_count: u32,
+    pub shell_role_counts: BTreeMap<String, u32>,
+    pub interaction_mode_counts: BTreeMap<String, u32>,
+    pub window_policy_counts: BTreeMap<String, u32>,
     pub panel_host_status: String,
     pub panel_host_bound_count: u32,
     pub panel_host_activation_count: u32,
@@ -96,6 +168,7 @@ pub struct SessionState {
     pub last_input_event: Option<String>,
     pub focused_surface_id: Option<String>,
     pub topmost_surface_id: Option<String>,
+    pub topmost_slot_id: Option<String>,
     pub last_hit_surface_id: Option<String>,
     pub last_hit_slot_id: Option<String>,
     pub last_pointer_x: Option<f64>,
@@ -106,13 +179,15 @@ pub struct SessionState {
     pub xdg_shell_status: String,
     pub xdg_toplevel_count: u32,
     pub xdg_popup_count: u32,
+    pub surface_count: u32,
     pub surfaces: Vec<Surface>,
+    #[serde(skip)]
     next_panel_action_event_sequence: u32,
 }
 
 impl SessionState {
     pub fn new(config: &Config) -> Self {
-        Self {
+        let mut session = Self {
             service_id: config.service_id.clone(),
             runtime: config.session_backend.clone(),
             desktop_host: config.desktop_host.clone(),
@@ -135,9 +210,57 @@ impl SessionState {
             runtime_state_status: "unconfigured".to_string(),
             session_control_status: "inactive".to_string(),
             drm_device_path: None,
+            drm_connector_name: None,
+            drm_output_width: None,
+            drm_output_height: None,
+            drm_refresh_millihz: None,
             output_count: 0,
             connected_output_count: 0,
             primary_output_name: None,
+            output_layout_mode: config.output_layout_mode.clone(),
+            active_output_id: None,
+            outputs: Vec::new(),
+            renderable_output_count: 0,
+            non_renderable_output_count: 0,
+            release_grade_output_status: "uninitialized".to_string(),
+            window_manager_status: if config.window_state_path.is_some() {
+                "persistent".to_string()
+            } else {
+                "ephemeral".to_string()
+            },
+            window_state_path: config.window_state_path.clone(),
+            workspace_count: config.workspace_count.max(1),
+            active_workspace_index: config
+                .default_workspace_index
+                .min(config.workspace_count.max(1).saturating_sub(1)),
+            active_workspace_id: format!(
+                "workspace-{}",
+                config
+                    .default_workspace_index
+                    .min(config.workspace_count.max(1).saturating_sub(1))
+                    + 1
+            ),
+            workspace_switch_count: 0,
+            managed_window_count: 0,
+            visible_window_count: 0,
+            floating_window_count: 0,
+            minimized_window_count: 0,
+            window_move_count: 0,
+            window_resize_count: 0,
+            window_minimize_count: 0,
+            window_restore_count: 0,
+            last_minimized_window_key: None,
+            last_restored_window_key: None,
+            workspace_window_counts: BTreeMap::new(),
+            drag_state: "idle".to_string(),
+            resize_state: "idle".to_string(),
+            managed_windows: Vec::new(),
+            workspace_toplevel_mode: config.workspace_toplevel_mode.clone(),
+            modal_surface_count: 0,
+            blocked_surface_count: 0,
+            shell_role_counts: BTreeMap::new(),
+            interaction_mode_counts: BTreeMap::new(),
+            window_policy_counts: BTreeMap::new(),
             panel_host_status: "disabled".to_string(),
             panel_host_bound_count: 0,
             panel_host_activation_count: 0,
@@ -163,9 +286,17 @@ impl SessionState {
             panel_snapshot_source: None,
             panel_snapshot_profile_id: None,
             panel_snapshot_surface_count: 0,
-            panel_embedding_status: "placeholder-only".to_string(),
+            panel_embedding_status: if config.panel_slots.is_empty() {
+                "no-panel-slots".to_string()
+            } else {
+                format!("panel-slots-open(0/{})", config.panel_slots.len())
+            },
             embedded_surface_count: 0,
-            stacking_status: "placeholder-only".to_string(),
+            stacking_status: if config.panel_slots.is_empty() {
+                "no-panel-slots".to_string()
+            } else {
+                "panel-slots-open".to_string()
+            },
             attention_surface_count: 0,
             active_modal_surface_id: None,
             primary_attention_surface_id: None,
@@ -182,6 +313,7 @@ impl SessionState {
             last_input_event: None,
             focused_surface_id: None,
             topmost_surface_id: None,
+            topmost_slot_id: None,
             last_hit_surface_id: None,
             last_hit_slot_id: None,
             last_pointer_x: None,
@@ -192,9 +324,12 @@ impl SessionState {
             xdg_shell_status: "inactive".to_string(),
             xdg_toplevel_count: 0,
             xdg_popup_count: 0,
-            surfaces: placeholder_surfaces(config),
+            surface_count: config.panel_slots.len() as u32,
+            surfaces: panel_slot_surfaces(config),
             next_panel_action_event_sequence: 0,
-        }
+        };
+        session.recompute_window_policy_metrics();
+        session
     }
 
     pub fn tick(&mut self) {
@@ -277,14 +412,123 @@ impl SessionState {
     pub fn set_drm_topology(
         &mut self,
         drm_device_path: Option<String>,
+        drm_connector_name: Option<String>,
+        drm_output_width: Option<i32>,
+        drm_output_height: Option<i32>,
+        drm_refresh_millihz: Option<i32>,
         output_count: u32,
         connected_output_count: u32,
         primary_output_name: Option<String>,
     ) {
         self.drm_device_path = drm_device_path;
+        self.drm_connector_name = drm_connector_name;
+        self.drm_output_width = drm_output_width;
+        self.drm_output_height = drm_output_height;
+        self.drm_refresh_millihz = drm_refresh_millihz;
         self.output_count = output_count;
         self.connected_output_count = connected_output_count;
         self.primary_output_name = primary_output_name;
+    }
+
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub fn set_window_state_path(&mut self, path: Option<String>) {
+        self.window_state_path = path.clone();
+        self.window_manager_status = if path.is_some() {
+            "persistent".to_string()
+        } else {
+            "ephemeral".to_string()
+        };
+    }
+
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub fn update_window_management(
+        &mut self,
+        status: String,
+        output_layout_mode: String,
+        active_output_id: Option<String>,
+        outputs: Vec<OutputLayoutSummary>,
+        workspace_count: u32,
+        active_workspace_index: u32,
+        workspace_switch_count: u32,
+        managed_windows: Vec<ManagedWindowSummary>,
+        window_move_count: u32,
+        window_resize_count: u32,
+        window_minimize_count: u32,
+        window_restore_count: u32,
+        last_minimized_window_key: Option<String>,
+        last_restored_window_key: Option<String>,
+        drag_state: String,
+        resize_state: String,
+    ) {
+        self.window_manager_status = status;
+        self.output_layout_mode = output_layout_mode;
+        self.active_output_id = active_output_id.or_else(|| {
+            outputs
+                .iter()
+                .find(|output| output.primary)
+                .map(|output| output.output_id.clone())
+                .or_else(|| outputs.first().map(|output| output.output_id.clone()))
+        });
+        self.outputs = outputs;
+        self.renderable_output_count =
+            self.outputs.iter().filter(|output| output.renderable).count() as u32;
+        self.non_renderable_output_count =
+            self.outputs.len() as u32 - self.renderable_output_count;
+        self.release_grade_output_status = if self.outputs.is_empty() {
+            "uninitialized".to_string()
+        } else if self.outputs.len() == 1 {
+            format!(
+                "single-output(renderable={}/{})",
+                self.renderable_output_count,
+                self.outputs.len()
+            )
+        } else if self.non_renderable_output_count == 0 {
+            format!(
+                "multi-output(renderable={}/{})",
+                self.renderable_output_count,
+                self.outputs.len()
+            )
+        } else {
+            format!(
+                "multi-output(partial-renderable={}/{})",
+                self.renderable_output_count,
+                self.outputs.len()
+            )
+        };
+        self.workspace_count = workspace_count.max(1);
+        self.active_workspace_index =
+            active_workspace_index.min(self.workspace_count.saturating_sub(1));
+        self.active_workspace_id = format!("workspace-{}", self.active_workspace_index + 1);
+        self.workspace_switch_count = workspace_switch_count;
+        self.managed_window_count = managed_windows.len() as u32;
+        self.visible_window_count = managed_windows
+            .iter()
+            .filter(|window| window.visible)
+            .count() as u32;
+        self.floating_window_count = managed_windows
+            .iter()
+            .filter(|window| window.floating)
+            .count() as u32;
+        self.minimized_window_count = managed_windows
+            .iter()
+            .filter(|window| window.minimized)
+            .count() as u32;
+        self.window_move_count = window_move_count;
+        self.window_resize_count = window_resize_count;
+        self.window_minimize_count = window_minimize_count;
+        self.window_restore_count = window_restore_count;
+        self.last_minimized_window_key = last_minimized_window_key;
+        self.last_restored_window_key = last_restored_window_key;
+        self.workspace_window_counts =
+            managed_windows
+                .iter()
+                .fold(BTreeMap::new(), |mut counts, window| {
+                    *counts.entry(window.workspace_id.clone()).or_insert(0) += 1;
+                    counts
+                });
+        self.drag_state = drag_state;
+        self.resize_state = resize_state;
+        self.managed_windows = managed_windows;
     }
 
     pub fn set_panel_host_disabled(&mut self) {
@@ -377,19 +621,19 @@ impl SessionState {
             surface.state = if surface.panel_component.is_some() {
                 "panel-host-ready".to_string()
             } else {
-                "placeholder-ready".to_string()
+                "slot-ready".to_string()
             };
             surface.reservation_status = if surface.embedded_surface_id.is_some() {
                 "client-occupied".to_string()
             } else if surface.panel_component.is_some() {
                 "panel-host-reserved".to_string()
             } else {
-                "placeholder-only".to_string()
+                "panel-slots-open".to_string()
             };
             surface.embedding_status = if surface.panel_component.is_some() {
                 "panel-host-ready".to_string()
             } else {
-                "placeholder-only".to_string()
+                "panel-slots-open".to_string()
             };
             surface.embedded_surface_id = None;
             surface.client_app_id = None;
@@ -489,29 +733,38 @@ impl SessionState {
     }
 
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-    pub fn note_stacking(&mut self, topmost_surface_id: Option<String>) {
-        let has_embedded_topmost = topmost_surface_id.is_some();
+    pub fn note_stacking(
+        &mut self,
+        topmost_surface_id: Option<String>,
+        topmost_slot_id: Option<String>,
+    ) {
         self.topmost_surface_id = topmost_surface_id;
-        let panel_host_topmost = if !has_embedded_topmost {
-            self.top_panel_surface_id()
-        } else if self.topmost_surface_id.is_some() {
-            None
-        } else {
-            self.top_panel_surface_id()
-        };
+        let slot_topmost = self
+            .active_modal_surface_id
+            .clone()
+            .or(topmost_slot_id)
+            .or_else(|| self.top_active_slot_id());
+        self.topmost_slot_id = slot_topmost.clone();
         if self.topmost_surface_id.is_none() {
-            self.topmost_surface_id = panel_host_topmost.clone();
+            self.topmost_surface_id = slot_topmost.clone();
         }
-        self.stacking_status = if self.embedded_surface_count == 0 {
-            if let Some(surface_id) = self.topmost_surface_id.as_deref() {
-                format!("panel-host-only({surface_id})")
-            } else {
-                "placeholder-only".to_string()
+        self.stacking_status = match slot_topmost.as_deref() {
+            Some(surface_id)
+                if self.embedded_surface_count > 0 && self.panel_host_bound_count > 0 =>
+            {
+                format!("hybrid-stack({surface_id})")
             }
-        } else if self.topmost_surface_id.is_some() {
-            format!("active({})", self.embedded_surface_count)
-        } else {
-            format!("no-topmost({})", self.embedded_surface_count)
+            Some(surface_id) if self.embedded_surface_count > 0 => {
+                format!("embedded-stack({surface_id})")
+            }
+            Some(surface_id) => format!("panel-host-stack({surface_id})"),
+            None if self.surfaces.is_empty() => "no-panel-slots".to_string(),
+            None if self.embedded_surface_count > 0 => format!(
+                "embedded({}/{})",
+                self.embedded_surface_count,
+                self.surfaces.len()
+            ),
+            None => "panel-slots-open".to_string(),
         };
     }
 
@@ -648,172 +901,7 @@ impl SessionState {
     }
 
     pub fn json_summary(&self) -> String {
-        let socket_name = json_string_option(self.socket_name.as_deref());
-        let seat_name = json_string_option(self.seat_name.as_deref());
-        let runtime_lock_path = json_string_option(self.runtime_lock_path.as_deref());
-        let runtime_ready_path = json_string_option(self.runtime_ready_path.as_deref());
-        let runtime_state_path = json_string_option(self.runtime_state_path.as_deref());
-        let panel_snapshot_source = json_string_option(self.panel_snapshot_source.as_deref());
-        let panel_snapshot_profile_id =
-            json_string_option(self.panel_snapshot_profile_id.as_deref());
-        let last_panel_host_slot_id = json_string_option(self.last_panel_host_slot_id.as_deref());
-        let last_panel_host_panel_id = json_string_option(self.last_panel_host_panel_id.as_deref());
-        let last_panel_action_slot_id =
-            json_string_option(self.last_panel_action_slot_id.as_deref());
-        let last_panel_action_panel_id =
-            json_string_option(self.last_panel_action_panel_id.as_deref());
-        let last_panel_action_id = json_string_option(self.last_panel_action_id.as_deref());
-        let last_panel_action_summary =
-            json_string_option(self.last_panel_action_summary.as_deref());
-        let last_panel_action_target_component =
-            json_string_option(self.last_panel_action_target_component.as_deref());
-        let last_panel_action_event_id =
-            json_string_option(self.last_panel_action_event_id.as_deref());
-        let panel_action_log_status = json_escape(&self.panel_action_log_status);
-        let panel_action_log_path = json_string_option(self.panel_action_log_path.as_deref());
-        let panel_action_events =
-            serde_json::to_string(&self.panel_action_events).unwrap_or_else(|_| "[]".to_string());
-        let last_input_event = json_string_option(self.last_input_event.as_deref());
-        let focused_surface_id = json_string_option(self.focused_surface_id.as_deref());
-        let topmost_surface_id = json_string_option(self.topmost_surface_id.as_deref());
-        let last_hit_surface_id = json_string_option(self.last_hit_surface_id.as_deref());
-        let last_hit_slot_id = json_string_option(self.last_hit_slot_id.as_deref());
-        let last_pointer_x = json_number_option(self.last_pointer_x);
-        let last_pointer_y = json_number_option(self.last_pointer_y);
-        let active_modal_surface_id = json_string_option(self.active_modal_surface_id.as_deref());
-        let primary_attention_surface_id =
-            json_string_option(self.primary_attention_surface_id.as_deref());
-        let drm_device_path = json_string_option(self.drm_device_path.as_deref());
-        let primary_output_name = json_string_option(self.primary_output_name.as_deref());
-        let surfaces = self
-            .surfaces
-            .iter()
-            .map(|surface| {
-                let embedded_surface_id = json_string_option(surface.embedded_surface_id.as_deref());
-                let client_app_id = json_string_option(surface.client_app_id.as_deref());
-                let client_title = json_string_option(surface.client_title.as_deref());
-                let panel_component = json_string_option(surface.panel_component.as_deref());
-                let panel_id = json_string_option(surface.panel_id.as_deref());
-                let panel_status = json_string_option(surface.panel_status.as_deref());
-                let panel_tone = json_string_option(surface.panel_tone.as_deref());
-                let panel_primary_action_id =
-                    json_string_option(surface.panel_primary_action_id.as_deref());
-                let panel_error = json_string_option(surface.panel_error.as_deref());
-                format!(
-                    "{{\"surface_id\":\"{}\",\"role\":\"{}\",\"host_interface\":\"{}\",\"state\":\"{}\",\"layout_zone\":\"{}\",\"layout_anchor\":\"{}\",\"layout_x\":{},\"layout_y\":{},\"layout_width\":{},\"layout_height\":{},\"stacking_layer\":\"{}\",\"z_index\":{},\"reservation_status\":\"{}\",\"pointer_policy\":\"{}\",\"focus_policy\":\"{}\",\"panel_host_status\":\"{}\",\"panel_component\":{},\"panel_id\":{},\"panel_status\":{},\"panel_tone\":{},\"panel_primary_action_id\":{},\"panel_action_count\":{},\"panel_section_count\":{},\"panel_error\":{},\"embedding_status\":\"{}\",\"embedded_surface_id\":{},\"client_app_id\":{},\"client_title\":{}}}",
-                    json_escape(&surface.surface_id),
-                    json_escape(&surface.role),
-                    json_escape(&surface.host_interface),
-                    json_escape(&surface.state),
-                    json_escape(&surface.layout_zone),
-                    json_escape(&surface.layout_anchor),
-                    surface.layout_x,
-                    surface.layout_y,
-                    surface.layout_width,
-                    surface.layout_height,
-                    json_escape(&surface.stacking_layer),
-                    surface.z_index,
-                    json_escape(&surface.reservation_status),
-                    json_escape(&surface.pointer_policy),
-                    json_escape(&surface.focus_policy),
-                    json_escape(&surface.panel_host_status),
-                    panel_component,
-                    panel_id,
-                    panel_status,
-                    panel_tone,
-                    panel_primary_action_id,
-                    surface.panel_action_count,
-                    surface.panel_section_count,
-                    panel_error,
-                    json_escape(&surface.embedding_status),
-                    embedded_surface_id,
-                    client_app_id,
-                    client_title
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(",");
-
-        format!(
-            "{{\"service_id\":\"{}\",\"runtime\":\"{}\",\"desktop_host\":\"{}\",\"lifecycle_state\":\"{}\",\"started_at_ms\":{},\"process_id\":{},\"ticks\":{},\"socket_name\":{},\"seat_name\":{},\"pointer_status\":\"{}\",\"keyboard_status\":\"{}\",\"touch_status\":\"{}\",\"compositor_backend\":\"{}\",\"process_boundary_status\":\"{}\",\"runtime_lock_path\":{},\"runtime_ready_path\":{},\"runtime_state_path\":{},\"runtime_lock_status\":\"{}\",\"runtime_ready_status\":\"{}\",\"runtime_state_status\":\"{}\",\"session_control_status\":\"{}\",\"drm_device_path\":{},\"output_count\":{},\"connected_output_count\":{},\"primary_output_name\":{},\"panel_host_status\":\"{}\",\"panel_host_bound_count\":{},\"panel_host_activation_count\":{},\"panel_focus_status\":\"{}\",\"last_panel_host_slot_id\":{},\"last_panel_host_panel_id\":{},\"panel_action_status\":\"{}\",\"panel_action_dispatch_count\":{},\"last_panel_action_slot_id\":{},\"last_panel_action_panel_id\":{},\"last_panel_action_id\":{},\"last_panel_action_summary\":{},\"last_panel_action_target_component\":{},\"panel_action_event_count\":{},\"last_panel_action_event_id\":{},\"panel_action_log_status\":\"{}\",\"panel_action_log_path\":{},\"panel_action_events\":{},\"panel_snapshot_source\":{},\"panel_snapshot_profile_id\":{},\"panel_snapshot_surface_count\":{},\"panel_embedding_status\":\"{}\",\"embedded_surface_count\":{},\"stacking_status\":\"{}\",\"attention_surface_count\":{},\"active_modal_surface_id\":{},\"primary_attention_surface_id\":{},\"host_focus_status\":\"{}\",\"smithay_status\":\"{}\",\"renderer_backend\":\"{}\",\"renderer_status\":\"{}\",\"input_backend_status\":\"{}\",\"input_device_count\":{},\"input_event_count\":{},\"keyboard_event_count\":{},\"pointer_event_count\":{},\"touch_event_count\":{},\"last_input_event\":{},\"focused_surface_id\":{},\"topmost_surface_id\":{},\"last_hit_surface_id\":{},\"last_hit_slot_id\":{},\"last_pointer_x\":{},\"last_pointer_y\":{},\"rendered_frame_count\":{},\"client_count\":{},\"commit_count\":{},\"xdg_shell_status\":\"{}\",\"xdg_toplevel_count\":{},\"xdg_popup_count\":{},\"surface_count\":{},\"surfaces\":[{}]}}",
-            json_escape(&self.service_id),
-            json_escape(&self.runtime),
-            json_escape(&self.desktop_host),
-            json_escape(&self.lifecycle_state),
-            self.started_at_ms,
-            self.process_id,
-            self.ticks,
-            socket_name,
-            seat_name,
-            json_escape(&self.pointer_status),
-            json_escape(&self.keyboard_status),
-            json_escape(&self.touch_status),
-            json_escape(&self.compositor_backend),
-            json_escape(&self.process_boundary_status),
-            runtime_lock_path,
-            runtime_ready_path,
-            runtime_state_path,
-            json_escape(&self.runtime_lock_status),
-            json_escape(&self.runtime_ready_status),
-            json_escape(&self.runtime_state_status),
-            json_escape(&self.session_control_status),
-            drm_device_path,
-            self.output_count,
-            self.connected_output_count,
-            primary_output_name,
-            json_escape(&self.panel_host_status),
-            self.panel_host_bound_count,
-            self.panel_host_activation_count,
-            json_escape(&self.panel_focus_status),
-            last_panel_host_slot_id,
-            last_panel_host_panel_id,
-            json_escape(&self.panel_action_status),
-            self.panel_action_dispatch_count,
-            last_panel_action_slot_id,
-            last_panel_action_panel_id,
-            last_panel_action_id,
-            last_panel_action_summary,
-            last_panel_action_target_component,
-            self.panel_action_event_count,
-            last_panel_action_event_id,
-            panel_action_log_status,
-            panel_action_log_path,
-            panel_action_events,
-            panel_snapshot_source,
-            panel_snapshot_profile_id,
-            self.panel_snapshot_surface_count,
-            json_escape(&self.panel_embedding_status),
-            self.embedded_surface_count,
-            json_escape(&self.stacking_status),
-            self.attention_surface_count,
-            active_modal_surface_id,
-            primary_attention_surface_id,
-            json_escape(&self.host_focus_status),
-            json_escape(&self.smithay_status),
-            json_escape(&self.renderer_backend),
-            json_escape(&self.renderer_status),
-            json_escape(&self.input_backend_status),
-            self.input_device_count,
-            self.input_event_count,
-            self.keyboard_event_count,
-            self.pointer_event_count,
-            self.touch_event_count,
-            last_input_event,
-            focused_surface_id,
-            topmost_surface_id,
-            last_hit_surface_id,
-            last_hit_slot_id,
-            last_pointer_x,
-            last_pointer_y,
-            self.rendered_frame_count,
-            self.client_count,
-            self.commit_count,
-            json_escape(&self.xdg_shell_status),
-            self.xdg_toplevel_count,
-            self.xdg_popup_count,
-            self.surfaces.len(),
-            surfaces
-        )
+        serde_json::to_string(self).unwrap_or_else(|_| "{}".to_string())
     }
 }
 
@@ -824,27 +912,6 @@ fn now_ms() -> u128 {
         .as_millis()
 }
 
-fn json_escape(value: &str) -> String {
-    value
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
-}
-
-fn json_string_option(value: Option<&str>) -> String {
-    match value {
-        Some(value) => format!("\"{}\"", json_escape(value)),
-        None => "null".to_string(),
-    }
-}
-
-fn json_number_option(value: Option<f64>) -> String {
-    match value {
-        Some(value) if value.is_finite() => format!("{value:.3}"),
-        _ => "null".to_string(),
-    }
-}
-
 impl SessionState {
     fn clear_panel_host_bindings(&mut self) {
         self.panel_host_bound_count = 0;
@@ -853,11 +920,11 @@ impl SessionState {
         self.panel_snapshot_surface_count = 0;
         self.last_panel_action_target_component = None;
         for surface in &mut self.surfaces {
-            surface.host_interface = format!("{}-placeholder", self.desktop_host);
+            surface.host_interface = format!("{}-panel-slot", self.desktop_host);
             surface.reservation_status = if surface.embedded_surface_id.is_some() {
                 "client-occupied".to_string()
             } else {
-                "placeholder-only".to_string()
+                "panel-slot-open".to_string()
             };
             surface.pointer_policy = surface_pointer_policy(&surface.surface_id).to_string();
             surface.focus_policy = surface_focus_policy(&surface.surface_id).to_string();
@@ -871,8 +938,8 @@ impl SessionState {
             surface.panel_section_count = 0;
             surface.panel_error = None;
             if surface.embedded_surface_id.is_none() {
-                surface.state = "placeholder-ready".to_string();
-                surface.embedding_status = "placeholder-only".to_string();
+                surface.state = "slot-ready".to_string();
+                surface.embedding_status = "panel-slot-open".to_string();
                 surface.z_index = placement_z_index(&surface.layout_zone);
             }
         }
@@ -919,33 +986,52 @@ impl SessionState {
                     self.surfaces.len()
                 )
             } else {
-                "placeholder-only".to_string()
+                format!("panel-slots-open(0/{})", self.surfaces.len())
             }
         } else if self.embedded_surface_count == self.surfaces.len() as u32 {
             format!(
-                "ready({}/{})",
+                "embedded({}/{})",
                 self.embedded_surface_count,
                 self.surfaces.len()
             )
         } else {
             format!(
-                "partial({}/{})",
+                "partial-embedded({}/{})",
                 self.embedded_surface_count,
                 self.surfaces.len()
             )
         };
         self.refresh_surface_attention_state();
-        if self.embedded_surface_count == 0 {
-            self.topmost_surface_id = self
-                .active_modal_surface_id
-                .clone()
-                .or_else(|| self.top_panel_surface_id());
-            self.stacking_status = if let Some(surface_id) = self.topmost_surface_id.as_deref() {
-                format!("panel-host-only({surface_id})")
-            } else {
-                "placeholder-only".to_string()
-            };
+        if self.surfaces.is_empty() {
+            self.topmost_surface_id = None;
+            self.topmost_slot_id = None;
+            self.stacking_status = "no-panel-slots".to_string();
+            return;
         }
+
+        let top_surface_id = self
+            .active_modal_surface_id
+            .clone()
+            .or_else(|| self.top_active_slot_id());
+        self.topmost_surface_id = top_surface_id.clone();
+        self.topmost_slot_id = top_surface_id.clone();
+        self.stacking_status = match top_surface_id.as_deref() {
+            Some(surface_id)
+                if self.embedded_surface_count > 0 && self.panel_host_bound_count > 0 =>
+            {
+                format!("hybrid-stack({surface_id})")
+            }
+            Some(surface_id) if self.embedded_surface_count > 0 => {
+                format!("embedded-stack({surface_id})")
+            }
+            Some(surface_id) => format!("panel-host-stack({surface_id})"),
+            None if self.embedded_surface_count > 0 => format!(
+                "embedded({}/{})",
+                self.embedded_surface_count,
+                self.surfaces.len()
+            ),
+            None => "panel-slots-open".to_string(),
+        };
     }
 
     fn apply_panel_slot_policy(surface: &mut Surface) {
@@ -959,10 +1045,10 @@ impl SessionState {
         }
     }
 
-    fn top_panel_surface_id(&self) -> Option<String> {
+    fn top_active_slot_id(&self) -> Option<String> {
         self.surfaces
             .iter()
-            .filter(|surface| surface.panel_component.is_some())
+            .filter(|surface| surface_has_active_content(surface))
             .max_by_key(|surface| surface.z_index)
             .map(|surface| surface.surface_id.clone())
     }
@@ -971,23 +1057,84 @@ impl SessionState {
         let attention_surfaces = self
             .surfaces
             .iter()
-            .filter(|surface| surface.panel_component.is_some() && is_attention_surface(surface))
+            .filter(|surface| surface_has_active_content(surface) && is_attention_surface(surface))
             .collect::<Vec<_>>();
 
         self.attention_surface_count = attention_surfaces.len() as u32;
         self.active_modal_surface_id = self
             .surfaces
             .iter()
-            .filter(|surface| {
-                surface.panel_component.is_some() && is_modal_attention_surface(surface)
-            })
+            .filter(|surface| is_engaged_modal_surface(surface))
             .max_by_key(|surface| modal_surface_priority(surface))
             .map(|surface| surface.surface_id.clone());
         self.primary_attention_surface_id = attention_surfaces
             .into_iter()
             .max_by_key(|surface| primary_attention_priority(surface))
-            .map(|surface| surface.surface_id.clone());
+            .map(|surface| surface.surface_id.clone())
+            .or_else(|| self.active_modal_surface_id.clone());
+        self.recompute_window_policy_metrics();
     }
+
+    fn recompute_window_policy_metrics(&mut self) {
+        let active_modal_surface_id = self.active_modal_surface_id.clone();
+        let mut modal_surface_count = 0u32;
+        let mut blocked_surface_count = 0u32;
+        let mut shell_role_counts = BTreeMap::new();
+        let mut interaction_mode_counts = BTreeMap::new();
+        let mut window_policy_counts = BTreeMap::new();
+
+        for surface in &mut self.surfaces {
+            *shell_role_counts
+                .entry(surface.shell_role.clone())
+                .or_insert(0) += 1;
+            *window_policy_counts
+                .entry(surface.window_policy.clone())
+                .or_insert(0) += 1;
+            if surface_has_active_content(surface) && surface.shell_role == "modal" {
+                modal_surface_count += 1;
+            }
+
+            surface.blocked_by = None;
+            surface.interaction_mode = if is_passive_attention_surface(surface) {
+                "passive".to_string()
+            } else if active_modal_surface_id.as_deref() == Some(surface.surface_id.as_str()) {
+                "modal".to_string()
+            } else if surface_has_active_content(surface) && surface.shell_role == "modal" {
+                "modal".to_string()
+            } else if active_modal_surface_id.is_some()
+                && surface_has_active_content(surface)
+                && should_block_surface_by_modal(surface)
+            {
+                blocked_surface_count += 1;
+                surface.blocked_by = active_modal_surface_id.clone();
+                "blocked-by-modal".to_string()
+            } else if surface.shell_role == "workspace" {
+                "workspace".to_string()
+            } else {
+                "interactive".to_string()
+            };
+            *interaction_mode_counts
+                .entry(surface.interaction_mode.clone())
+                .or_insert(0) += 1;
+        }
+
+        self.modal_surface_count = modal_surface_count;
+        self.blocked_surface_count = blocked_surface_count;
+        self.shell_role_counts = shell_role_counts;
+        self.interaction_mode_counts = interaction_mode_counts;
+        self.window_policy_counts = window_policy_counts;
+    }
+}
+
+fn surface_has_active_content(surface: &Surface) -> bool {
+    surface.panel_component.is_some() || surface.embedded_surface_id.is_some()
+}
+
+fn is_modal_slot(surface: &Surface) -> bool {
+    matches!(
+        surface.role.as_str(),
+        "approval-slot" | "chooser-slot" | "recovery-slot"
+    )
 }
 
 fn is_attention_surface(surface: &Surface) -> bool {
@@ -1009,14 +1156,21 @@ fn is_attention_surface(surface: &Surface) -> bool {
 }
 
 fn is_modal_attention_surface(surface: &Surface) -> bool {
-    matches!(
-        surface.role.as_str(),
-        "approval-slot" | "chooser-slot" | "recovery-slot"
-    ) && is_attention_surface(surface)
+    is_modal_slot(surface) && is_attention_surface(surface)
+}
+
+fn is_engaged_modal_surface(surface: &Surface) -> bool {
+    surface_has_active_content(surface)
+        && is_modal_slot(surface)
+        && (is_attention_surface(surface) || surface.embedded_surface_id.is_some())
 }
 
 fn is_passive_attention_surface(surface: &Surface) -> bool {
     surface.pointer_policy == "passthrough" || surface.focus_policy == "passive-overlay"
+}
+
+fn should_block_surface_by_modal(surface: &Surface) -> bool {
+    !matches!(surface.shell_role.as_str(), "modal") && !is_passive_attention_surface(surface)
 }
 
 fn modal_surface_priority(surface: &Surface) -> (i32, i32, i32) {
@@ -1141,9 +1295,9 @@ mod tests {
         assert!(summary.contains("\"panel_snapshot_source\":null"));
         assert!(summary.contains("\"panel_snapshot_profile_id\":null"));
         assert!(summary.contains("\"panel_snapshot_surface_count\":0"));
-        assert!(summary.contains("\"panel_embedding_status\":\"placeholder-only\""));
+        assert!(summary.contains("\"panel_embedding_status\":\"panel-slots-open(0/9)\""));
         assert!(summary.contains("\"embedded_surface_count\":0"));
-        assert!(summary.contains("\"stacking_status\":\"placeholder-only\""));
+        assert!(summary.contains("\"stacking_status\":\"panel-slots-open\""));
         assert!(summary.contains("\"attention_surface_count\":0"));
         assert!(summary.contains("\"active_modal_surface_id\":null"));
         assert!(summary.contains("\"primary_attention_surface_id\":null"));
@@ -1169,7 +1323,7 @@ mod tests {
         assert!(summary.contains("\"layout_zone\":\"left-dock\""));
         assert!(summary.contains("\"stacking_layer\":\"panel\""));
         assert!(summary.contains("\"z_index\":120"));
-        assert!(summary.contains("\"reservation_status\":\"placeholder-only\""));
+        assert!(summary.contains("\"reservation_status\":\"panel-slot-open\""));
         assert!(summary.contains("\"pointer_policy\":\"interactive\""));
         assert!(summary.contains("\"focus_policy\":\"retain-client-focus\""));
         assert!(summary.contains("\"panel_host_status\":\"unbound\""));
@@ -1181,7 +1335,7 @@ mod tests {
         assert!(summary.contains("\"panel_action_count\":0"));
         assert!(summary.contains("\"panel_section_count\":0"));
         assert!(summary.contains("\"panel_error\":null"));
-        assert!(summary.contains("\"embedding_status\":\"placeholder-only\""));
+        assert!(summary.contains("\"embedding_status\":\"panel-slot-open\""));
     }
 
     #[test]
@@ -1341,6 +1495,136 @@ mod tests {
             session.primary_attention_surface_id.as_deref(),
             Some("recovery-surface")
         );
+    }
+
+    #[test]
+    fn embedded_modal_slot_keeps_modal_stack_without_panel_snapshot() {
+        let config = Config::default();
+        let mut session = SessionState::new(&config);
+        session.bind_surface_embedding(
+            "approval-panel",
+            "embedded-approval-1".to_string(),
+            Some("org.example.ApprovalDialog".to_string()),
+            Some("Approval Dialog".to_string()),
+        );
+
+        assert_eq!(session.embedded_surface_count, 1);
+        assert_eq!(
+            session.active_modal_surface_id.as_deref(),
+            Some("approval-panel")
+        );
+        assert_eq!(
+            session.primary_attention_surface_id.as_deref(),
+            Some("approval-panel")
+        );
+        assert_eq!(
+            session.topmost_surface_id.as_deref(),
+            Some("approval-panel")
+        );
+        assert_eq!(session.stacking_status, "embedded-stack(approval-panel)");
+    }
+
+    #[test]
+    fn hybrid_embedding_stack_prefers_modal_slot() {
+        use crate::panel_snapshot::{PanelSnapshot, PanelSurface};
+
+        let config = Config::default();
+        let mut session = SessionState::new(&config);
+        session.apply_panel_snapshot_from(
+            &PanelSnapshot {
+                profile_id: Some("shell-compositor-hybrid".to_string()),
+                surface_count: 1,
+                surfaces: vec![PanelSurface {
+                    component: "approval-panel".to_string(),
+                    panel_id: Some("approval-panel-shell".to_string()),
+                    status: Some("pending".to_string()),
+                    tone: Some("warning".to_string()),
+                    primary_action_id: Some("approve".to_string()),
+                    action_count: 2,
+                    section_count: 1,
+                    error: None,
+                }],
+            },
+            "command",
+        );
+        session.bind_surface_embedding(
+            "approval-panel",
+            "embedded-approval-2".to_string(),
+            Some("aios.shell.panel.approval".to_string()),
+            Some("Approval Panel".to_string()),
+        );
+
+        assert_eq!(session.panel_host_bound_count, 1);
+        assert_eq!(session.embedded_surface_count, 1);
+        assert_eq!(session.stacking_status, "hybrid-stack(approval-panel)");
+        assert_eq!(
+            session.active_modal_surface_id.as_deref(),
+            Some("approval-panel")
+        );
+    }
+
+    #[test]
+    fn tracks_window_policy_metrics_when_modal_surface_blocks_other_content() {
+        use crate::panel_snapshot::{PanelSnapshot, PanelSurface};
+
+        let config = Config::default();
+        let mut session = SessionState::new(&config);
+        session.apply_panel_snapshot_from(
+            &PanelSnapshot {
+                profile_id: Some("shell-compositor-policy".to_string()),
+                surface_count: 3,
+                surfaces: vec![
+                    PanelSurface {
+                        component: "launcher".to_string(),
+                        panel_id: Some("launcher-panel".to_string()),
+                        status: Some("active".to_string()),
+                        tone: Some("positive".to_string()),
+                        primary_action_id: Some("create-session".to_string()),
+                        action_count: 1,
+                        section_count: 1,
+                        error: None,
+                    },
+                    PanelSurface {
+                        component: "approval-panel".to_string(),
+                        panel_id: Some("approval-panel-shell".to_string()),
+                        status: Some("pending".to_string()),
+                        tone: Some("warning".to_string()),
+                        primary_action_id: Some("approve".to_string()),
+                        action_count: 2,
+                        section_count: 1,
+                        error: None,
+                    },
+                    PanelSurface {
+                        component: "notification-center".to_string(),
+                        panel_id: Some("notification-center-panel".to_string()),
+                        status: Some("info".to_string()),
+                        tone: Some("neutral".to_string()),
+                        primary_action_id: Some("refresh".to_string()),
+                        action_count: 1,
+                        section_count: 1,
+                        error: None,
+                    },
+                ],
+            },
+            "command",
+        );
+
+        assert_eq!(session.modal_surface_count, 1);
+        assert_eq!(session.blocked_surface_count, 2);
+        assert_eq!(session.topmost_slot_id.as_deref(), Some("approval-panel"));
+        assert_eq!(session.shell_role_counts.get("dock"), Some(&1));
+        assert_eq!(session.window_policy_counts.get("modal-dialog"), Some(&2));
+        assert_eq!(
+            session.interaction_mode_counts.get("blocked-by-modal"),
+            Some(&2)
+        );
+        let launcher = session
+            .surfaces
+            .iter()
+            .find(|surface| surface.surface_id == "launcher")
+            .unwrap();
+        assert_eq!(launcher.interaction_mode, "blocked-by-modal");
+        assert_eq!(launcher.blocked_by.as_deref(), Some("approval-panel"));
     }
 
     #[test]

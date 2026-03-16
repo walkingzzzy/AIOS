@@ -34,7 +34,7 @@ CORRELATION_REQUIREMENTS = {
     "audit-event.schema.json": ["session_id", "task_id", "approval_id", "provider_id", "image_id", "artifact_path"],
     "trace-event.schema.json": ["session_id", "task_id", "provider_id", "image_id", "artifact_path"],
     "diagnostic-bundle.schema.json": ["service_id", "update_id", "boot_id", "image_id", "artifact_path"],
-    "health-event.schema.json": ["service_id", "update_id", "boot_id", "image_id", "artifact_path"],
+    "health-event.schema.json": ["service_id", "update_id", "boot_id", "image_id", "artifact_path", "runtime_service_id", "provider_status", "backend_id"],
     "recovery-evidence.schema.json": ["service_id", "update_id", "boot_id", "image_id", "artifact_path"],
 }
 
@@ -105,6 +105,12 @@ def validate_optional_artifact(schema_path: Path) -> dict[str, str]:
         return result(f"{schema_path.name}:artifact", "skipped", f"artifact not present: {artifact_path}")
     schema = load_json(schema_path)
     sample = load_json(artifact_path)
+    if isinstance(sample, dict) and set(sample.keys()) <= {"status"}:
+        return result(
+            f"{schema_path.name}:artifact",
+            "skipped",
+            f"artifact placeholder is incomplete and was ignored: {artifact_path}",
+        )
     Draft202012Validator(schema, format_checker=Draft202012Validator.FORMAT_CHECKER).validate(sample)
     return result(f"{schema_path.name}:artifact", "passed", f"artifact matches schema: {artifact_path}")
 

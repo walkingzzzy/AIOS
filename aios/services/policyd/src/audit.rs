@@ -10,9 +10,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use aios_contracts::{
-    ApprovalRecord, AuditQueryRequest, AuditQueryResponse, AuditRecord, ExecutionToken,
-    PolicyEvaluateRequest, PolicyEvaluateResponse, TokenIssueRequest, TokenVerifyRequest,
-    TokenVerifyResponse,
+    ApprovalRecord, AuditExportRequest, AuditExportResponse, AuditQueryRequest, AuditQueryResponse,
+    AuditRecord, ExecutionToken, PolicyEvaluateRequest, PolicyEvaluateResponse, TokenIssueRequest,
+    TokenVerifyRequest, TokenVerifyResponse,
 };
 use aios_core::schema::CURRENT_OBSERVABILITY_SCHEMA_VERSION;
 
@@ -110,6 +110,27 @@ impl AuditSegmentMetadata {
             last_audit_id: None,
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct AuditExportStoreMetadata {
+    active_segment_path: String,
+    index_path: String,
+    archive_dir: String,
+    archived_segment_count: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct AuditExportBundle {
+    export_id: String,
+    created_at: String,
+    service_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+    filters: AuditQueryRequest,
+    notes: Vec<String>,
+    audit_store: AuditExportStoreMetadata,
+    entries: Vec<AuditRecord>,
 }
 
 impl AuditWriter {
@@ -362,6 +383,63 @@ impl AuditWriter {
 
         entries.truncate(request.limit.max(1) as usize);
         Ok(AuditQueryResponse { entries })
+    }
+
+    pub fn export(
+        &self,
+        service_id: &str,
+        export_dir: &Path,
+        request: &AuditExportRequest,
+    ) -> anyhow::Result<AuditExportResponse> {
+        let query = audit_query_from_export_request(request);
+        let entries = self.query(&query)?.entries;
+        let index = self.load_index()?;
+        let created_at = Utc::now().to_rfc3339();
+        let export_id = format!("audit-export-{}", Utc::now().timestamp_millis());
+        let export_path = export_dir.join(format!("{export_id}.json"));
+        let mut notes = vec![
+            format!("limit={}", request.limit),
+            format!("reverse={}", request.reverse),
+            format!("export_dir={}", export_dir.display()),
+        ];
+        if let Some(reason) = request.reason.as_deref() {
+            notes.push(format!("reason={reason}"));
+        }
+
+        let audit_store = AuditExportStoreMetadata {
+            active_segment_path: index.active_segment.path.clone(),
+            index_path: self.index_path.display().to_string(),
+            archive_dir: self.archive_dir.display().to_string(),
+            archived_segment_count: count_u32(index.archived_segments.len()),
+        };
+        let bundle = AuditExportBundle {
+            export_id: export_id.clone(),
+            created_at: created_at.clone(),
+            service_id: service_id.to_string(),
+            reason: request.reason.clone(),
+            filters: query,
+            notes: notes.clone(),
+            audit_store: audit_store.clone(),
+            entries: entries.clone(),
+        };
+
+        if let Some(parent) = export_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&export_path, serde_json::to_vec_pretty(&bundle)?)?;
+
+        Ok(AuditExportResponse {
+            service_id: service_id.to_string(),
+            export_id,
+            export_path: export_path.display().to_string(),
+            created_at,
+            entry_count: count_u32(entries.len()),
+            active_segment_path: audit_store.active_segment_path,
+            index_path: audit_store.index_path,
+            archive_dir: audit_store.archive_dir,
+            archived_segment_count: audit_store.archived_segment_count,
+            notes,
+        })
     }
 
     fn append_json(&self, mut payload: Value) -> anyhow::Result<()> {
@@ -705,6 +783,23 @@ fn matches_request(entry: &AuditRecord, request: &AuditQueryRequest) -> bool {
     true
 }
 
+fn audit_query_from_export_request(request: &AuditExportRequest) -> AuditQueryRequest {
+    AuditQueryRequest {
+        user_id: request.user_id.clone(),
+        session_id: request.session_id.clone(),
+        task_id: request.task_id.clone(),
+        capability_id: request.capability_id.clone(),
+        decision: request.decision.clone(),
+        execution_location: request.execution_location.clone(),
+        limit: request.limit,
+        reverse: request.reverse,
+    }
+}
+
+fn count_u32(len: usize) -> u32 {
+    len.try_into().unwrap_or(u32::MAX)
+}
+
 fn segment_reference_time(segment: &AuditSegmentMetadata) -> Option<DateTime<Utc>> {
     [
         segment.last_timestamp.as_deref(),
@@ -953,6 +1048,61 @@ mod tests {
         assert_eq!(response.entries.len(), 2);
         assert_eq!(response.entries[0].audit_id, "audit-1");
         assert_eq!(response.entries[1].audit_id, "audit-2");
+
+        let _ = fs::remove_dir_all(root);
+        Ok(())
+    }
+
+    #[test]
+    fn audit_export_writes_bundle_file_with_store_metadata() -> anyhow::Result<()> {
+        let root = std::env::temp_dir().join(format!(
+            "aios-audit-export-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        fs::create_dir_all(&root)?;
+        let path = root.join("audit.jsonl");
+        let writer =
+            AuditWriter::with_store_config(path.clone(), None, store_config(&root, 0, 30, 4));
+
+        writer.append_json(json!({
+            "audit_id": "audit-export-1",
+            "timestamp": "2026-03-09T00:00:00Z",
+            "user_id": "u1",
+            "session_id": "s1",
+            "task_id": "t1",
+            "capability_id": "system.file.bulk_delete",
+            "decision": "approval-pending",
+            "execution_location": "local",
+            "result": {"summary": "export me"}
+        }))?;
+
+        let export_dir = root.join("exports");
+        let response = writer.export(
+            "aios-policyd",
+            &export_dir,
+            &AuditExportRequest {
+                user_id: None,
+                session_id: Some("s1".to_string()),
+                task_id: None,
+                capability_id: None,
+                decision: None,
+                execution_location: None,
+                limit: 10,
+                reverse: true,
+                reason: Some("operator-export".to_string()),
+            },
+        )?;
+
+        assert!(Path::new(&response.export_path).exists());
+        assert_eq!(response.entry_count, 1);
+        assert_eq!(response.active_segment_path, path.display().to_string());
+        let payload: Value = serde_json::from_str(&fs::read_to_string(&response.export_path)?)?;
+        assert_eq!(payload["entries"][0]["audit_id"], "audit-export-1");
+        assert_eq!(payload["reason"], "operator-export");
+        assert_eq!(
+            payload["audit_store"]["active_segment_path"],
+            path.display().to_string()
+        );
 
         let _ = fs::remove_dir_all(root);
         Ok(())

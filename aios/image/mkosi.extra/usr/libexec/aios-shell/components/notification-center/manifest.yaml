@@ -2,12 +2,14 @@ component_id: notification-center
 status: done
 role: shell-notification-surface
 integrates:
+  - aios-agentd
   - aios-updated
   - aios-deviced
   - aios-policyd
 features:
   - recovery-surface-summary
   - capture-indicator-summary
+  - agent.approval.list
   - approval-summary
   - backend-status-summary
 entrypoint: client.py

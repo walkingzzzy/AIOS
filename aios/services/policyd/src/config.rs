@@ -12,6 +12,7 @@ pub struct Config {
     pub audit_log_path: PathBuf,
     pub audit_index_path: PathBuf,
     pub audit_archive_dir: PathBuf,
+    pub audit_export_dir: PathBuf,
     pub observability_log_path: PathBuf,
     pub token_key_path: PathBuf,
     pub token_usage_dir: PathBuf,
@@ -47,6 +48,10 @@ impl Config {
             aios_core::config::env_path_or("AIOS_POLICYD_AUDIT_ARCHIVE_DIR", || {
                 paths.state_dir.join("audit-archive")
             });
+        let audit_export_dir =
+            aios_core::config::env_path_or("AIOS_POLICYD_AUDIT_EXPORT_DIR", || {
+                paths.state_dir.join("audit-exports")
+            });
         let observability_log_path =
             aios_core::config::env_path_or("AIOS_POLICYD_OBSERVABILITY_LOG", || {
                 paths.state_dir.join("observability.jsonl")
@@ -81,6 +86,7 @@ impl Config {
             audit_log_path,
             audit_index_path,
             audit_archive_dir,
+            audit_export_dir,
             observability_log_path,
             token_key_path,
             token_usage_dir,

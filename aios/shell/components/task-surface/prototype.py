@@ -11,7 +11,13 @@ def default_socket() -> Path:
     return Path(os.environ.get("AIOS_SESSIOND_SOCKET_PATH", "/run/aios/sessiond/sessiond.sock"))
 
 
+def default_agent_socket() -> Path:
+    return Path(os.environ.get("AIOS_AGENTD_SOCKET_PATH", "/run/aios/agentd/agentd.sock"))
+
+
 def rpc_call(socket_path: Path, method: str, params: dict) -> dict:
+    if not hasattr(socket, "AF_UNIX"):
+        raise RuntimeError(f"unix-domain-socket-unavailable:{socket_path}")
     payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
         client.connect(str(socket_path))
@@ -123,6 +129,7 @@ if __name__ == "__main__":
         choices=["list", "show", "update", "plan", "events"],
     )
     parser.add_argument("--socket", type=Path, default=default_socket())
+    parser.add_argument("--agent-socket", type=Path, default=default_agent_socket())
     parser.add_argument("--fixture", type=Path)
     parser.add_argument("--session-id")
     parser.add_argument("--task-id")
@@ -138,34 +145,38 @@ if __name__ == "__main__":
         if not args.session_id:
             raise SystemExit("--session-id is required for list")
         result = rpc_call(
-            args.socket,
-            "task.list",
+            args.agent_socket,
+            "agent.task.list",
             {"session_id": args.session_id, "state": args.state, "limit": args.limit},
         )
     elif args.command == "show":
         if not args.task_id:
             raise SystemExit("--task-id is required for show")
-        result = rpc_call(args.socket, "task.get", {"task_id": args.task_id})
+        result = rpc_call(
+            args.agent_socket,
+            "agent.task.get",
+            {"task_id": args.task_id, "event_limit": args.limit or 10},
+        )
     elif args.command == "update":
         if not args.task_id:
             raise SystemExit("--task-id is required for update")
         if not args.state:
             raise SystemExit("--state is required for update")
         result = rpc_call(
-            args.socket,
-            "task.state.update",
+            args.agent_socket,
+            "agent.task.state.update",
             {"task_id": args.task_id, "new_state": args.state, "reason": args.reason},
         )
     elif args.command == "plan":
         if not args.task_id:
             raise SystemExit("--task-id is required for plan")
-        result = rpc_call(args.socket, "task.plan.get", {"task_id": args.task_id})
+        result = rpc_call(args.agent_socket, "agent.task.plan.get", {"task_id": args.task_id})
     else:
         if not args.task_id:
             raise SystemExit("--task-id is required for events")
         result = rpc_call(
-            args.socket,
-            "task.events.list",
+            args.agent_socket,
+            "agent.task.events.list",
             {"task_id": args.task_id, "limit": args.limit or 10, "reverse": True},
         )
 

@@ -2,13 +2,13 @@ component_id: task-surface
 status: done
 role: shell-task-surface
 integrates:
-  - aios-sessiond
+  - aios-agentd
 features:
-  - task.list
-  - task.get
-  - task.state.update
-  - task.events.list
-  - task.plan.get
+  - agent.task.list
+  - agent.task.get
+  - agent.task.state.update
+  - agent.task.events.list
+  - agent.task.plan.get
   - focus-task-detail
   - provider-route-summary
 entrypoint: client.py

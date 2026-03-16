@@ -3,10 +3,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import subprocess
+import sys
 import time
 from pathlib import Path
 
-from prototype import default_socket, fixture_call, load_fixture, rpc_call
+from prototype import default_agent_socket, default_socket, fixture_call, load_fixture, rpc_call
 
 
 STATUS_TONES = {
@@ -26,6 +29,17 @@ SUGGESTED_INTENTS = [
     "review approvals",
     "inspect device health",
 ]
+WINDOW_ACTION_IDS = {
+    "activate-next-workspace",
+    "activate-previous-workspace",
+    "focus-window",
+    "minimize-window",
+    "move-window-next-workspace",
+    "restore-recent-window",
+    "restore-window",
+    "send-window-active-output",
+}
+TASK_SURFACE_PANEL = Path(__file__).resolve().parent.parent / "task-surface" / "panel.py"
 
 
 def tone_for(status: str | None) -> str:
@@ -68,6 +82,176 @@ def restore_point_at(session: dict | None) -> str | None:
     return session.get("last_resumed_at") or session.get("created_at")
 
 
+
+def default_compositor_runtime_state() -> Path | None:
+    value = os.environ.get("AIOS_SHELL_COMPOSITOR_RUNTIME_STATE_PATH")
+    return Path(value) if value else None
+
+
+def default_compositor_window_state() -> Path | None:
+    value = os.environ.get("AIOS_SHELL_COMPOSITOR_WINDOW_STATE_PATH")
+    return Path(value) if value else None
+
+
+def parse_int(value, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def load_json_payload(path: Path | None) -> tuple[dict, str | None]:
+    if path is None:
+        return {}, None
+    if not path.exists():
+        return {}, f"missing:{path}"
+    try:
+        payload = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as error:
+        return {}, str(error)
+    if isinstance(payload, dict):
+        return payload, None
+    return {}, f"invalid-json-object:{path}"
+
+
+def derive_managed_windows(window_payload: dict, runtime_session: dict) -> list[dict]:
+    managed_windows: list[dict] = []
+    for entry in window_payload.get("windows", []):
+        if not isinstance(entry, dict):
+            continue
+        rect = entry.get("rect") if isinstance(entry.get("rect"), dict) else {}
+        workspace_index = parse_int(entry.get("workspace_index"), 0)
+        workspace_id = f"workspace-{workspace_index + 1}"
+        output_id = entry.get("output_id") or runtime_session.get("active_output_id") or "display-1"
+        window_policy = str(entry.get("window_policy") or "workspace-window")
+        minimized = bool(entry.get("minimized"))
+        managed_windows.append(
+            {
+                "window_key": entry.get("window_key"),
+                "surface_id": entry.get("slot_id") or entry.get("window_key"),
+                "app_id": entry.get("app_id"),
+                "title": entry.get("title"),
+                "slot_id": entry.get("slot_id"),
+                "output_id": output_id,
+                "workspace_id": workspace_id,
+                "window_policy": window_policy,
+                "floating": "floating" in window_policy,
+                "visible": not minimized,
+                "minimized": minimized,
+                "persisted": True,
+                "interaction_state": "minimized" if minimized else "persisted",
+                "layout_x": parse_int(rect.get("x"), 0),
+                "layout_y": parse_int(rect.get("y"), 0),
+                "layout_width": parse_int(rect.get("width"), 0),
+                "layout_height": parse_int(rect.get("height"), 0),
+            }
+        )
+    return managed_windows
+
+
+def workspace_id_from_index(index: int) -> str:
+    return f"workspace-{max(index, 0) + 1}"
+
+
+def derive_release_grade_output_status(outputs: list[dict], renderable_output_count: int) -> str:
+    if not outputs:
+        return "uninitialized"
+    output_count = len(outputs)
+    if output_count == 1:
+        return f"single-output(renderable={renderable_output_count}/{output_count})"
+    if renderable_output_count >= output_count:
+        return f"multi-output(renderable={renderable_output_count}/{output_count})"
+    return f"multi-output(partial-renderable={renderable_output_count}/{output_count})"
+
+
+def load_compositor_summary(
+    runtime_state_path: Path | None,
+    window_state_path: Path | None,
+) -> dict:
+    runtime_payload, runtime_error = load_json_payload(runtime_state_path)
+    window_payload, window_error = load_json_payload(window_state_path)
+    runtime_session = runtime_payload.get("session")
+    if not isinstance(runtime_session, dict):
+        runtime_session = runtime_payload if isinstance(runtime_payload, dict) else {}
+
+    runtime_managed_windows = [
+        item
+        for item in runtime_session.get("managed_windows", [])
+        if isinstance(item, dict)
+    ]
+    window_managed_windows = derive_managed_windows(window_payload, runtime_session)
+    managed_windows = window_managed_windows or runtime_managed_windows
+
+    derived_workspace_counts: dict[str, int] = {}
+    for window in managed_windows:
+        workspace_id = str(window.get("workspace_id") or "workspace-1")
+        derived_workspace_counts[workspace_id] = derived_workspace_counts.get(workspace_id, 0) + 1
+    workspace_window_counts = dict(sorted(derived_workspace_counts.items()))
+
+    active_workspace_index = parse_int(
+        window_payload.get("active_workspace_index"),
+        parse_int(runtime_session.get("active_workspace_index"), 0),
+    )
+    active_workspace_id = workspace_id_from_index(active_workspace_index)
+    workspace_count = max(
+        1,
+        parse_int(
+            runtime_session.get("workspace_count"),
+            max(len(workspace_window_counts), active_workspace_index + 1, 1),
+        ),
+    )
+    outputs = [
+        item
+        for item in runtime_session.get("outputs", [])
+        if isinstance(item, dict)
+    ]
+    output_count = parse_int(runtime_session.get("output_count"), len(outputs))
+    renderable_output_count = parse_int(
+        runtime_session.get("renderable_output_count"),
+        sum(1 for item in outputs if item.get("renderable")),
+    )
+    non_renderable_output_count = parse_int(
+        runtime_session.get("non_renderable_output_count"),
+        max(output_count - renderable_output_count, 0),
+    )
+    errors = [error for error in (runtime_error, window_error) if error]
+    data_status = "ready" if runtime_payload or window_payload else "unavailable"
+    if errors and data_status == "ready":
+        data_status = "partial"
+
+    return {
+        "data_status": data_status,
+        "data_error": "; ".join(errors) if errors else None,
+        "runtime_phase": runtime_payload.get("phase"),
+        "runtime_state_status": runtime_session.get("runtime_state_status"),
+        "runtime_state_path": str(runtime_state_path) if runtime_state_path else None,
+        "window_state_path": str(window_state_path) if window_state_path else None,
+        "window_manager_status": runtime_session.get("window_manager_status"),
+        "workspace_count": workspace_count,
+        "active_workspace_index": active_workspace_index,
+        "active_workspace_id": active_workspace_id,
+        "active_output_id": window_payload.get("active_output_id") or runtime_session.get("active_output_id"),
+        "output_count": output_count,
+        "renderable_output_count": renderable_output_count,
+        "non_renderable_output_count": non_renderable_output_count,
+        "release_grade_output_status": runtime_session.get("release_grade_output_status")
+        or derive_release_grade_output_status(outputs, renderable_output_count),
+        "managed_window_count": len(managed_windows),
+        "visible_window_count": sum(1 for item in managed_windows if item.get("visible")),
+        "floating_window_count": sum(1 for item in managed_windows if item.get("floating")),
+        "minimized_window_count": sum(1 for item in managed_windows if item.get("minimized")),
+        "window_move_count": parse_int(runtime_session.get("window_move_count"), 0),
+        "window_resize_count": parse_int(runtime_session.get("window_resize_count"), 0),
+        "window_minimize_count": parse_int(runtime_session.get("window_minimize_count"), 0),
+        "window_restore_count": parse_int(runtime_session.get("window_restore_count"), 0),
+        "last_minimized_window_key": runtime_session.get("last_minimized_window_key"),
+        "last_restored_window_key": runtime_session.get("last_restored_window_key"),
+        "workspace_window_counts": workspace_window_counts,
+        "managed_windows": managed_windows,
+        "outputs": outputs,
+    }
+
+
 def load_fixture_state(path: Path, session_id: str | None) -> dict:
     payload = load_fixture(path)
     sessions = sort_sessions(list(payload.get("sessions", [])))
@@ -95,44 +279,60 @@ def load_fixture_state(path: Path, session_id: str | None) -> dict:
         "recovery": recovery,
         "session_count": len(sessions),
         "task_count_total": len(all_tasks),
+        "data_source_status": "ready",
+        "data_source_error": None,
     }
 
 
-def load_live_state(socket_path: Path, session_id: str | None) -> dict:
+def load_live_state(agent_socket_path: Path, session_id: str | None) -> dict:
     sessions: list[dict] = []
     focus_session = None
     recovery = None
     tasks: list[dict] = []
+    errors: list[str] = []
 
     try:
-        sessions_result = rpc_call(socket_path, "session.list", {"limit": SESSION_LIST_LIMIT})
+        sessions_result = rpc_call(
+            agent_socket_path,
+            "agent.session.list",
+            {"limit": SESSION_LIST_LIMIT},
+        )
         sessions = sort_sessions(list(sessions_result.get("sessions", [])))
-    except Exception:
+    except Exception as error:
         sessions = []
+        errors.append(str(error))
 
     focus_session_id = session_id or ((sessions[0] if sessions else {}).get("session_id"))
     if focus_session_id:
         try:
             evidence = rpc_call(
-                socket_path,
-                "session.evidence.get",
+                agent_socket_path,
+                "agent.session.evidence.get",
                 {"session_id": focus_session_id, "limit": 20},
             )
             focus_session = evidence.get("session")
             recovery = evidence.get("recovery")
             tasks = sort_tasks(list(evidence.get("tasks", [])))
-        except Exception:
+        except Exception as error:
             focus_session = next(
                 (item for item in sessions if item.get("session_id") == focus_session_id),
                 None,
             )
             recovery = None
             tasks = []
+            errors.append(str(error))
 
     if focus_session is not None and not any(
         item.get("session_id") == focus_session.get("session_id") for item in sessions
     ):
         sessions = sort_sessions([focus_session, *sessions])
+
+    if errors:
+        data_source_status = "partial" if sessions or focus_session is not None or tasks else "fallback-empty"
+        data_source_error = "; ".join(errors)
+    else:
+        data_source_status = "ready"
+        data_source_error = None
 
     return {
         "sessions": sessions,
@@ -142,13 +342,15 @@ def load_live_state(socket_path: Path, session_id: str | None) -> dict:
         "recovery": recovery,
         "session_count": len(sessions),
         "task_count_total": len(tasks),
+        "data_source_status": data_source_status,
+        "data_source_error": data_source_error,
     }
 
 
-def load_state(socket_path: Path, fixture: Path | None, session_id: str | None) -> dict:
+def load_state(agent_socket_path: Path, fixture: Path | None, session_id: str | None) -> dict:
     if fixture is not None:
         return load_fixture_state(fixture, session_id)
-    return load_live_state(socket_path, session_id)
+    return load_live_state(agent_socket_path, session_id)
 
 
 def build_model(state: dict, requested_session_id: str | None, user_id: str, intent: str, title: str | None, task_state: str) -> dict:
@@ -237,7 +439,7 @@ def build_model(state: dict, requested_session_id: str | None, user_id: str, int
     return {
         "component_id": "launcher",
         "panel_id": "launcher-panel",
-        "panel_kind": "shell-panel-skeleton",
+        "panel_kind": "shell-panel",
         "header": {
             "title": "Launcher Panel",
             "subtitle": f"user {user_id} · intent {intent}",
@@ -360,6 +562,8 @@ def build_model(state: dict, requested_session_id: str | None, user_id: str, int
             "restore_task_count": len(tasks),
             "focus_session_status": (focus_session or {}).get("status"),
             "focus_session_last_resumed_at": (focus_session or {}).get("last_resumed_at"),
+            "data_source_status": state.get("data_source_status", "ready"),
+            "data_source_error": state.get("data_source_error"),
         },
     }
 
@@ -370,6 +574,11 @@ def render_text(panel: dict) -> str:
     lines.append(f"{header['title']} [{header['status']}]")
     lines.append(header["subtitle"])
     lines.append("badges: " + ", ".join(f"{item['label']}: {item['value']}" for item in panel["badges"]))
+    meta = panel.get("meta") or {}
+    if meta.get("data_source_status") != "ready":
+        lines.append(f"source: {meta.get('data_source_status')}")
+        if meta.get("data_source_error"):
+            lines.append(f"source_error: {meta['data_source_error']}")
     if panel["actions"]:
         lines.append("actions: " + ", ".join(action["label"] for action in panel["actions"] if action.get("enabled", True)))
     for section in panel["sections"]:
@@ -396,7 +605,7 @@ def resolve_action_session_id(args: argparse.Namespace) -> str | None:
         focus_session = state.get("focus_session") or {}
         return focus_session.get("session_id")
     try:
-        sessions = rpc_call(args.socket, "session.list", {"limit": 1}).get("sessions", [])
+        sessions = rpc_call(args.agent_socket, "agent.session.list", {"limit": 1}).get("sessions", [])
     except Exception:
         return None
     if sessions:
@@ -416,7 +625,7 @@ def run_action(args: argparse.Namespace) -> dict:
         if args.fixture is not None:
             result = fixture_call(args.fixture, "create-session", action_args)
         else:
-            result = rpc_call(args.socket, "session.create", {"user_id": args.user_id, "metadata": {"initial_intent": args.intent}})
+            result = rpc_call(args.agent_socket, "agent.session.create", {"user_id": args.user_id, "metadata": {"initial_intent": args.intent}})
         return {
             **result,
             "target_component": "task-surface",
@@ -431,7 +640,7 @@ def run_action(args: argparse.Namespace) -> dict:
         if args.fixture is not None:
             result = fixture_call(args.fixture, "resume", action_args)
         else:
-            result = rpc_call(args.socket, "session.resume", {"session_id": session_id})
+            result = rpc_call(args.agent_socket, "agent.session.resume", {"session_id": session_id})
         session = result.get("session") or {}
         recovery = result.get("recovery") or {}
         return {
@@ -453,7 +662,7 @@ def run_action(args: argparse.Namespace) -> dict:
         if args.fixture is not None:
             result = fixture_call(args.fixture, "create-task", action_args)
         else:
-            result = rpc_call(args.socket, "task.create", {"session_id": session_id, "title": args.title or args.intent, "state": args.state})
+            result = rpc_call(args.agent_socket, "agent.task.create", {"session_id": session_id, "title": args.title or args.intent, "state": args.state})
         return {
             **result,
             "target_component": "task-surface",
@@ -463,9 +672,10 @@ def run_action(args: argparse.Namespace) -> dict:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="AIOS launcher panel skeleton")
+    parser = argparse.ArgumentParser(description="AIOS launcher panel")
     parser.add_argument("command", nargs="?", default="render", choices=["render", "model", "action", "watch"])
     parser.add_argument("--socket", type=Path, default=default_socket())
+    parser.add_argument("--agent-socket", type=Path, default=default_agent_socket())
     parser.add_argument("--fixture", type=Path)
     parser.add_argument("--session-id")
     parser.add_argument("--user-id", default="local-user")
@@ -488,7 +698,7 @@ def main() -> int:
     if args.command == "watch":
         iterations = max(1, args.iterations)
         for index in range(iterations):
-            state = load_state(args.socket, args.fixture, args.session_id)
+            state = load_state(args.agent_socket, args.fixture, args.session_id)
             model = build_model(state, args.session_id, args.user_id, args.intent, args.title, args.state)
             if args.json:
                 print(json.dumps(model, indent=2, ensure_ascii=False))
@@ -500,7 +710,7 @@ def main() -> int:
                 time.sleep(args.interval)
         return 0
 
-    state = load_state(args.socket, args.fixture, args.session_id)
+    state = load_state(args.agent_socket, args.fixture, args.session_id)
     model = build_model(state, args.session_id, args.user_id, args.intent, args.title, args.state)
     if args.command == "model" or args.json:
         print(json.dumps(model, indent=2, ensure_ascii=False))
@@ -511,3 +721,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

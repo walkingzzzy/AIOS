@@ -22,6 +22,8 @@ def default_surface() -> Path:
 
 
 def rpc_call(socket_path: Path, method: str, params: dict) -> dict:
+    if not hasattr(socket, "AF_UNIX"):
+        raise RuntimeError(f"unix-domain-socket-unavailable:{socket_path}")
     payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
         client.connect(str(socket_path))

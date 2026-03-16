@@ -1,12 +1,17 @@
 use crate::config::Config;
+use serde::Serialize;
 
 const DEFAULT_CANVAS_WIDTH: i32 = 1280;
 const DEFAULT_CANVAS_HEIGHT: i32 = 800;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Surface {
     pub surface_id: String,
     pub role: String,
+    pub shell_role: String,
+    pub interaction_mode: String,
+    pub blocked_by: Option<String>,
+    pub window_policy: String,
     pub host_interface: String,
     pub state: String,
     pub layout_zone: String,
@@ -45,9 +50,9 @@ pub struct SurfacePlacement {
     pub height: i32,
 }
 
-pub fn placeholder_surfaces(config: &Config) -> Vec<Surface> {
+pub fn panel_slot_surfaces(config: &Config) -> Vec<Surface> {
     config
-        .placeholder_surfaces
+        .panel_slots
         .iter()
         .map(|surface_id| {
             let placement =
@@ -55,8 +60,12 @@ pub fn placeholder_surfaces(config: &Config) -> Vec<Surface> {
             Surface {
                 surface_id: surface_id.clone(),
                 role: surface_role(surface_id).to_string(),
-                host_interface: format!("{}-placeholder", config.desktop_host),
-                state: "placeholder-ready".to_string(),
+                shell_role: surface_shell_role(surface_id).to_string(),
+                interaction_mode: surface_default_interaction_mode(surface_id).to_string(),
+                blocked_by: None,
+                window_policy: surface_window_policy(surface_id, &config.workspace_toplevel_mode),
+                host_interface: format!("{}-panel-slot", config.desktop_host),
+                state: "slot-ready".to_string(),
                 layout_zone: placement.zone.to_string(),
                 layout_anchor: placement.anchor.to_string(),
                 layout_x: placement.x,
@@ -65,7 +74,7 @@ pub fn placeholder_surfaces(config: &Config) -> Vec<Surface> {
                 layout_height: placement.height,
                 stacking_layer: placement_stacking_layer(placement.zone).to_string(),
                 z_index: placement_z_index(placement.zone),
-                reservation_status: "placeholder-only".to_string(),
+                reservation_status: "panel-slot-open".to_string(),
                 pointer_policy: surface_pointer_policy(surface_id).to_string(),
                 focus_policy: surface_focus_policy(surface_id).to_string(),
                 panel_host_status: "unbound".to_string(),
@@ -77,7 +86,7 @@ pub fn placeholder_surfaces(config: &Config) -> Vec<Surface> {
                 panel_action_count: 0,
                 panel_section_count: 0,
                 panel_error: None,
-                embedding_status: "placeholder-only".to_string(),
+                embedding_status: "panel-slot-open".to_string(),
                 embedded_surface_id: None,
                 client_app_id: None,
                 client_title: None,
@@ -156,6 +165,48 @@ pub fn surface_role(surface_id: &str) -> &'static str {
         "remotegovernance" => "governance-slot",
         "devicebackendstatus" => "device-health-slot",
         _ => "panel-host",
+    }
+}
+
+pub fn surface_shell_role(surface_id: &str) -> &'static str {
+    match normalize_surface_token(surface_id).as_str() {
+        "launcher" => "dock",
+        "tasksurface" => "workspace",
+        "approvalpanel" | "portalchooser" | "recoverysurface" => "modal",
+        "notificationcenter" | "captureindicators" => "overlay",
+        "remotegovernance" | "devicebackendstatus" => "utility",
+        _ => "floating",
+    }
+}
+
+pub fn surface_default_interaction_mode(surface_id: &str) -> &'static str {
+    match normalize_surface_token(surface_id).as_str() {
+        "tasksurface" => "workspace",
+        "approvalpanel" | "portalchooser" | "recoverysurface" => "modal",
+        "captureindicators" => "passive",
+        _ => "interactive",
+    }
+}
+
+pub fn surface_window_policy(surface_id: &str, workspace_toplevel_mode: &str) -> String {
+    let workspace_mode = normalize_workspace_toplevel_mode(workspace_toplevel_mode);
+    match normalize_surface_token(surface_id).as_str() {
+        "launcher" => "dock-exclusive".to_string(),
+        "tasksurface" => format!("workspace-{workspace_mode}"),
+        "approvalpanel" | "portalchooser" => "modal-dialog".to_string(),
+        "recoverysurface" => "recovery-workflow".to_string(),
+        "notificationcenter" => "overlay-floating".to_string(),
+        "captureindicators" => "overlay-passive".to_string(),
+        "remotegovernance" => "utility-rail".to_string(),
+        "devicebackendstatus" => "utility-tray".to_string(),
+        _ => "floating-utility".to_string(),
+    }
+}
+
+pub fn normalize_workspace_toplevel_mode(value: &str) -> &'static str {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "fullscreen" | "full-screen" | "full" => "fullscreen",
+        _ => "maximized",
     }
 }
 
@@ -349,31 +400,64 @@ fn normalize_surface_token(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        match_panel_slot, placeholder_surfaces, placement_contains_point, placement_stacking_layer,
-        placement_z_index, surface_contains_point, surface_focus_policy, surface_placement,
-        surface_pointer_policy,
+        match_panel_slot, normalize_workspace_toplevel_mode, panel_slot_surfaces,
+        placement_contains_point, placement_stacking_layer, placement_z_index,
+        surface_contains_point, surface_focus_policy, surface_placement, surface_pointer_policy,
+        surface_window_policy,
     };
     use crate::config::Config;
 
     #[test]
-    fn maps_placeholder_surfaces() {
+    fn maps_panel_slot_surfaces() {
         let mut config = Config::default();
-        config.placeholder_surfaces = vec!["launcher".to_string(), "task-surface".to_string()];
+        config.panel_slots = vec!["launcher".to_string(), "task-surface".to_string()];
 
-        let surfaces = placeholder_surfaces(&config);
+        let surfaces = panel_slot_surfaces(&config);
         assert_eq!(surfaces.len(), 2);
         assert_eq!(surfaces[0].surface_id, "launcher");
-        assert_eq!(surfaces[0].host_interface, "gtk-placeholder");
+        assert_eq!(surfaces[0].role, "launcher-slot");
+        assert_eq!(surfaces[0].shell_role, "dock");
+        assert_eq!(surfaces[0].interaction_mode, "interactive");
+        assert_eq!(surfaces[0].blocked_by, None);
+        assert_eq!(surfaces[0].window_policy, "dock-exclusive");
+        assert_eq!(surfaces[0].host_interface, "gtk-panel-slot");
         assert_eq!(surfaces[0].layout_zone, "left-dock");
         assert_eq!(surfaces[0].stacking_layer, "panel");
         assert_eq!(surfaces[0].z_index, 120);
-        assert_eq!(surfaces[0].reservation_status, "placeholder-only");
+        assert_eq!(surfaces[0].reservation_status, "panel-slot-open");
         assert_eq!(surfaces[0].pointer_policy, "interactive");
         assert_eq!(surfaces[0].focus_policy, "retain-client-focus");
         assert_eq!(surfaces[0].panel_host_status, "unbound");
         assert_eq!(surfaces[0].panel_primary_action_id, None);
-        assert_eq!(surfaces[0].embedding_status, "placeholder-only");
+        assert_eq!(surfaces[0].embedding_status, "panel-slot-open");
         assert_eq!(surfaces[1].role, "workspace-slot");
+        assert_eq!(surfaces[1].shell_role, "workspace");
+        assert_eq!(surfaces[1].window_policy, "workspace-maximized");
+    }
+
+    #[test]
+    fn resolves_workspace_window_policy_from_config() {
+        let mut config = Config::default();
+        config.workspace_toplevel_mode = "fullscreen".to_string();
+        let surfaces = panel_slot_surfaces(&config);
+        let workspace = surfaces
+            .iter()
+            .find(|surface| surface.surface_id == "task-surface")
+            .unwrap();
+        assert_eq!(workspace.window_policy, "workspace-fullscreen");
+        assert_eq!(
+            surface_window_policy("task-surface", "maximized"),
+            "workspace-maximized"
+        );
+        assert_eq!(
+            surface_window_policy("task-surface", "fullscreen"),
+            "workspace-fullscreen"
+        );
+        assert_eq!(
+            normalize_workspace_toplevel_mode("full-screen"),
+            "fullscreen"
+        );
+        assert_eq!(normalize_workspace_toplevel_mode("unknown"), "maximized");
     }
 
     #[test]
@@ -452,7 +536,7 @@ mod tests {
         let placement = surface_placement("task-surface", 1280, 800);
         assert!(placement_contains_point(&placement, 400.0, 240.0));
         assert!(!placement_contains_point(&placement, 8.0, 8.0));
-        let surfaces = placeholder_surfaces(&Config::default());
+        let surfaces = panel_slot_surfaces(&Config::default());
         let launcher = surfaces
             .iter()
             .find(|surface| surface.surface_id == "launcher")

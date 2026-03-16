@@ -1,11 +1,16 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    path::Path,
+};
 
 use chrono::Utc;
+use serde::Deserialize;
 
 use aios_contracts::{
-    DeviceCapabilityDescriptor, DeviceCaptureAdapterPlan, DeviceMetadataEntry,
-    DeviceMetadataGetRequest, DeviceMetadataGetResponse, DeviceMetadataReadinessSummary,
-    DeviceStateGetResponse, UiTreeSupportMatrixEntry,
+    DeviceBackendSummary, DeviceCapabilityDescriptor, DeviceCaptureAdapterPlan,
+    DeviceMetadataEntry, DeviceMetadataGetRequest, DeviceMetadataGetResponse,
+    DeviceMetadataReadinessSummary, DeviceStateGetResponse, UiTreeSupportMatrixEntry,
 };
 
 use crate::AppState;
@@ -42,10 +47,25 @@ fn build_device_metadata_response(
         ),
         format!("overall_status={}", view.summary.overall_status),
         format!(
+            "backend_overall_status={}",
+            device_state.backend_summary.overall_status
+        ),
+        format!(
+            "backend_available_status_count={}",
+            device_state.backend_summary.available_status_count
+        ),
+        format!(
+            "backend_attention_count={}",
+            device_state.backend_summary.attention_count
+        ),
+        format!(
             "ui_tree_support_entries={}",
             device_state.ui_tree_support_matrix.len()
         ),
     ];
+    if let Some(capture_mode) = &device_state.backend_summary.ui_tree_capture_mode {
+        notes.push(format!("backend_ui_tree_capture_mode={capture_mode}"));
+    }
     if !view.summary.unknown_modalities.is_empty() {
         notes.push(format!(
             "unknown_modalities={}",
@@ -55,6 +75,7 @@ fn build_device_metadata_response(
     if request.include_state_notes {
         notes.extend(device_state.notes.clone());
     }
+    append_release_grade_summary_notes(&mut notes, &view.entries);
 
     DeviceMetadataGetResponse {
         provider_id: state.config.provider_id.clone(),
@@ -64,6 +85,7 @@ fn build_device_metadata_response(
         available_modalities: view.available_modalities,
         active_capture_count: view.summary.active_capture_count,
         summary: view.summary,
+        backend_summary: device_state.backend_summary.clone(),
         ui_tree_support_matrix: device_state.ui_tree_support_matrix.clone(),
         notes,
     }
@@ -97,6 +119,10 @@ fn build_unavailable_response(
         available_modalities: Vec::new(),
         active_capture_count: 0,
         summary,
+        backend_summary: DeviceBackendSummary {
+            overall_status: "unavailable".to_string(),
+            ..DeviceBackendSummary::default()
+        },
         ui_tree_support_matrix: Vec::new(),
         notes: vec![
             format!("deviced_socket={}", state.config.deviced_socket.display()),
@@ -105,6 +131,7 @@ fn build_unavailable_response(
                 format_modalities_note(&requested_modalities)
             ),
             "overall_status=unavailable".to_string(),
+            "backend_overall_status=unavailable".to_string(),
             "device_state_source=unavailable".to_string(),
             format!("device_state_error={}", compact_note_value(error)),
         ],
@@ -217,9 +244,12 @@ fn build_entry(
                 "unavailable".to_string()
             }
         });
-    let backend_details = backend
+    let mut backend_details = backend
         .map(|status| status.details.clone())
         .unwrap_or_default();
+    if let Some(evidence) = read_backend_evidence_metadata(backend_details.as_slice()) {
+        evidence.append_backend_details(&mut backend_details);
+    }
 
     let mut notes = capability.notes.clone();
     if let Some(adapter) = adapter {
@@ -328,15 +358,251 @@ struct DeviceMetadataView {
     summary: DeviceMetadataReadinessSummary,
 }
 
+fn append_release_grade_summary_notes(notes: &mut Vec<String>, entries: &[DeviceMetadataEntry]) {
+    let mut backend_ids = BTreeSet::new();
+    let mut origins = BTreeSet::new();
+    let mut stacks = BTreeSet::new();
+    let mut contract_kinds = BTreeSet::new();
+
+    for entry in entries {
+        if let Some(value) =
+            entry_detail_value(entry, "release_grade_backend_id=").map(str::to_string)
+        {
+            push_unique_note(
+                notes,
+                format!("release_grade_backend_id[{}]={value}", entry.modality),
+            );
+            backend_ids.insert(value);
+        }
+        if let Some(value) =
+            entry_detail_value(entry, "release_grade_backend_origin=").map(str::to_string)
+        {
+            push_unique_note(
+                notes,
+                format!("release_grade_backend_origin[{}]={value}", entry.modality),
+            );
+            origins.insert(value);
+        }
+        if let Some(value) =
+            entry_detail_value(entry, "release_grade_backend_stack=").map(str::to_string)
+        {
+            push_unique_note(
+                notes,
+                format!("release_grade_backend_stack[{}]={value}", entry.modality),
+            );
+            stacks.insert(value);
+        }
+        if let Some(value) =
+            entry_detail_value(entry, "release_grade_contract_kind=").map(str::to_string)
+        {
+            push_unique_note(
+                notes,
+                format!("release_grade_contract_kind[{}]={value}", entry.modality),
+            );
+            contract_kinds.insert(value);
+        }
+    }
+
+    if !backend_ids.is_empty() {
+        push_unique_note(
+            notes,
+            format!(
+                "release_grade_backend_ids={}",
+                backend_ids.into_iter().collect::<Vec<_>>().join(",")
+            ),
+        );
+    }
+    if !origins.is_empty() {
+        push_unique_note(
+            notes,
+            format!(
+                "release_grade_backend_origins={}",
+                origins.into_iter().collect::<Vec<_>>().join(",")
+            ),
+        );
+    }
+    if !stacks.is_empty() {
+        push_unique_note(
+            notes,
+            format!(
+                "release_grade_backend_stacks={}",
+                stacks.into_iter().collect::<Vec<_>>().join(",")
+            ),
+        );
+    }
+    if !contract_kinds.is_empty() {
+        push_unique_note(
+            notes,
+            format!(
+                "release_grade_contract_kinds={}",
+                contract_kinds.into_iter().collect::<Vec<_>>().join(",")
+            ),
+        );
+    }
+}
+
+fn entry_detail_value<'a>(entry: &'a DeviceMetadataEntry, prefix: &str) -> Option<&'a str> {
+    entry
+        .backend_details
+        .iter()
+        .find_map(|detail| detail.strip_prefix(prefix))
+}
+
+fn push_unique_note(notes: &mut Vec<String>, note: String) {
+    if !notes.iter().any(|item| item == &note) {
+        notes.push(note);
+    }
+}
+
+fn read_backend_evidence_metadata(details: &[String]) -> Option<ReleaseGradeBackendEvidence> {
+    let artifact_path = backend_evidence_artifact_path(details)?;
+    let payload = fs::read_to_string(artifact_path).ok()?;
+    serde_json::from_str::<BackendEvidenceArtifact>(&payload)
+        .ok()
+        .map(ReleaseGradeBackendEvidence::from_artifact)
+}
+
+fn backend_evidence_artifact_path(details: &[String]) -> Option<&Path> {
+    details
+        .iter()
+        .find_map(|detail| detail.strip_prefix("evidence_artifact="))
+        .map(Path::new)
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct BackendEvidenceArtifact {
+    #[serde(default)]
+    baseline: String,
+    #[serde(default)]
+    source: Option<String>,
+    #[serde(default)]
+    release_grade_backend_id: Option<String>,
+    #[serde(default)]
+    release_grade_backend_origin: Option<String>,
+    #[serde(default)]
+    release_grade_backend_stack: Option<String>,
+    #[serde(default)]
+    contract_kind: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ReleaseGradeBackendEvidence {
+    release_grade_backend_id: Option<String>,
+    release_grade_backend_origin: Option<String>,
+    release_grade_backend_stack: Option<String>,
+    release_grade_contract_kind: Option<String>,
+    baseline: Option<String>,
+    source: Option<String>,
+}
+
+impl ReleaseGradeBackendEvidence {
+    fn from_artifact(artifact: BackendEvidenceArtifact) -> Self {
+        Self {
+            release_grade_backend_id: artifact.release_grade_backend_id,
+            release_grade_backend_origin: artifact.release_grade_backend_origin,
+            release_grade_backend_stack: artifact.release_grade_backend_stack,
+            release_grade_contract_kind: artifact.contract_kind,
+            baseline: (!artifact.baseline.is_empty()).then_some(artifact.baseline),
+            source: artifact.source,
+        }
+    }
+
+    fn append_backend_details(&self, backend_details: &mut Vec<String>) {
+        self.append_value(
+            backend_details,
+            "release_grade_backend_id",
+            self.release_grade_backend_id.as_deref(),
+        );
+        self.append_value(
+            backend_details,
+            "release_grade_backend_origin",
+            self.release_grade_backend_origin.as_deref(),
+        );
+        self.append_value(
+            backend_details,
+            "release_grade_backend_stack",
+            self.release_grade_backend_stack.as_deref(),
+        );
+        self.append_value(
+            backend_details,
+            "release_grade_contract_kind",
+            self.release_grade_contract_kind.as_deref(),
+        );
+        self.append_value(
+            backend_details,
+            "backend_baseline",
+            self.baseline.as_deref(),
+        );
+        self.append_value(
+            backend_details,
+            "backend_evidence_source",
+            self.source.as_deref(),
+        );
+    }
+
+    fn append_value(&self, backend_details: &mut Vec<String>, key: &str, value: Option<&str>) {
+        let Some(value) = value else {
+            return;
+        };
+        let item = format!("{key}={value}");
+        if !backend_details.iter().any(|detail| detail == &item) {
+            backend_details.push(item);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::{
+        fs,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
+    use chrono::Utc;
     use serde_json::json;
 
     use super::*;
     use aios_contracts::{
-        DeviceBackendStatus, DeviceCapabilityDescriptor, DeviceCaptureAdapterPlan,
-        DeviceContinuousCollectorStatus,
+        DeviceBackendStatus, DeviceBackendSummary, DeviceCapabilityDescriptor,
+        DeviceCaptureAdapterPlan, DeviceContinuousCollectorStatus,
     };
+    use aios_core::{ProviderObservabilitySink, RegistrySyncStatus, ServicePaths};
+
+    use crate::{config::Config, AppState};
+
+    static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    fn app_state() -> AppState {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let unique = TEST_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let root =
+            std::env::temp_dir().join(format!("aios-device-metadata-ops-test-{stamp}-{unique}"));
+        let observability_log_path = root.join("observability.jsonl");
+        let config = Config {
+            service_id: "aios-device-metadata-provider".to_string(),
+            version: "0.1.0".to_string(),
+            provider_id: "device.metadata.local".to_string(),
+            paths: ServicePaths::from_service_name("device-metadata-ops-test"),
+            deviced_socket: root.join("deviced.sock"),
+            agentd_socket: root.join("agentd.sock"),
+            descriptor_path: root.join("device.metadata.local.json"),
+            observability_log_path: observability_log_path.clone(),
+        };
+        AppState {
+            config,
+            started_at: Utc::now(),
+            registry_sync: RegistrySyncStatus::new(1),
+            observability: ProviderObservabilitySink::new(
+                observability_log_path,
+                "aios-device-metadata-provider",
+                "device.metadata.local",
+            )
+            .expect("provider observability sink"),
+        }
+    }
 
     fn state() -> DeviceStateGetResponse {
         DeviceStateGetResponse {
@@ -407,6 +673,30 @@ mod tests {
                 sample_count: 4,
                 details: vec!["sample_rate=16000".to_string()],
             }],
+            backend_summary: DeviceBackendSummary {
+                overall_status: "attention".to_string(),
+                status_count: 2,
+                available_status_count: 1,
+                adapter_count: 2,
+                attention_count: 1,
+                continuous_collector_count: 1,
+                ui_tree_support_route_count: 2,
+                ui_tree_support_ready_count: 2,
+                ui_tree_snapshot_present: true,
+                ui_tree_capture_mode: Some("native-live".to_string()),
+                ui_tree_current_support: Some("native-live".to_string()),
+                readiness_summary: BTreeMap::from([
+                    ("missing-camera-devices".to_string(), 1),
+                    ("native-live".to_string(), 1),
+                ]),
+                evidence_artifact_count: 2,
+                evidence_present_count: 2,
+                evidence_missing_count: 0,
+                evidence_baselines: vec![
+                    "os-native-backend".to_string(),
+                    "state-bridge-baseline".to_string(),
+                ],
+            },
             ui_tree_support_matrix: vec![
                 UiTreeSupportMatrixEntry {
                     environment_id: "atspi-live".to_string(),
@@ -439,6 +729,21 @@ mod tests {
             ],
             notes: vec![format!("metadata={}", json!({"ok": true}))],
         }
+    }
+
+    fn write_backend_evidence(
+        root: &std::path::Path,
+        modality: &str,
+        payload: serde_json::Value,
+    ) -> std::path::PathBuf {
+        fs::create_dir_all(root).expect("create evidence dir");
+        let path = root.join(format!("{modality}-backend-evidence.json"));
+        fs::write(
+            &path,
+            serde_json::to_vec_pretty(&payload).expect("serialize evidence payload"),
+        )
+        .expect("write evidence artifact");
+        path
     }
 
     #[test]
@@ -505,5 +810,175 @@ mod tests {
         assert_eq!(summary.continuous_collector_count, 1);
         assert!(summary.ui_tree_available);
         assert!(summary.ui_tree_snapshot_attached);
+    }
+    #[test]
+    fn build_device_metadata_response_preserves_backend_summary() {
+        let app = app_state();
+        let response = build_device_metadata_response(
+            &app,
+            &DeviceMetadataGetRequest {
+                modalities: vec!["screen".to_string(), "camera".to_string()],
+                only_available: false,
+                include_state_notes: false,
+            },
+            &state(),
+        );
+
+        assert_eq!(response.backend_summary.overall_status, "attention");
+        assert_eq!(response.backend_summary.available_status_count, 1);
+        assert_eq!(response.backend_summary.attention_count, 1);
+        assert_eq!(
+            response.backend_summary.ui_tree_capture_mode.as_deref(),
+            Some("native-live")
+        );
+        assert_eq!(
+            response
+                .backend_summary
+                .readiness_summary
+                .get("missing-camera-devices"),
+            Some(&1)
+        );
+        assert!(
+            response
+                .notes
+                .iter()
+                .any(|note| note == "backend_overall_status=attention"),
+            "metadata notes should expose backend overall status"
+        );
+        assert!(
+            response
+                .notes
+                .iter()
+                .any(|note| note == "backend_attention_count=1"),
+            "metadata notes should expose backend attention count"
+        );
+        assert!(
+            response
+                .notes
+                .iter()
+                .any(|note| note == "backend_ui_tree_capture_mode=native-live"),
+            "metadata notes should expose backend ui_tree capture mode"
+        );
+    }
+
+    #[test]
+    fn build_device_metadata_response_adds_release_grade_backend_details_and_notes() {
+        let app = app_state();
+        let evidence_root = app
+            .config
+            .deviced_socket
+            .parent()
+            .expect("deviced socket parent");
+        let screen_evidence = write_backend_evidence(
+            evidence_root,
+            "screen",
+            json!({
+                "baseline": "os-native-backend",
+                "source": "deviced-runtime-helper",
+                "release_grade_backend_id": "xdg-desktop-portal-screencast",
+                "release_grade_backend_origin": "os-native",
+                "release_grade_backend_stack": "portal+pipewire",
+                "contract_kind": "release-grade-runtime-helper"
+            }),
+        );
+
+        let mut device_state = state();
+        let screen_backend = device_state
+            .backend_statuses
+            .iter_mut()
+            .find(|status| status.modality == "screen")
+            .expect("screen backend status");
+        screen_backend
+            .details
+            .push(format!("evidence_artifact={}", screen_evidence.display()));
+
+        let response = build_device_metadata_response(
+            &app,
+            &DeviceMetadataGetRequest {
+                modalities: vec!["screen".to_string()],
+                only_available: false,
+                include_state_notes: false,
+            },
+            &device_state,
+        );
+
+        let screen_entry = response
+            .entries
+            .iter()
+            .find(|entry| entry.modality == "screen")
+            .expect("screen entry");
+        assert!(
+            screen_entry
+                .backend_details
+                .iter()
+                .any(|item| item == "release_grade_backend_id=xdg-desktop-portal-screencast"),
+            "screen entry should expose release-grade backend id"
+        );
+        assert!(
+            screen_entry
+                .backend_details
+                .iter()
+                .any(|item| item == "release_grade_backend_origin=os-native"),
+            "screen entry should expose release-grade backend origin"
+        );
+        assert!(
+            screen_entry
+                .backend_details
+                .iter()
+                .any(|item| item == "release_grade_backend_stack=portal+pipewire"),
+            "screen entry should expose release-grade backend stack"
+        );
+        assert!(
+            screen_entry
+                .backend_details
+                .iter()
+                .any(|item| item == "release_grade_contract_kind=release-grade-runtime-helper"),
+            "screen entry should expose release-grade contract kind"
+        );
+        assert!(
+            response.notes.iter().any(
+                |note| note == "release_grade_backend_id[screen]=xdg-desktop-portal-screencast"
+            ),
+            "metadata response should expose screen release-grade backend id"
+        );
+        assert!(
+            response
+                .notes
+                .iter()
+                .any(|note| note == "release_grade_backend_ids=xdg-desktop-portal-screencast"),
+            "metadata response should expose aggregated release-grade backend ids"
+        );
+        assert!(
+            response
+                .notes
+                .iter()
+                .any(|note| note == "release_grade_contract_kinds=release-grade-runtime-helper"),
+            "metadata response should expose aggregated release-grade contract kinds"
+        );
+    }
+
+    #[test]
+    fn build_unavailable_response_sets_backend_summary_unavailable() {
+        let app = app_state();
+        let response = build_unavailable_response(
+            &app,
+            &DeviceMetadataGetRequest {
+                modalities: vec!["screen".to_string(), "camera".to_string()],
+                only_available: false,
+                include_state_notes: false,
+            },
+            "deviced offline".to_string(),
+        );
+
+        assert_eq!(response.summary.overall_status, "unavailable");
+        assert_eq!(response.backend_summary.overall_status, "unavailable");
+        assert_eq!(response.backend_summary.available_status_count, 0);
+        assert!(
+            response
+                .notes
+                .iter()
+                .any(|note| note == "backend_overall_status=unavailable"),
+            "metadata outage notes should expose backend overall status"
+        );
     }
 }

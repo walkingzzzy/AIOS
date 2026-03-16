@@ -21,6 +21,9 @@ pub struct Config {
     pub attested_remote_command: Option<String>,
     pub attested_remote_target_hash: Option<String>,
     pub managed_worker_timeout_ms: u64,
+    pub managed_worker_restart_backoff_ms: u64,
+    pub managed_worker_restart_limit: u32,
+    pub backend_health_poll_ms: u64,
 }
 
 impl Config {
@@ -65,6 +68,15 @@ impl Config {
         let attested_remote_target_hash = attested_remote_command
             .as_deref()
             .map(crate::remote_security::attested_remote_target_hash);
+        let managed_worker_timeout_ms =
+            aios_core::config::env_u64_or("AIOS_RUNTIMED_MANAGED_WORKER_TIMEOUT_MS", 5_000);
+        let managed_worker_restart_backoff_ms =
+            aios_core::config::env_u64_or("AIOS_RUNTIMED_MANAGED_WORKER_RESTART_BACKOFF_MS", 250);
+        let managed_worker_restart_limit =
+            aios_core::config::env_u64_or("AIOS_RUNTIMED_MANAGED_WORKER_RESTART_LIMIT", 3)
+                .min(u32::MAX as u64) as u32;
+        let backend_health_poll_ms =
+            aios_core::config::env_u64_or("AIOS_RUNTIMED_BACKEND_HEALTH_POLL_MS", 250);
 
         Ok(Self {
             service_id: "aios-runtimed".to_string(),
@@ -83,10 +95,10 @@ impl Config {
             hardware_profile_id,
             attested_remote_command,
             attested_remote_target_hash,
-            managed_worker_timeout_ms: aios_core::config::env_u64_or(
-                "AIOS_RUNTIMED_MANAGED_WORKER_TIMEOUT_MS",
-                5_000,
-            ),
+            managed_worker_timeout_ms,
+            managed_worker_restart_backoff_ms,
+            managed_worker_restart_limit,
+            backend_health_poll_ms,
         })
     }
 }

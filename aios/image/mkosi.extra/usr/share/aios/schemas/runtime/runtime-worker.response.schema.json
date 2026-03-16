@@ -4,6 +4,7 @@
   "title": "AIOS Runtime Worker Response",
   "type": "object",
   "required": [
+    "worker_contract",
     "backend_id",
     "route_state",
     "content",
@@ -29,6 +30,24 @@
     "estimated_latency_ms": {
       "type": ["integer", "null"],
       "minimum": 0
+    },
+    "provider_id": {
+      "type": ["string", "null"]
+    },
+    "runtime_service_id": {
+      "type": ["string", "null"]
+    },
+    "provider_status": {
+      "type": ["string", "null"]
+    },
+    "queue_saturated": {
+      "type": ["boolean", "null"]
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
     }
   },
   "additionalProperties": true

@@ -1,5 +1,6 @@
 mod config;
 mod db;
+mod evidence;
 mod memory;
 mod observability;
 mod plan;
@@ -83,6 +84,10 @@ impl AppState {
                 format!(
                     "portal_state_dir={}",
                     self.config.portal_state_dir.display()
+                ),
+                format!(
+                    "evidence_export_dir={}",
+                    self.config.evidence_export_dir.display()
                 ),
             ],
         }

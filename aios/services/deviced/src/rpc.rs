@@ -95,6 +95,7 @@ pub fn build_router(state: AppState) -> Arc<RpcRouter> {
             capture_adapters: snapshot.adapters,
             ui_tree_snapshot,
             continuous_collectors,
+            backend_summary: snapshot.backend_summary,
             ui_tree_support_matrix: snapshot.ui_tree_support_matrix,
             notes,
         };
@@ -114,6 +115,8 @@ pub fn build_router(state: AppState) -> Arc<RpcRouter> {
                 "continuous_collector_count": response.continuous_collectors.len(),
                 "ui_tree_snapshot_present": response.ui_tree_snapshot.is_some(),
                 "ui_tree_support_entries": response.ui_tree_support_matrix.len(),
+                "backend_overall_status": response.backend_summary.overall_status.clone(),
+                "backend_attention_count": response.backend_summary.attention_count,
             }),
             response.notes.clone(),
         );

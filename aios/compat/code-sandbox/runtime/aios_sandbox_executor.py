@@ -4,8 +4,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import resource
 import shutil
+
+try:
+    import resource
+except ModuleNotFoundError:  # Windows does not expose the POSIX resource module.
+    resource = None
+
 import subprocess
 import sys
 import tempfile
@@ -43,6 +48,7 @@ DEFAULT_TIMEOUT_SECONDS = 5.0
 DEFAULT_MEMORY_MB = 128
 DEFAULT_CPU_SECONDS = 2
 DEFAULT_AUDIT_LOG_ENV = "AIOS_COMPAT_CODE_SANDBOX_AUDIT_LOG"
+DEFAULT_SANDBOX_WORK_ROOT_ENV = "AIOS_CODE_SANDBOX_WORK_ROOT"
 DEFAULT_USER_ID = "compat-runtime"
 DEFAULT_SESSION_ID = "compat-code-sandbox"
 DEFAULT_TASK_ID = "compat.code.execute"
@@ -262,6 +268,9 @@ def now_iso() -> str:
 
 
 def limit_resources(memory_mb: int, cpu_seconds: int) -> None:
+    if resource is None:
+        return
+
     address_space = max(64, memory_mb) * 1024 * 1024
     try:
         resource.setrlimit(resource.RLIMIT_AS, (address_space, address_space))
@@ -453,8 +462,25 @@ def enforce_compat_permission_manifest(args: argparse.Namespace, permission_mani
         )
 
 
+def allocate_sandbox_root() -> Path:
+    override = os.environ.get(DEFAULT_SANDBOX_WORK_ROOT_ENV)
+    if override:
+        base = Path(override)
+    elif os.name == "nt":
+        base = REPO_ROOT / "out" / "validation" / "code-sandbox-runtime"
+    else:
+        return Path(tempfile.mkdtemp(prefix="aios-code-sandbox-"))
+
+    base.mkdir(parents=True, exist_ok=True)
+    root = base / f"aios-code-sandbox-{os.getpid()}-{time.time_ns()}"
+    if root.exists():
+        shutil.rmtree(root, ignore_errors=True)
+    root.mkdir(parents=True, exist_ok=False)
+    return root
+
+
 def prepare_sandbox(code_file: Path, input_dir: Path | None) -> SandboxLayout:
-    root = Path(tempfile.mkdtemp(prefix="aios-code-sandbox-"))
+    root = allocate_sandbox_root()
     temp_path = root / "tmp"
     input_path = root / "input"
     output_path = root / "output"
@@ -900,15 +926,17 @@ def execute(args: argparse.Namespace) -> tuple[int, dict[str, object]]:
             bwrap_path=bwrap_path,
         )
 
-        completed = subprocess.run(
-            command,
-            cwd=layout.root,
-            text=True,
-            capture_output=True,
-            timeout=args.timeout_seconds,
-            env=env,
-            preexec_fn=lambda: limit_resources(args.memory_mb, args.cpu_seconds),
-        )
+        run_kwargs = {
+            "cwd": layout.root,
+            "text": True,
+            "capture_output": True,
+            "timeout": args.timeout_seconds,
+            "env": env,
+        }
+        if os.name != "nt":
+            run_kwargs["preexec_fn"] = lambda: limit_resources(args.memory_mb, args.cpu_seconds)
+
+        completed = subprocess.run(command, **run_kwargs)
         exit_code = completed.returncode
         stdout = completed.stdout
         stderr = completed.stderr

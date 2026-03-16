@@ -9,11 +9,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use aios_contracts::{
-    DeviceBackendStatus, DeviceCaptureAdapterPlan, DeviceContinuousCollectorStatus,
-    UiTreeSupportMatrixEntry,
+    DeviceBackendStatus, DeviceBackendSummary, DeviceCaptureAdapterPlan,
+    DeviceContinuousCollectorStatus, UiTreeSupportMatrixEntry,
 };
 
-use crate::{adapters, config::Config, probe};
+use crate::{adapters, config::Config, probe, release_grade};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackendSnapshot {
@@ -26,6 +26,8 @@ pub struct BackendSnapshot {
     pub ui_tree_snapshot: Option<Value>,
     #[serde(default)]
     pub continuous_collectors: Vec<DeviceContinuousCollectorStatus>,
+    #[serde(default)]
+    pub backend_summary: DeviceBackendSummary,
     #[serde(default)]
     pub ui_tree_support_matrix: Vec<UiTreeSupportMatrixEntry>,
     #[serde(default)]
@@ -53,6 +55,14 @@ struct BackendEvidenceArtifact {
     adapter_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     execution_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    release_grade_backend_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    release_grade_backend_origin: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    release_grade_backend_stack: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    contract_kind: Option<String>,
     baseline: String,
     #[serde(default)]
     state_refs: Vec<String>,
@@ -75,6 +85,21 @@ struct BackendEvidenceProbe {
     details: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     payload: Option<Value>,
+}
+
+#[derive(Debug, Clone)]
+struct PersistedBackendEvidenceArtifact {
+    modality: String,
+    path: PathBuf,
+    baseline: String,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ReleaseGradeBackendMetadata {
+    backend_id: Option<String>,
+    origin: Option<String>,
+    stack: Option<String>,
+    contract_kind: Option<String>,
 }
 
 pub fn collect(config: &Config) -> Vec<DeviceBackendStatus> {
@@ -152,9 +177,21 @@ pub fn snapshot(config: &Config) -> anyhow::Result<BackendSnapshot> {
         "backend_evidence_artifact_count={}",
         evidence_artifacts.len()
     ));
-    notes.extend(evidence_artifacts.into_iter().map(|(modality, path)| {
-        format!("backend_evidence_artifact[{modality}]={}", path.display())
+    notes.extend(evidence_artifacts.iter().map(|artifact| {
+        format!(
+            "backend_evidence_artifact[{}]={}",
+            artifact.modality,
+            artifact.path.display()
+        )
     }));
+    let backend_summary = build_backend_summary(
+        &statuses,
+        &adapters,
+        &continuous_collectors,
+        ui_tree_snapshot.as_ref(),
+        &ui_tree_support_matrix,
+        &evidence_artifacts,
+    );
     Ok(BackendSnapshot {
         updated_at,
         notes,
@@ -162,6 +199,7 @@ pub fn snapshot(config: &Config) -> anyhow::Result<BackendSnapshot> {
         adapters,
         ui_tree_snapshot,
         continuous_collectors,
+        backend_summary,
         ui_tree_support_matrix,
     })
 }
@@ -207,6 +245,82 @@ fn write_ui_tree_support_matrix(
     Ok(())
 }
 
+fn build_backend_summary(
+    statuses: &[DeviceBackendStatus],
+    adapters: &[DeviceCaptureAdapterPlan],
+    continuous_collectors: &[DeviceContinuousCollectorStatus],
+    ui_tree_snapshot: Option<&Value>,
+    ui_tree_support_matrix: &[UiTreeSupportMatrixEntry],
+    evidence_artifacts: &[PersistedBackendEvidenceArtifact],
+) -> DeviceBackendSummary {
+    let mut readiness_summary = BTreeMap::new();
+    for status in statuses {
+        *readiness_summary
+            .entry(status.readiness.clone())
+            .or_insert(0) += 1;
+    }
+
+    let attention_count = statuses
+        .iter()
+        .filter(|status| readiness_requires_attention(&status.readiness))
+        .count() as u32;
+    let ui_tree_capture_mode = ui_tree_snapshot
+        .and_then(Value::as_object)
+        .and_then(|object| object.get("capture_mode"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let ui_tree_current_support = ui_tree_support_matrix
+        .iter()
+        .find(|entry| entry.current)
+        .map(|entry| entry.readiness.clone());
+    let evidence_baselines = evidence_artifacts
+        .iter()
+        .map(|artifact| artifact.baseline.clone())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+
+    DeviceBackendSummary {
+        overall_status: if statuses.is_empty() {
+            "idle".to_string()
+        } else if attention_count > 0 {
+            "attention".to_string()
+        } else {
+            "ready".to_string()
+        },
+        status_count: statuses.len() as u32,
+        available_status_count: statuses.iter().filter(|status| status.available).count() as u32,
+        adapter_count: adapters.len() as u32,
+        attention_count,
+        continuous_collector_count: continuous_collectors.len() as u32,
+        ui_tree_support_route_count: ui_tree_support_matrix.len() as u32,
+        ui_tree_support_ready_count: ui_tree_support_matrix
+            .iter()
+            .filter(|entry| entry.available)
+            .count() as u32,
+        ui_tree_snapshot_present: ui_tree_snapshot.is_some(),
+        ui_tree_capture_mode,
+        ui_tree_current_support,
+        readiness_summary,
+        evidence_artifact_count: evidence_artifacts.len() as u32,
+        evidence_present_count: evidence_artifacts.len() as u32,
+        evidence_missing_count: 0,
+        evidence_baselines,
+    }
+}
+
+fn readiness_requires_attention(readiness: &str) -> bool {
+    !matches!(
+        readiness,
+        "native-ready"
+            | "native-live"
+            | "native-state-bridge"
+            | "command-adapter"
+            | "disabled"
+            | "native-stub"
+    )
+}
+
 fn persist_backend_evidence_artifacts(
     config: &Config,
     generated_at: &str,
@@ -214,7 +328,7 @@ fn persist_backend_evidence_artifacts(
     adapters: &mut [DeviceCaptureAdapterPlan],
     ui_tree_support_matrix: &mut [UiTreeSupportMatrixEntry],
     ui_tree_snapshot: Option<&Value>,
-) -> anyhow::Result<Vec<(String, PathBuf)>> {
+) -> anyhow::Result<Vec<PersistedBackendEvidenceArtifact>> {
     fs::create_dir_all(&config.backend_evidence_dir)?;
 
     let adapter_lookup = adapters
@@ -234,21 +348,29 @@ fn persist_backend_evidence_artifacts(
         )?;
         let artifact_path = backend_evidence_path(config, &status.modality);
         fs::write(&artifact_path, serde_json::to_vec_pretty(&artifact)?)?;
-        status.details.push(format!(
-            "evidence_artifact={}",
-            artifact_path.display()
-        ));
-        if let Some(adapter) = adapters.iter_mut().find(|item| item.modality == status.modality) {
-            adapter.notes.push(format!(
-                "evidence_artifact={}",
-                artifact_path.display()
-            ));
+        status
+            .details
+            .push(format!("evidence_artifact={}", artifact_path.display()));
+        if let Some(adapter) = adapters
+            .iter_mut()
+            .find(|item| item.modality == status.modality)
+        {
+            adapter
+                .notes
+                .push(format!("evidence_artifact={}", artifact_path.display()));
         }
-        artifact_paths.push((status.modality.clone(), artifact_path));
+        artifact_paths.push(PersistedBackendEvidenceArtifact {
+            modality: status.modality.clone(),
+            path: artifact_path,
+            baseline: artifact.baseline,
+        });
     }
 
-    if let Some((_, path)) = artifact_paths.iter().find(|(modality, _)| modality == "ui_tree") {
-        let reference = format!("backend_evidence_artifact={}", path.display());
+    if let Some(artifact) = artifact_paths
+        .iter()
+        .find(|artifact| artifact.modality == "ui_tree")
+    {
+        let reference = format!("backend_evidence_artifact={}", artifact.path.display());
         for row in ui_tree_support_matrix.iter_mut() {
             if !row.evidence.iter().any(|item| item == &reference) {
                 row.evidence.push(reference.clone());
@@ -278,15 +400,17 @@ fn build_backend_evidence_artifact(
         .map(|item| item.source.clone())
         .or_else(|| adapter.map(|item| item.adapter_id.clone()));
     let execution_path = adapter.map(|item| item.execution_path.clone());
-    let baseline = match execution_path.as_deref() {
-        Some("native-live") => "formal-native-helper-or-probe",
-        Some("native-state-bridge") => "state-bridge-baseline",
-        Some("native-ready") => "declared-native-ready",
-        Some("command-adapter") => "command-adapter",
-        Some(other) => other,
-        None => status.readiness.as_str(),
-    }
-    .to_string();
+    let release_grade_backend_metadata = collect_release_grade_backend_metadata(
+        &status.modality,
+        probe.as_ref(),
+        adapter,
+        execution_path.as_deref(),
+    );
+    let baseline = classify_backend_baseline(
+        execution_path.as_deref(),
+        probe.as_ref(),
+        &release_grade_backend_metadata,
+    );
 
     Ok(BackendEvidenceArtifact {
         generated_at: generated_at.to_string(),
@@ -298,15 +422,142 @@ fn build_backend_evidence_artifact(
         source,
         adapter_id: adapter.map(|item| item.adapter_id.clone()),
         execution_path,
+        release_grade_backend_id: release_grade_backend_metadata.backend_id,
+        release_grade_backend_origin: release_grade_backend_metadata.origin,
+        release_grade_backend_stack: release_grade_backend_metadata.stack,
+        contract_kind: release_grade_backend_metadata.contract_kind,
         baseline,
         state_refs: state_refs_for_modality(config, &status.modality),
         details: status.details.clone(),
         probe,
-        baseline_payload: baseline_payload_for_modality(config, &status.modality, ui_tree_snapshot)?,
+        baseline_payload: baseline_payload_for_modality(
+            config,
+            &status.modality,
+            ui_tree_snapshot,
+        )?,
         ui_tree_snapshot: (status.modality == "ui_tree")
             .then(|| ui_tree_snapshot.cloned())
             .flatten(),
     })
+}
+
+fn collect_release_grade_backend_metadata(
+    modality: &str,
+    probe: Option<&BackendEvidenceProbe>,
+    adapter: Option<&DeviceCaptureAdapterPlan>,
+    execution_path: Option<&str>,
+) -> ReleaseGradeBackendMetadata {
+    let payload = probe.and_then(|item| item.payload.as_ref());
+    let defaults_enabled = matches!(
+        execution_path,
+        Some("native-live") | Some("native-ready") | Some("native-state-bridge")
+    );
+    let payload_origin = payload_string_field(payload, "release_grade_backend_origin");
+    let inferred_origin = infer_release_grade_backend_origin(probe, execution_path);
+    let origin = match execution_path {
+        Some("native-state-bridge") | Some("native-ready") | Some("command-adapter") => {
+            inferred_origin.or(payload_origin)
+        }
+        _ => payload_origin.or(inferred_origin),
+    };
+
+    ReleaseGradeBackendMetadata {
+        backend_id: payload_string_field(payload, "release_grade_backend_id")
+            .or_else(|| payload_string_field(payload, "release_grade_backend"))
+            .or_else(|| {
+                defaults_enabled
+                    .then(|| default_release_grade_backend_id(modality))
+                    .flatten()
+            }),
+        origin,
+        stack: payload_string_field(payload, "release_grade_backend_stack").or_else(|| {
+            defaults_enabled
+                .then(|| default_release_grade_backend_stack(modality))
+                .flatten()
+        }),
+        contract_kind: payload_string_field(payload, "release_grade_contract_kind")
+            .or_else(|| payload_session_contract_kind(payload))
+            .or_else(|| adapter_contract_kind(adapter))
+            .or_else(|| {
+                release_grade::default_adapter_contract(probe.map(|item| item.source.as_str()))
+                    .map(str::to_string)
+            }),
+    }
+}
+
+fn classify_backend_baseline(
+    execution_path: Option<&str>,
+    probe: Option<&BackendEvidenceProbe>,
+    metadata: &ReleaseGradeBackendMetadata,
+) -> String {
+    match execution_path {
+        Some("native-live") => match metadata.origin.as_deref() {
+            Some("os-native") => "os-native-backend".to_string(),
+            Some("runtime-helper") => "runtime-helper-backend".to_string(),
+            Some("state-enumeration") => "state-enumeration-backend".to_string(),
+            Some(other) => other.to_string(),
+            None => match probe.map(|item| item.source.as_str()) {
+                Some("linux-tool") => "os-native-backend".to_string(),
+                Some("builtin-probe") => "state-enumeration-backend".to_string(),
+                Some(source) if source.starts_with("builtin-") => {
+                    "runtime-helper-backend".to_string()
+                }
+                Some("probe-command") => "runtime-helper-backend".to_string(),
+                _ => "runtime-helper-backend".to_string(),
+            },
+        },
+        Some("native-state-bridge") => "state-bridge-baseline".to_string(),
+        Some("native-ready") => "declared-native-ready".to_string(),
+        Some("command-adapter") => "command-adapter".to_string(),
+        Some(other) => other.to_string(),
+        None => probe
+            .and_then(|item| item.payload.as_ref())
+            .and_then(|payload| payload_string_field(Some(payload), "release_grade_backend_origin"))
+            .unwrap_or_else(|| "unknown".to_string()),
+    }
+}
+
+fn payload_string_field(payload: Option<&Value>, field: &str) -> Option<String> {
+    payload
+        .and_then(Value::as_object)
+        .and_then(|object| object.get(field))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+fn payload_session_contract_kind(payload: Option<&Value>) -> Option<String> {
+    payload
+        .and_then(Value::as_object)
+        .and_then(|object| object.get("session_contract"))
+        .and_then(Value::as_object)
+        .and_then(|contract| contract.get("contract_kind"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+fn adapter_contract_kind(adapter: Option<&DeviceCaptureAdapterPlan>) -> Option<String> {
+    adapter.and_then(|plan| {
+        plan.notes
+            .iter()
+            .find_map(|note| note.strip_prefix("adapter_contract="))
+            .map(str::to_string)
+    })
+}
+
+fn infer_release_grade_backend_origin(
+    probe: Option<&BackendEvidenceProbe>,
+    execution_path: Option<&str>,
+) -> Option<String> {
+    release_grade::infer_origin(probe.map(|item| item.source.as_str()), execution_path)
+        .map(str::to_string)
+}
+
+fn default_release_grade_backend_id(modality: &str) -> Option<String> {
+    release_grade::default_backend_id(modality).map(str::to_string)
+}
+
+fn default_release_grade_backend_stack(modality: &str) -> Option<String> {
+    release_grade::default_backend_stack(modality).map(str::to_string)
 }
 
 fn backend_evidence_path(config: &Config, modality: &str) -> PathBuf {
@@ -366,7 +617,8 @@ fn baseline_payload_for_modality(
             Ok((!payload.is_empty()).then_some(Value::Object(payload)))
         }
         "input" => {
-            let devices = list_matching_entries(&config.input_device_root, &["event", "mouse", "kbd"])?;
+            let devices =
+                list_matching_entries(&config.input_device_root, &["event", "mouse", "kbd"])?;
             Ok((!devices.is_empty()).then_some(serde_json::json!({
                 "input_root": config.input_device_root.display().to_string(),
                 "input_devices": devices,
@@ -393,8 +645,8 @@ fn read_json_payload(path: &Path) -> anyhow::Result<Option<Value>> {
     if !path.exists() {
         return Ok(None);
     }
-    let content =
-        fs::read_to_string(path).map_err(|error| anyhow::anyhow!("read {}: {error}", path.display()))?;
+    let content = fs::read_to_string(path)
+        .map_err(|error| anyhow::anyhow!("read {}: {error}", path.display()))?;
     let value = serde_json::from_str::<Value>(&content)
         .map_err(|error| anyhow::anyhow!("parse {}: {error}", path.display()))?;
     Ok(Some(value))
@@ -970,12 +1222,40 @@ fn ui_tree_support_matrix(
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsString;
     use std::fs;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::*;
 
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn unset(key: &'static str) -> Self {
+            let previous = std::env::var_os(key);
+            std::env::remove_var(key);
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(value) = self.previous.as_ref() {
+                std::env::set_var(self.key, value);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
+
+    fn probe_shell_supported() -> bool {
+        std::path::Path::new("/bin/sh").exists()
+    }
 
     fn config() -> Config {
         let stamp = std::time::SystemTime::now()
@@ -1090,6 +1370,11 @@ mod tests {
 
     #[test]
     fn snapshot_includes_ui_tree_state_bridge_payload() {
+        let _guard = crate::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _dbus = EnvVarGuard::unset("DBUS_SESSION_BUS_ADDRESS");
+        let _atspi = EnvVarGuard::unset("AT_SPI_BUS_ADDRESS");
         let config = config();
         let state_dir = config
             .screencast_state_path
@@ -1138,6 +1423,22 @@ mod tests {
                 .and_then(serde_json::Value::as_str),
             Some("ui_tree.atspi-state-file")
         );
+        assert_eq!(
+            ui_tree_snapshot
+                .get("release_grade_backend_origin")
+                .and_then(serde_json::Value::as_str),
+            Some("state-bridge")
+        );
+        assert!(snapshot.backend_summary.ui_tree_snapshot_present);
+        assert_eq!(
+            snapshot.backend_summary.ui_tree_capture_mode.as_deref(),
+            Some("native-state-bridge")
+        );
+        assert_eq!(
+            snapshot.backend_summary.ui_tree_current_support.as_deref(),
+            Some("native-live")
+        );
+        assert_eq!(snapshot.backend_summary.ui_tree_support_route_count, 4);
         assert!(
             snapshot
                 .ui_tree_support_matrix
@@ -1158,6 +1459,14 @@ mod tests {
 
     #[test]
     fn snapshot_persists_backend_evidence_artifacts() {
+        let _guard = crate::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _dbus = EnvVarGuard::unset("DBUS_SESSION_BUS_ADDRESS");
+        let _atspi = EnvVarGuard::unset("AT_SPI_BUS_ADDRESS");
+        if !probe_shell_supported() {
+            return;
+        }
         let mut config = config();
         let state_dir = config
             .screencast_state_path
@@ -1171,8 +1480,7 @@ mod tests {
         )
         .expect("write screencast state");
         fs::write(&config.pipewire_socket_path, b"ready\n").expect("write pipewire socket");
-        fs::write(&config.pipewire_node_path, br#"{"node_id":77}"#)
-            .expect("write pipewire node");
+        fs::write(&config.pipewire_node_path, br#"{"node_id":77}"#).expect("write pipewire node");
         fs::create_dir_all(&config.input_device_root).expect("create input root");
         fs::write(config.input_device_root.join("event0"), b"keyboard\n")
             .expect("write input device");
@@ -1186,19 +1494,19 @@ mod tests {
         .expect("write ui tree state");
 
         config.screen_live_command = Some(
-            "printf '{\"available\":true,\"readiness\":\"native-live\",\"payload\":{\"release_grade_backend\":\"portal-live-helper\"},\"source\":\"deviced-runtime-helper\"}'\n"
+            "printf '%s\\n' '{\"available\":true,\"readiness\":\"native-live\",\"payload\":{\"release_grade_backend\":\"xdg-desktop-portal-screencast\",\"release_grade_backend_id\":\"xdg-desktop-portal-screencast\",\"release_grade_backend_origin\":\"os-native\",\"release_grade_backend_stack\":\"portal+pipewire\",\"release_grade_contract_kind\":\"release-grade-runtime-helper\"},\"source\":\"deviced-runtime-helper\"}'"
                 .to_string(),
         );
         config.audio_live_command = Some(
-            "printf '{\"available\":true,\"readiness\":\"native-live\",\"payload\":{\"release_grade_backend\":\"pipewire-live-helper\"},\"source\":\"deviced-runtime-helper\"}'\n"
+            "printf '%s\\n' '{\"available\":true,\"readiness\":\"native-live\",\"payload\":{\"release_grade_backend\":\"pipewire\",\"release_grade_backend_id\":\"pipewire\",\"release_grade_backend_origin\":\"os-native\",\"release_grade_backend_stack\":\"pipewire\",\"release_grade_contract_kind\":\"release-grade-runtime-helper\"},\"source\":\"deviced-runtime-helper\"}'"
                 .to_string(),
         );
         config.input_live_command = Some(
-            "printf '{\"available\":true,\"readiness\":\"native-live\",\"payload\":{\"release_grade_backend\":\"libinput-live-helper\"},\"source\":\"deviced-runtime-helper\"}'\n"
+            "printf '%s\\n' '{\"available\":true,\"readiness\":\"native-live\",\"payload\":{\"release_grade_backend\":\"libinput\",\"release_grade_backend_id\":\"libinput\",\"release_grade_backend_origin\":\"state-enumeration\",\"release_grade_backend_stack\":\"libinput\",\"release_grade_contract_kind\":\"release-grade-runtime-helper\"},\"source\":\"deviced-runtime-helper\"}'"
                 .to_string(),
         );
         config.camera_live_command = Some(
-            "printf '{\"available\":true,\"readiness\":\"native-live\",\"payload\":{\"release_grade_backend\":\"camera-live-helper\"},\"source\":\"deviced-runtime-helper\"}'\n"
+            "printf '%s\\n' '{\"available\":true,\"readiness\":\"native-live\",\"payload\":{\"release_grade_backend\":\"v4l2\",\"release_grade_backend_id\":\"v4l2\",\"release_grade_backend_origin\":\"state-enumeration\",\"release_grade_backend_stack\":\"v4l2\",\"release_grade_contract_kind\":\"release-grade-runtime-helper\"},\"source\":\"deviced-runtime-helper\"}'"
                 .to_string(),
         );
 
@@ -1216,10 +1524,9 @@ mod tests {
             "screen backend evidence artifact should be written"
         );
         assert!(
-            screen_status
-                .details
-                .iter()
-                .any(|item| item == &format!("evidence_artifact={}", screen_artifact_path.display())),
+            screen_status.details.iter().any(
+                |item| item == &format!("evidence_artifact={}", screen_artifact_path.display())
+            ),
             "screen status should expose backend evidence artifact path"
         );
         let screen_artifact: Value = serde_json::from_slice(
@@ -1228,7 +1535,7 @@ mod tests {
         .expect("parse screen evidence artifact");
         assert_eq!(
             screen_artifact.get("baseline").and_then(Value::as_str),
-            Some("formal-native-helper-or-probe")
+            Some("os-native-backend")
         );
         assert_eq!(
             screen_artifact
@@ -1238,7 +1545,29 @@ mod tests {
                 .and_then(Value::as_object)
                 .and_then(|payload| payload.get("release_grade_backend"))
                 .and_then(Value::as_str),
-            Some("portal-live-helper")
+            Some("xdg-desktop-portal-screencast")
+        );
+        assert_eq!(
+            screen_artifact
+                .get("release_grade_backend_id")
+                .and_then(Value::as_str),
+            Some("xdg-desktop-portal-screencast")
+        );
+        assert_eq!(
+            screen_artifact
+                .get("release_grade_backend_origin")
+                .and_then(Value::as_str),
+            Some("os-native")
+        );
+        assert_eq!(
+            screen_artifact
+                .get("release_grade_backend_stack")
+                .and_then(Value::as_str),
+            Some("portal+pipewire")
+        );
+        assert_eq!(
+            screen_artifact.get("contract_kind").and_then(Value::as_str),
+            Some("release-grade-runtime-helper")
         );
         assert_eq!(
             screen_artifact
@@ -1249,11 +1578,56 @@ mod tests {
             Some(42)
         );
         assert!(
-            snapshot
-                .notes
-                .iter()
-                .any(|item| item == &format!("backend_evidence_dir={}", config.backend_evidence_dir.display())),
+            snapshot.notes.iter().any(|item| item
+                == &format!(
+                    "backend_evidence_dir={}",
+                    config.backend_evidence_dir.display()
+                )),
             "snapshot notes should expose backend evidence dir"
+        );
+        assert_eq!(snapshot.backend_summary.overall_status, "ready");
+        assert_eq!(snapshot.backend_summary.status_count, 5);
+        assert_eq!(snapshot.backend_summary.available_status_count, 5);
+        assert_eq!(snapshot.backend_summary.evidence_artifact_count, 5);
+        assert_eq!(snapshot.backend_summary.evidence_present_count, 5);
+        assert_eq!(snapshot.backend_summary.evidence_missing_count, 0);
+        assert_eq!(
+            snapshot
+                .backend_summary
+                .readiness_summary
+                .get("native-live"),
+            Some(&4)
+        );
+        assert_eq!(
+            snapshot
+                .backend_summary
+                .readiness_summary
+                .get("native-state-bridge"),
+            Some(&1)
+        );
+        assert!(
+            snapshot
+                .backend_summary
+                .evidence_baselines
+                .iter()
+                .any(|item| item == "os-native-backend"),
+            "backend summary should expose os-native baseline"
+        );
+        assert!(
+            snapshot
+                .backend_summary
+                .evidence_baselines
+                .iter()
+                .any(|item| item == "state-enumeration-backend"),
+            "backend summary should expose state enumeration baseline"
+        );
+        assert!(
+            snapshot
+                .backend_summary
+                .evidence_baselines
+                .iter()
+                .any(|item| item == "state-bridge-baseline"),
+            "backend summary should expose state bridge baseline"
         );
 
         cleanup(&config);

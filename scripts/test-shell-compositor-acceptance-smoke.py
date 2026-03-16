@@ -502,7 +502,7 @@ def main() -> int:
                     "keyboard_enabled = true",
                     "touch_enabled = true",
                     "keyboard_layout = us",
-                    "placeholder_surfaces = launcher,task-surface,approval-panel,portal-chooser,notification-center,recovery-surface,capture-indicators,remote-governance,device-backend-status",
+                    "panel_slots = launcher,task-surface,approval-panel,portal-chooser,notification-center,recovery-surface,capture-indicators,remote-governance,device-backend-status",
                     f"panel_snapshot_path = {json_artifact}",
                     f"panel_action_log_path = {panel_action_log}",
                     "panel_snapshot_refresh_ticks = 1",
@@ -526,6 +526,10 @@ def main() -> int:
             )
             require(payload["panel_snapshot_surface_count"] == 9, "compositor acceptance snapshot surface count mismatch")
             require(payload["surface_count"] == 9, "compositor acceptance compositor surface count mismatch")
+            require(payload["workspace_toplevel_mode"] == "maximized", "compositor acceptance workspace mode mismatch")
+            require(payload["modal_surface_count"] >= 3, "compositor acceptance modal count mismatch")
+            require(payload["blocked_surface_count"] >= 4, "compositor acceptance blocked count mismatch")
+            require(payload["topmost_slot_id"] is not None, "compositor acceptance topmost slot missing")
             require(payload["panel_host_bound_count"] == 9, "compositor acceptance host bound count mismatch")
             require(payload["panel_host_status"] == "ready(9/9)", "compositor acceptance host status mismatch")
             require(
@@ -541,7 +545,7 @@ def main() -> int:
                 "compositor acceptance primary attention mismatch",
             )
             require(payload["attention_surface_count"] >= 4, "compositor acceptance attention count mismatch")
-            require(payload["stacking_status"].startswith("panel-host-only("), "compositor acceptance stacking mismatch")
+            require(payload["stacking_status"].startswith("panel-host-stack("), "compositor acceptance stacking mismatch")
             require(payload["panel_action_event_count"] == 0, "compositor acceptance action event count mismatch")
             require(payload["panel_action_events"] == [], "compositor acceptance action event payload mismatch")
             require(
@@ -552,6 +556,9 @@ def main() -> int:
                 any(surface["surface_id"] == "remote-governance" for surface in payload["surfaces"]),
                 "compositor acceptance missing remote governance surface",
             )
+            surfaces = {surface["surface_id"]: surface for surface in payload["surfaces"]}
+            require(surfaces["task-surface"]["window_policy"] == "workspace-maximized", "compositor acceptance task window policy mismatch")
+            require(surfaces["approval-panel"]["interaction_mode"] == "modal", "compositor acceptance modal interaction mismatch")
             require(payload["topmost_surface_id"] is not None, "compositor acceptance topmost surface missing")
 
         stable_keys = [
@@ -563,8 +570,12 @@ def main() -> int:
             "active_modal_surface_id",
             "primary_attention_surface_id",
             "attention_surface_count",
+            "modal_surface_count",
+            "blocked_surface_count",
             "stacking_status",
             "surface_count",
+            "workspace_toplevel_mode",
+            "topmost_slot_id",
         ]
         for key in stable_keys:
             require(first[key] == second[key], f"compositor acceptance stability mismatch for {key}")
@@ -655,3 +666,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

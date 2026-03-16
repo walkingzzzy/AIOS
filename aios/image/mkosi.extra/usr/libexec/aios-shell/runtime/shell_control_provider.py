@@ -16,6 +16,8 @@ SYSTEM_HEALTH_GET = "system.health.get"
 POLICY_TOKEN_VERIFY = "policy.token.verify"
 SHELL_WINDOW_FOCUS = "shell.window.focus"
 SHELL_NOTIFICATION_OPEN = "shell.notification.open"
+SHELL_OPERATOR_AUDIT_OPEN = "shell.operator-audit.open"
+SHELL_REMOTE_GOVERNANCE_OPEN = "shell.remote-governance.open"
 SHELL_PANEL_EVENTS_LIST = "shell.panel-events.list"
 
 
@@ -28,6 +30,8 @@ class Config:
     policyd_socket: Path
     focus_state_path: Path
     notification_panel: Path
+    operator_audit_panel: Path
+    remote_governance_panel: Path
     recovery_surface: Path
     updated_socket: Path
     indicator_state: Path
@@ -35,6 +39,13 @@ class Config:
     deviced_socket: Path
     panel_action_log: Path | None
     approval_fixture: Path | None
+    policy_audit_log: Path
+    runtime_events_log: Path
+    remote_audit_log: Path
+    compat_observability_log: Path
+    browser_remote_registry: Path
+    office_remote_registry: Path
+    provider_registry_state_dir: Path
 
 
 def repo_root() -> Path:
@@ -74,6 +85,18 @@ def load_config() -> Config:
             os.environ.get(
                 "AIOS_SHELL_PROVIDER_NOTIFICATION_PANEL",
                 str(root / "aios" / "shell" / "components" / "notification-center" / "panel.py"),
+            )
+        ),
+        operator_audit_panel=Path(
+            os.environ.get(
+                "AIOS_SHELL_PROVIDER_OPERATOR_AUDIT_PANEL",
+                str(root / "aios" / "shell" / "components" / "operator-audit" / "panel.py"),
+            )
+        ),
+        remote_governance_panel=Path(
+            os.environ.get(
+                "AIOS_SHELL_PROVIDER_REMOTE_GOVERNANCE_PANEL",
+                str(root / "aios" / "shell" / "components" / "remote-governance" / "panel.py"),
             )
         ),
         recovery_surface=Path(
@@ -118,6 +141,54 @@ def load_config() -> Config:
             Path(value)
             if (value := os.environ.get("AIOS_SHELL_PROVIDER_APPROVAL_FIXTURE"))
             else None
+        ),
+        policy_audit_log=Path(
+            os.environ.get("AIOS_SHELL_PROVIDER_POLICY_AUDIT_LOG", "/var/lib/aios/policyd/audit.jsonl")
+        ),
+        runtime_events_log=Path(
+            os.environ.get(
+                "AIOS_SHELL_PROVIDER_RUNTIME_EVENTS_LOG",
+                "/var/lib/aios/runtimed/runtime-events.jsonl",
+            )
+        ),
+        remote_audit_log=Path(
+            os.environ.get(
+                "AIOS_SHELL_PROVIDER_REMOTE_AUDIT_LOG",
+                "/var/lib/aios/runtimed/remote-audit.jsonl",
+            )
+        ),
+        compat_observability_log=Path(
+            os.environ.get(
+                "AIOS_SHELL_PROVIDER_COMPAT_OBSERVABILITY_LOG",
+                "/var/lib/aios/compat/compat-observability.jsonl",
+            )
+        ),
+        browser_remote_registry=Path(
+            os.environ.get(
+                "AIOS_SHELL_PROVIDER_BROWSER_REMOTE_REGISTRY",
+                os.environ.get(
+                    "AIOS_BROWSER_REMOTE_REGISTRY",
+                    str(Path.home() / ".local" / "state" / "aios" / "compat-browser" / "remote-registry.json"),
+                ),
+            )
+        ),
+        office_remote_registry=Path(
+            os.environ.get(
+                "AIOS_SHELL_PROVIDER_OFFICE_REMOTE_REGISTRY",
+                os.environ.get(
+                    "AIOS_OFFICE_REMOTE_REGISTRY",
+                    str(Path.home() / ".local" / "state" / "aios" / "compat-office" / "remote-registry.json"),
+                ),
+            )
+        ),
+        provider_registry_state_dir=Path(
+            os.environ.get(
+                "AIOS_SHELL_PROVIDER_PROVIDER_REGISTRY_STATE_DIR",
+                os.environ.get(
+                    "AIOS_AGENTD_PROVIDER_REGISTRY_STATE_DIR",
+                    "/var/lib/aios/registry",
+                ),
+            )
         ),
     )
 
@@ -170,6 +241,8 @@ def health(config: Config) -> dict:
             f"provider_id={config.provider_id}",
             f"focus_state={config.focus_state_path}",
             f"notification_panel={config.notification_panel}",
+            f"operator_audit_panel={config.operator_audit_panel}",
+            f"remote_governance_panel={config.remote_governance_panel}",
             f"panel_action_log={config.panel_action_log}" if config.panel_action_log else "panel_action_log=disabled",
         ],
     }
@@ -219,6 +292,13 @@ def notification_panel_command(config: Config) -> list[str]:
         command.extend(["--panel-action-log", str(config.panel_action_log)])
     if config.approval_fixture is not None:
         command.extend(["--approval-fixture", str(config.approval_fixture)])
+    command.extend(["--policy-audit-log", str(config.policy_audit_log)])
+    command.extend(["--runtime-events-log", str(config.runtime_events_log)])
+    command.extend(["--remote-audit-log", str(config.remote_audit_log)])
+    command.extend(["--compat-observability-log", str(config.compat_observability_log)])
+    command.extend(["--browser-remote-registry", str(config.browser_remote_registry)])
+    command.extend(["--office-remote-registry", str(config.office_remote_registry)])
+    command.extend(["--provider-registry-state-dir", str(config.provider_registry_state_dir)])
     return command
 
 
@@ -239,6 +319,175 @@ def handle_notification_open(config: Config, params: dict) -> dict:
         "status": "opened",
         "opened_at": datetime.now(timezone.utc).isoformat(),
         "notification_count": notification_count,
+        "model": model if params.get("include_model", False) else None,
+        "notes": [
+            f"session_id={token.get('session_id')}",
+            f"source={params.get('source') or 'provider-call'}",
+        ],
+    }
+    return response
+
+
+def operator_audit_panel_command(
+    config: Config,
+    *,
+    params: dict,
+) -> list[str]:
+    issue_only = bool(params.get("issue_only", False))
+    limit = panel_event_limit(params.get("limit"), default=10, maximum=32)
+    command = [
+        sys.executable,
+        str(config.operator_audit_panel),
+        "model",
+        "--policy-audit-log",
+        str(config.policy_audit_log),
+        "--runtime-events-log",
+        str(config.runtime_events_log),
+        "--remote-audit-log",
+        str(config.remote_audit_log),
+        "--compat-observability-log",
+        str(config.compat_observability_log),
+        "--browser-remote-registry",
+        str(config.browser_remote_registry),
+        "--office-remote-registry",
+        str(config.office_remote_registry),
+        "--provider-registry-state-dir",
+        str(config.provider_registry_state_dir),
+        "--limit",
+        str(limit),
+    ]
+    for flag, value in (
+        ("--source", params.get("query_source")),
+        ("--severity", params.get("severity")),
+        ("--provider-id", params.get("provider_id")),
+        ("--provider-ref", params.get("provider_ref")),
+        ("--capability-id", params.get("capability_id")),
+        ("--decision", params.get("decision")),
+        ("--status", params.get("status")),
+        ("--session-id", params.get("session_id")),
+        ("--task-id", params.get("task_id")),
+        ("--approval-id", params.get("approval_id")),
+        ("--approval-ref", params.get("approval_ref")),
+        ("--audit-id", params.get("audit_id")),
+        ("--error-code", params.get("error_code")),
+        ("--text", params.get("text")),
+        ("--since", params.get("since")),
+        ("--until", params.get("until")),
+        ("--fleet-id", params.get("fleet_id")),
+        ("--governance-group", params.get("governance_group")),
+        ("--attestation-mode", params.get("attestation_mode")),
+        ("--control-plane-status", params.get("control_plane_status")),
+        ("--write-report", params.get("report_path")),
+    ):
+        if value not in (None, ""):
+            command.extend([flag, str(value)])
+    if issue_only:
+        command.append("--issue-only")
+    return command
+
+
+def handle_operator_audit_open(config: Config, params: dict) -> dict:
+    token = params.get("execution_token") or {}
+    verify_token(config, token, SHELL_OPERATOR_AUDIT_OPEN)
+
+    issue_only = bool(params.get("issue_only", False))
+    limit = panel_event_limit(params.get("limit"), default=10, maximum=32)
+    completed = subprocess.run(
+        operator_audit_panel_command(config, params=params),
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    model = json.loads(completed.stdout.strip() or "{}")
+    response = {
+        "provider_id": config.provider_id,
+        "status": "opened",
+        "opened_at": datetime.now(timezone.utc).isoformat(),
+        "issue_count": int((model.get("meta") or {}).get("issue_count", 0)),
+        "record_count": int((model.get("meta") or {}).get("record_count", 0)),
+        "matched_record_count": int((model.get("meta") or {}).get("matched_record_count", 0)),
+        "task_count": int((model.get("meta") or {}).get("task_count", 0)),
+        "remote_governance_issue_count": int((model.get("meta") or {}).get("remote_governance_issue_count", 0)),
+        "remote_governance_matched_entry_count": int(
+            (model.get("meta") or {}).get("remote_governance_matched_entry_count", 0)
+        ),
+        "issue_only": issue_only,
+        "filters": (model.get("meta") or {}).get("filters", {}),
+        "report_path": ((model.get("meta") or {}).get("query") or {}).get("report_path"),
+        "model": model if params.get("include_model", False) else None,
+        "notes": [
+            f"session_id={token.get('session_id')}",
+            f"source={params.get('source') or 'provider-call'}",
+        ],
+    }
+    return response
+
+
+def remote_governance_panel_command(
+    config: Config,
+    *,
+    params: dict,
+) -> list[str]:
+    issue_only = bool(params.get("issue_only", False))
+    limit = panel_event_limit(params.get("limit"), default=10, maximum=32)
+    command = [
+        sys.executable,
+        str(config.remote_governance_panel),
+        "model",
+        "--browser-remote-registry",
+        str(config.browser_remote_registry),
+        "--office-remote-registry",
+        str(config.office_remote_registry),
+        "--provider-registry-state-dir",
+        str(config.provider_registry_state_dir),
+        "--limit",
+        str(limit),
+    ]
+    for flag, value in (
+        ("--source", params.get("query_source")),
+        ("--severity", params.get("severity")),
+        ("--fleet-id", params.get("fleet_id")),
+        ("--governance-group", params.get("governance_group")),
+        ("--status", params.get("status")),
+        ("--provider-ref", params.get("provider_ref")),
+        ("--provider-id", params.get("provider_id")),
+        ("--attestation-mode", params.get("attestation_mode")),
+        ("--control-plane-status", params.get("control_plane_status")),
+        ("--approval-ref", params.get("approval_ref")),
+        ("--text", params.get("text")),
+        ("--write-report", params.get("report_path")),
+    ):
+        if value not in (None, ""):
+            command.extend([flag, str(value)])
+    if issue_only:
+        command.append("--issue-only")
+    return command
+
+
+def handle_remote_governance_open(config: Config, params: dict) -> dict:
+    token = params.get("execution_token") or {}
+    verify_token(config, token, SHELL_REMOTE_GOVERNANCE_OPEN)
+
+    issue_only = bool(params.get("issue_only", False))
+    completed = subprocess.run(
+        remote_governance_panel_command(config, params=params),
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    model = json.loads(completed.stdout.strip() or "{}")
+    meta = model.get("meta") or {}
+    response = {
+        "provider_id": config.provider_id,
+        "status": "opened",
+        "opened_at": datetime.now(timezone.utc).isoformat(),
+        "entry_count": int(meta.get("entry_count", 0)),
+        "matched_entry_count": int(meta.get("matched_entry_count", 0)),
+        "issue_count": int(meta.get("issue_count", 0)),
+        "fleet_count": int(meta.get("fleet_count", 0)),
+        "issue_only": issue_only,
+        "filters": (meta.get("query") or {}).get("filters", {}),
+        "report_path": (meta.get("query") or {}).get("report_path"),
         "model": model if params.get("include_model", False) else None,
         "notes": [
             f"session_id={token.get('session_id')}",
@@ -410,6 +659,10 @@ def serve(config: Config) -> int:
                     conn.sendall(response(handle_focus(config, params), request_id=request_id))
                 elif method == SHELL_NOTIFICATION_OPEN:
                     conn.sendall(response(handle_notification_open(config, params), request_id=request_id))
+                elif method == SHELL_OPERATOR_AUDIT_OPEN:
+                    conn.sendall(response(handle_operator_audit_open(config, params), request_id=request_id))
+                elif method == SHELL_REMOTE_GOVERNANCE_OPEN:
+                    conn.sendall(response(handle_remote_governance_open(config, params), request_id=request_id))
                 elif method == SHELL_PANEL_EVENTS_LIST:
                     conn.sendall(response(handle_panel_events_list(config, params), request_id=request_id))
                 else:

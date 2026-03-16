@@ -11,6 +11,17 @@ import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
 AIOS_ROOT = ROOT / "aios"
+HOST_LINK_PLACEHOLDER_PREFIX = "aios-host-link-target:"
+
+
+def read_symlink_target(path: Path) -> str | None:
+    if path.is_symlink():
+        return os.readlink(path)
+    if path.is_file():
+        payload = path.read_text(encoding="utf-8").strip()
+        if payload.startswith(HOST_LINK_PLACEHOLDER_PREFIX):
+            return payload[len(HOST_LINK_PLACEHOLDER_PREFIX):]
+    return None
 
 
 def parse_args() -> argparse.Namespace:
@@ -30,12 +41,12 @@ def ensure(condition: bool, message: str) -> None:
 
 
 def load_yaml(path: Path) -> dict:
-    return yaml.safe_load(path.read_text()) or {}
+    return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
 
 
 def rust_source_has_inline_tests(source_dir: Path) -> bool:
     for path in source_dir.rglob("*.rs"):
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
         if "#[cfg(test)]" in text or "#[test]" in text:
             return True
     return False
@@ -45,15 +56,23 @@ def executable_bit(path: Path) -> bool:
     return bool(path.stat().st_mode & 0o111)
 
 
+def tracked_tree_files(root: Path) -> list[Path]:
+    tracked: list[Path] = []
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(root)
+        if "__pycache__" in relative.parts or path.suffix == ".pyc":
+            continue
+        tracked.append(relative)
+    return sorted(tracked)
+
+
 def compare_tree_contents(source_root: Path, mirror_root: Path, label: str) -> int:
     require(source_root, f"{label} source tree")
     require(mirror_root, f"{label} mirrored tree")
-    source_files = sorted(
-        path.relative_to(source_root) for path in source_root.rglob("*") if path.is_file()
-    )
-    mirror_files = sorted(
-        path.relative_to(mirror_root) for path in mirror_root.rglob("*") if path.is_file()
-    )
+    source_files = tracked_tree_files(source_root)
+    mirror_files = tracked_tree_files(mirror_root)
     ensure(
         source_files == mirror_files,
         f"{label} file list out of sync: {source_root} != {mirror_root}",
@@ -75,7 +94,7 @@ def main() -> int:
     bundle_dir = args.bundle_dir.resolve()
     manifest_path = bundle_dir / "manifest.json"
     require(manifest_path, "manifest")
-    manifest = json.loads(manifest_path.read_text())
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
     expected_rootfs_files = [
         bundle_dir / "rootfs" / "usr" / "libexec" / "aios" / "sessiond",
@@ -118,7 +137,7 @@ def main() -> int:
 
     masked_firstboot = bundle_dir / "rootfs" / "etc" / "systemd" / "system" / "systemd-firstboot.service"
     require(masked_firstboot, "masked systemd-firstboot unit")
-    if not masked_firstboot.is_symlink() or os.readlink(masked_firstboot) != "/dev/null":
+    if read_symlink_target(masked_firstboot) != "/dev/null":
         raise SystemExit(f"unexpected systemd-firstboot mask target: {masked_firstboot}")
 
     tmpfiles_source = AIOS_ROOT / "image" / "mkosi.extra" / "usr" / "lib" / "tmpfiles.d" / "aios.conf"
@@ -126,12 +145,12 @@ def main() -> int:
     require(tmpfiles_source, "source tmpfiles config")
     require(tmpfiles_bundled, "bundled tmpfiles config")
     ensure(
-        tmpfiles_source.read_text() == tmpfiles_bundled.read_text(),
+        tmpfiles_source.read_text(encoding="utf-8") == tmpfiles_bundled.read_text(encoding="utf-8"),
         f"tmpfiles config out of sync: {tmpfiles_source} != {tmpfiles_bundled}",
     )
     tmpfiles_entries = {
         line.strip()
-        for line in tmpfiles_bundled.read_text().splitlines()
+        for line in tmpfiles_bundled.read_text(encoding="utf-8").splitlines()
         if line.strip() and not line.lstrip().startswith("#")
     }
     required_tmpfiles_entries = {
@@ -152,13 +171,11 @@ def main() -> int:
 
     machine_id = bundle_dir / "rootfs" / "etc" / "machine-id"
     require(machine_id, "empty machine-id file")
-    if machine_id.read_text() != "":
+    if machine_id.read_text(encoding="utf-8") != "":
         raise SystemExit("expected /etc/machine-id to be empty in delivery bundle")
 
     dbus_machine_id = bundle_dir / "rootfs" / "var" / "lib" / "dbus" / "machine-id"
-    if not dbus_machine_id.is_symlink():
-        raise SystemExit(f"missing dbus machine-id link: {dbus_machine_id}")
-    if os.readlink(dbus_machine_id) != "/etc/machine-id":
+    if read_symlink_target(dbus_machine_id) != "/etc/machine-id":
         raise SystemExit(f"unexpected dbus machine-id target: {dbus_machine_id}")
 
     random_seed = bundle_dir / "rootfs" / "var" / "lib" / "systemd" / "random-seed"
@@ -245,7 +262,7 @@ def main() -> int:
     for source, bundled in config_sync_pairs:
         require(source, "source config")
         require(bundled, "bundled config")
-        if source.read_text() != bundled.read_text():
+        if source.read_text(encoding="utf-8") != bundled.read_text(encoding="utf-8"):
             raise SystemExit(f"config out of sync: {source} != {bundled}")
 
     runtime_platform_asset_count = compare_tree_contents(
@@ -280,7 +297,7 @@ def main() -> int:
         require(source, "source shell compositor asset")
         require(bundled, "bundled shell compositor asset")
         ensure(
-            source.read_text() == bundled.read_text(),
+            source.read_text(encoding="utf-8") == bundled.read_text(encoding="utf-8"),
             f"shell compositor asset out of sync: {source} != {bundled}",
         )
     updated_platform_profiles = {
@@ -316,7 +333,8 @@ def main() -> int:
             / "health-probe.sh"
         )
         require(probe_asset, "updated platform health probe asset")
-        ensure(executable_bit(probe_asset), f"health probe should be executable: {probe_asset}")
+        if os.name != "nt":
+            ensure(executable_bit(probe_asset), f"health probe should be executable: {probe_asset}")
 
     metadata_sync_pairs = [
         (
@@ -363,7 +381,7 @@ def main() -> int:
     for source, bundled in metadata_sync_pairs:
         require(source, "source metadata")
         require(bundled, "bundled metadata")
-        if source.read_text() != bundled.read_text():
+        if source.read_text(encoding="utf-8") != bundled.read_text(encoding="utf-8"):
             raise SystemExit(f"component metadata out of sync: {source} != {bundled}")
 
     sessiond_metadata = load_yaml(
@@ -456,7 +474,7 @@ def main() -> int:
         bundle_dir / "rootfs" / "usr" / "lib" / "systemd" / "system" / "aios-runtimed.service"
     )
     ensure(
-        "EnvironmentFile=-/etc/aios/runtime/platform.env" in runtimed_unit.read_text(),
+        "EnvironmentFile=-/etc/aios/runtime/platform.env" in runtimed_unit.read_text(encoding="utf-8"),
         "runtimed unit missing runtime platform env wiring",
     )
     jetson_runtime_profile = (
@@ -471,7 +489,7 @@ def main() -> int:
         / "default-runtime-profile.yaml"
     )
     require(jetson_runtime_profile, "jetson runtime platform profile asset")
-    jetson_runtime_profile_text = jetson_runtime_profile.read_text()
+    jetson_runtime_profile_text = jetson_runtime_profile.read_text(encoding="utf-8")
     ensure(
         "profile_id: nvidia-jetson-orin-agx-default" in jetson_runtime_profile_text,
         "jetson runtime platform profile id mismatch",
@@ -501,8 +519,21 @@ def main() -> int:
         / "launch-managed-worker.sh",
         "jetson worker bridge asset",
     )
+    require(
+        bundle_dir
+        / "rootfs"
+        / "usr"
+        / "share"
+        / "aios"
+        / "runtime"
+        / "platforms"
+        / "nvidia-jetson-orin-agx"
+        / "bin"
+        / "vendor_accel_worker.py",
+        "jetson vendor helper asset",
+    )
 
-    runtime_readme = (AIOS_ROOT / "runtime" / "README.md").read_text()
+    runtime_readme = (AIOS_ROOT / "runtime" / "README.md").read_text(encoding="utf-8")
     for needle in ("runtime-worker-v1", "unix://", "managed worker"):
         ensure(needle in runtime_readme, f"runtime README missing current runtime capability marker: {needle}")
 
@@ -511,12 +542,40 @@ def main() -> int:
         "hardware_profile_managed_worker_commands" in runtime_profile,
         "default runtime profile missing hardware_profile_managed_worker_commands",
     )
-    runtime_profile_schema = json.loads((AIOS_ROOT / "runtime" / "schemas" / "runtime-profile.schema.json").read_text())
+    runtime_profile_schema = json.loads((AIOS_ROOT / "runtime" / "schemas" / "runtime-profile.schema.json").read_text(encoding="utf-8"))
     ensure(
         "hardware_profile_managed_worker_commands" in runtime_profile_schema.get("properties", {}),
         "runtime profile schema missing hardware_profile_managed_worker_commands",
     )
 
+    image_schema_root = bundle_dir / "rootfs" / "usr" / "share" / "aios" / "schemas" / "image"
+    image_schema_count = compare_tree_contents(
+        AIOS_ROOT / "image" / "schemas",
+        image_schema_root,
+        "image schemas",
+    )
+    require(image_schema_root / "platform-media-profile.schema.json", "platform media profile schema asset")
+    require(image_schema_root / "vendor-firmware-hook-report.schema.json", "vendor firmware hook report schema asset")
+
+    sdk_schema_root = bundle_dir / "rootfs" / "usr" / "share" / "aios" / "schemas" / "sdk"
+    sdk_schema_count = compare_tree_contents(
+        AIOS_ROOT / "sdk" / "schemas",
+        sdk_schema_root,
+        "sdk schemas",
+    )
+    require(sdk_schema_root / "provider-descriptor.schema.json", "provider descriptor schema asset")
+    require(sdk_schema_root / "provider-remote-registration.schema.json", "provider remote registration schema asset")
+    require(sdk_schema_root / "provider-remote-registry.schema.json", "provider remote registry schema asset")
+
+    hardware_schema_root = bundle_dir / "rootfs" / "usr" / "share" / "aios" / "schemas" / "hardware"
+    hardware_schema_count = compare_tree_contents(
+        AIOS_ROOT / "hardware" / "schemas",
+        hardware_schema_root,
+        "hardware schemas",
+    )
+    require(hardware_schema_root / "hardware-profile.schema.json", "hardware profile schema asset")
+    require(hardware_schema_root / "hardware-boot-evidence-report.schema.json", "hardware boot evidence schema asset")
+    require(hardware_schema_root / "hardware-validation-evidence-index.schema.json", "hardware validation evidence index schema asset")
     observability_schema_root = bundle_dir / "rootfs" / "usr" / "share" / "aios" / "schemas" / "observability"
     observability_schema_count = compare_tree_contents(
         AIOS_ROOT / "observability" / "schemas",
@@ -531,6 +590,13 @@ def main() -> int:
     require(observability_schema_root / "cross-service-correlation-report.schema.json", "cross-service correlation schema asset")
     require(observability_schema_root / "cross-service-health-report.schema.json", "cross-service health schema asset")
 
+    updated_schema_root = bundle_dir / "rootfs" / "usr" / "share" / "aios" / "schemas" / "updated"
+    updated_schema_count = compare_tree_contents(
+        AIOS_ROOT / "services" / "updated" / "schemas",
+        updated_schema_root,
+        "updated schemas",
+    )
+    require(updated_schema_root / "platform-profile.schema.json", "updated platform profile schema asset")
     summary = {
         "bundle_dir": str(bundle_dir),
         "components": len(manifest.get("components", [])),
@@ -540,7 +606,11 @@ def main() -> int:
         "task_files": len(manifest.get("task_files", [])),
         "machine_id_state": firstboot_hygiene.get("machine_id_state"),
         "synced_configs": len(config_sync_pairs),
+        "synced_image_schemas": image_schema_count,
+        "synced_sdk_schemas": sdk_schema_count,
+        "synced_hardware_schemas": hardware_schema_count,
         "synced_observability_schemas": observability_schema_count,
+        "synced_updated_schemas": updated_schema_count,
         "synced_runtime_platform_assets": runtime_platform_asset_count,
         "synced_shell_compositor_sources": shell_compositor_source_count,
         "updated_platform_profiles_checked": len(updated_platform_profiles),
@@ -554,3 +624,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+

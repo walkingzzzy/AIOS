@@ -94,15 +94,51 @@ def action_result(args: argparse.Namespace, params: dict[str, Any]) -> dict[str,
     }
 
 
-def serve(args: argparse.Namespace) -> int:
-    if args.socket_path.exists():
-        args.socket_path.unlink()
-    args.socket_path.parent.mkdir(parents=True, exist_ok=True)
+def write_tcp_transport_descriptor(socket_path: Path, host: str, port: int) -> None:
+    socket_path.parent.mkdir(parents=True, exist_ok=True)
+    socket_path.write_text(
+        json.dumps(
+            {
+                "transport": "tcp",
+                "service_kind": "shell-panel-bridge",
+                "host": host,
+                "port": port,
+                "socket_path": str(socket_path),
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
-    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    server.bind(str(args.socket_path))
+
+def bind_server(socket_path: Path) -> socket.socket:
+    if socket_path.exists():
+        socket_path.unlink()
+    socket_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if hasattr(socket, "AF_UNIX"):
+        server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        server.bind(str(socket_path))
+        server.listen()
+        return server
+
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.bind(("127.0.0.1", 0))
     server.listen()
+    host, port = server.getsockname()
+    write_tcp_transport_descriptor(socket_path, str(host), int(port))
+    return server
 
+
+def cleanup_socket_path(socket_path: Path) -> None:
+    if socket_path.exists():
+        socket_path.unlink()
+
+
+def serve(args: argparse.Namespace) -> int:
+    server = bind_server(args.socket_path)
     stop = False
 
     def handle_signal(_signum: int, _frame: object) -> None:
@@ -112,43 +148,43 @@ def serve(args: argparse.Namespace) -> int:
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
 
-    while not stop:
-        try:
-            server.settimeout(0.5)
-            conn, _ = server.accept()
-        except socket.timeout:
-            continue
-
-        with conn:
-            data = b""
-            while not data.endswith(b"\n"):
-                chunk = conn.recv(65536)
-                if not chunk:
-                    break
-                data += chunk
-            if not data:
+    try:
+        while not stop:
+            try:
+                server.settimeout(0.5)
+                conn, _ = server.accept()
+            except socket.timeout:
                 continue
 
-            request = json.loads(data.decode("utf-8"))
-            method = request.get("method")
-            params = request.get("params") or {}
-            request_id = request.get("id")
+            with conn:
+                data = b""
+                while not data.endswith(b"\n"):
+                    chunk = conn.recv(65536)
+                    if not chunk:
+                        break
+                    data += chunk
+                if not data:
+                    continue
 
-            try:
-                if method == SYSTEM_HEALTH_GET:
-                    conn.sendall(response(health(args), request_id=request_id))
-                elif method == SHELL_PANEL_SNAPSHOT_GET:
-                    conn.sendall(response(snapshot_result(args), request_id=request_id))
-                elif method == SHELL_PANEL_ACTION_DISPATCH:
-                    conn.sendall(response(action_result(args, params), request_id=request_id))
-                else:
-                    conn.sendall(response(error=f"unsupported method: {method}", request_id=request_id))
-            except Exception as exc:  # noqa: BLE001
-                conn.sendall(response(error=str(exc), request_id=request_id))
+                request = json.loads(data.decode("utf-8"))
+                method = request.get("method")
+                params = request.get("params") or {}
+                request_id = request.get("id")
 
-    server.close()
-    if args.socket_path.exists():
-        args.socket_path.unlink()
+                try:
+                    if method == SYSTEM_HEALTH_GET:
+                        conn.sendall(response(health(args), request_id=request_id))
+                    elif method == SHELL_PANEL_SNAPSHOT_GET:
+                        conn.sendall(response(snapshot_result(args), request_id=request_id))
+                    elif method == SHELL_PANEL_ACTION_DISPATCH:
+                        conn.sendall(response(action_result(args, params), request_id=request_id))
+                    else:
+                        conn.sendall(response(error=f"unsupported method: {method}", request_id=request_id))
+                except Exception as exc:  # noqa: BLE001
+                    conn.sendall(response(error=str(exc), request_id=request_id))
+    finally:
+        server.close()
+        cleanup_socket_path(args.socket_path)
     return 0
 
 

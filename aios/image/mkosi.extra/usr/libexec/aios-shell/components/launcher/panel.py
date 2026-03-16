@@ -6,7 +6,7 @@ import json
 import time
 from pathlib import Path
 
-from prototype import default_socket, fixture_call, load_fixture, rpc_call
+from prototype import default_agent_socket, default_socket, fixture_call, load_fixture, rpc_call
 
 
 STATUS_TONES = {
@@ -95,44 +95,60 @@ def load_fixture_state(path: Path, session_id: str | None) -> dict:
         "recovery": recovery,
         "session_count": len(sessions),
         "task_count_total": len(all_tasks),
+        "data_source_status": "ready",
+        "data_source_error": None,
     }
 
 
-def load_live_state(socket_path: Path, session_id: str | None) -> dict:
+def load_live_state(agent_socket_path: Path, session_id: str | None) -> dict:
     sessions: list[dict] = []
     focus_session = None
     recovery = None
     tasks: list[dict] = []
+    errors: list[str] = []
 
     try:
-        sessions_result = rpc_call(socket_path, "session.list", {"limit": SESSION_LIST_LIMIT})
+        sessions_result = rpc_call(
+            agent_socket_path,
+            "agent.session.list",
+            {"limit": SESSION_LIST_LIMIT},
+        )
         sessions = sort_sessions(list(sessions_result.get("sessions", [])))
-    except Exception:
+    except Exception as error:
         sessions = []
+        errors.append(str(error))
 
     focus_session_id = session_id or ((sessions[0] if sessions else {}).get("session_id"))
     if focus_session_id:
         try:
             evidence = rpc_call(
-                socket_path,
-                "session.evidence.get",
+                agent_socket_path,
+                "agent.session.evidence.get",
                 {"session_id": focus_session_id, "limit": 20},
             )
             focus_session = evidence.get("session")
             recovery = evidence.get("recovery")
             tasks = sort_tasks(list(evidence.get("tasks", [])))
-        except Exception:
+        except Exception as error:
             focus_session = next(
                 (item for item in sessions if item.get("session_id") == focus_session_id),
                 None,
             )
             recovery = None
             tasks = []
+            errors.append(str(error))
 
     if focus_session is not None and not any(
         item.get("session_id") == focus_session.get("session_id") for item in sessions
     ):
         sessions = sort_sessions([focus_session, *sessions])
+
+    if errors:
+        data_source_status = "partial" if sessions or focus_session is not None or tasks else "fallback-empty"
+        data_source_error = "; ".join(errors)
+    else:
+        data_source_status = "ready"
+        data_source_error = None
 
     return {
         "sessions": sessions,
@@ -142,13 +158,15 @@ def load_live_state(socket_path: Path, session_id: str | None) -> dict:
         "recovery": recovery,
         "session_count": len(sessions),
         "task_count_total": len(tasks),
+        "data_source_status": data_source_status,
+        "data_source_error": data_source_error,
     }
 
 
-def load_state(socket_path: Path, fixture: Path | None, session_id: str | None) -> dict:
+def load_state(agent_socket_path: Path, fixture: Path | None, session_id: str | None) -> dict:
     if fixture is not None:
         return load_fixture_state(fixture, session_id)
-    return load_live_state(socket_path, session_id)
+    return load_live_state(agent_socket_path, session_id)
 
 
 def build_model(state: dict, requested_session_id: str | None, user_id: str, intent: str, title: str | None, task_state: str) -> dict:
@@ -237,7 +255,7 @@ def build_model(state: dict, requested_session_id: str | None, user_id: str, int
     return {
         "component_id": "launcher",
         "panel_id": "launcher-panel",
-        "panel_kind": "shell-panel-skeleton",
+        "panel_kind": "shell-panel",
         "header": {
             "title": "Launcher Panel",
             "subtitle": f"user {user_id} · intent {intent}",
@@ -360,6 +378,8 @@ def build_model(state: dict, requested_session_id: str | None, user_id: str, int
             "restore_task_count": len(tasks),
             "focus_session_status": (focus_session or {}).get("status"),
             "focus_session_last_resumed_at": (focus_session or {}).get("last_resumed_at"),
+            "data_source_status": state.get("data_source_status", "ready"),
+            "data_source_error": state.get("data_source_error"),
         },
     }
 
@@ -370,6 +390,11 @@ def render_text(panel: dict) -> str:
     lines.append(f"{header['title']} [{header['status']}]")
     lines.append(header["subtitle"])
     lines.append("badges: " + ", ".join(f"{item['label']}: {item['value']}" for item in panel["badges"]))
+    meta = panel.get("meta") or {}
+    if meta.get("data_source_status") != "ready":
+        lines.append(f"source: {meta.get('data_source_status')}")
+        if meta.get("data_source_error"):
+            lines.append(f"source_error: {meta['data_source_error']}")
     if panel["actions"]:
         lines.append("actions: " + ", ".join(action["label"] for action in panel["actions"] if action.get("enabled", True)))
     for section in panel["sections"]:
@@ -396,7 +421,7 @@ def resolve_action_session_id(args: argparse.Namespace) -> str | None:
         focus_session = state.get("focus_session") or {}
         return focus_session.get("session_id")
     try:
-        sessions = rpc_call(args.socket, "session.list", {"limit": 1}).get("sessions", [])
+        sessions = rpc_call(args.agent_socket, "agent.session.list", {"limit": 1}).get("sessions", [])
     except Exception:
         return None
     if sessions:
@@ -416,7 +441,7 @@ def run_action(args: argparse.Namespace) -> dict:
         if args.fixture is not None:
             result = fixture_call(args.fixture, "create-session", action_args)
         else:
-            result = rpc_call(args.socket, "session.create", {"user_id": args.user_id, "metadata": {"initial_intent": args.intent}})
+            result = rpc_call(args.agent_socket, "agent.session.create", {"user_id": args.user_id, "metadata": {"initial_intent": args.intent}})
         return {
             **result,
             "target_component": "task-surface",
@@ -431,7 +456,7 @@ def run_action(args: argparse.Namespace) -> dict:
         if args.fixture is not None:
             result = fixture_call(args.fixture, "resume", action_args)
         else:
-            result = rpc_call(args.socket, "session.resume", {"session_id": session_id})
+            result = rpc_call(args.agent_socket, "agent.session.resume", {"session_id": session_id})
         session = result.get("session") or {}
         recovery = result.get("recovery") or {}
         return {
@@ -453,7 +478,7 @@ def run_action(args: argparse.Namespace) -> dict:
         if args.fixture is not None:
             result = fixture_call(args.fixture, "create-task", action_args)
         else:
-            result = rpc_call(args.socket, "task.create", {"session_id": session_id, "title": args.title or args.intent, "state": args.state})
+            result = rpc_call(args.agent_socket, "agent.task.create", {"session_id": session_id, "title": args.title or args.intent, "state": args.state})
         return {
             **result,
             "target_component": "task-surface",
@@ -463,9 +488,10 @@ def run_action(args: argparse.Namespace) -> dict:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="AIOS launcher panel skeleton")
+    parser = argparse.ArgumentParser(description="AIOS launcher panel")
     parser.add_argument("command", nargs="?", default="render", choices=["render", "model", "action", "watch"])
     parser.add_argument("--socket", type=Path, default=default_socket())
+    parser.add_argument("--agent-socket", type=Path, default=default_agent_socket())
     parser.add_argument("--fixture", type=Path)
     parser.add_argument("--session-id")
     parser.add_argument("--user-id", default="local-user")
@@ -488,7 +514,7 @@ def main() -> int:
     if args.command == "watch":
         iterations = max(1, args.iterations)
         for index in range(iterations):
-            state = load_state(args.socket, args.fixture, args.session_id)
+            state = load_state(args.agent_socket, args.fixture, args.session_id)
             model = build_model(state, args.session_id, args.user_id, args.intent, args.title, args.state)
             if args.json:
                 print(json.dumps(model, indent=2, ensure_ascii=False))
@@ -500,7 +526,7 @@ def main() -> int:
                 time.sleep(args.interval)
         return 0
 
-    state = load_state(args.socket, args.fixture, args.session_id)
+    state = load_state(args.agent_socket, args.fixture, args.session_id)
     model = build_model(state, args.session_id, args.user_id, args.intent, args.title, args.state)
     if args.command == "model" or args.json:
         print(json.dumps(model, indent=2, ensure_ascii=False))
@@ -511,3 +537,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

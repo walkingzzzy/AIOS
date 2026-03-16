@@ -7,13 +7,34 @@ import os
 import signal
 import socket
 import subprocess
-import tempfile
+import uuid
 import time
 from pathlib import Path
 
-from aios_cargo_bins import cargo_target_bin_dir, default_aios_bin_dir, detect_host_target
+import yaml
+from jsonschema import Draft202012Validator
+
+from aios_cargo_bins import cargo_target_bin_dir, default_aios_bin_dir, detect_host_target, resolve_binary_path
 
 ROOT = Path(__file__).resolve().parent.parent
+TEMP_ROOT_DIR = ROOT / "out" / "tmp"
+
+
+def build_validator(path: Path) -> Draft202012Validator:
+    schema = json.loads(path.read_text())
+    Draft202012Validator.check_schema(schema)
+    return Draft202012Validator(schema, format_checker=Draft202012Validator.FORMAT_CHECKER)
+
+
+def load_yaml(path: Path) -> dict:
+    return yaml.safe_load(path.read_text()) or {}
+
+
+def make_temp_dir(prefix: str) -> Path:
+    TEMP_ROOT_DIR.mkdir(parents=True, exist_ok=True)
+    path = TEMP_ROOT_DIR / f"{prefix}{uuid.uuid4().hex}"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def parse_args() -> argparse.Namespace:
@@ -26,10 +47,10 @@ def parse_args() -> argparse.Namespace:
 
 def resolve_binary(name: str, explicit: Path | None, bin_dir: Path | None) -> Path:
     if explicit is not None:
-        return explicit
+        return resolve_binary_path(explicit.parent, explicit.name)
     if bin_dir is not None:
-        return bin_dir / name
-    return default_aios_bin_dir(ROOT) / name
+        return resolve_binary_path(bin_dir, name)
+    return resolve_binary_path(default_aios_bin_dir(ROOT), name)
 
 
 def ensure_binary(path: Path) -> None:
@@ -41,6 +62,10 @@ def ensure_binary(path: Path) -> None:
     subprocess.run(command, cwd=ROOT / "aios", check=True)
     if not path.exists():
         raise SystemExit(f"missing binary after build: {path}")
+
+
+def unix_rpc_supported() -> bool:
+    return hasattr(socket, "AF_UNIX") and os.name != "nt"
 
 
 def rpc_call(socket_path: Path, method: str, params: dict, timeout: float) -> dict:
@@ -96,11 +121,20 @@ def require(condition: bool, message: str) -> None:
 
 
 def main() -> int:
+    updated_profile_validator = build_validator(
+        ROOT / "aios" / "services" / "updated" / "schemas" / "platform-profile.schema.json"
+    )
+    for path in sorted((ROOT / "aios" / "services" / "updated" / "platforms").glob("*/share/profile.yaml")):
+        updated_profile_validator.validate(load_yaml(path))
+
     args = parse_args()
+    if not unix_rpc_supported():
+        print("updated platform-profile smoke skipped: unix rpc transport unsupported on this platform")
+        return 0
     updated = resolve_binary("updated", args.updated, args.bin_dir)
     ensure_binary(updated)
 
-    temp_root = Path(tempfile.mkdtemp(prefix="aios-upd-", dir="/tmp"))
+    temp_root = make_temp_dir("aios-upd-")
     runtime_root = temp_root / "r"
     state_root = temp_root / "s"
     boot_dir = state_root / "boot"

@@ -9,11 +9,11 @@ import selectors
 import signal
 import socket
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_WORK_ROOT = ROOT / "out" / "validation" / "qemu-cross-reboot-smoke"
 ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 KERNEL_PATTERN = re.compile(r"Linux version .*x86_64")
 SYSTEMD_PATTERN = re.compile(r"systemd\[1\]: systemd .* running in system mode")
@@ -40,6 +40,10 @@ def parse_args() -> argparse.Namespace:
 
 def sanitize(line: str) -> str:
     return ANSI_ESCAPE.sub("", line).replace("\r", "").rstrip("\n")
+
+
+def unix_rpc_supported() -> bool:
+    return hasattr(socket, "AF_UNIX") and os.name != "nt"
 
 
 def terminate(proc: subprocess.Popen[str]) -> None:
@@ -91,8 +95,15 @@ def read_available_lines(
 
 def main() -> int:
     args = parse_args()
+    if not unix_rpc_supported():
+        print("qemu cross reboot smoke skipped: unix rpc transport unsupported on this platform")
+        return 0
     args.log_path.parent.mkdir(parents=True, exist_ok=True)
-    monitor_dir = Path(tempfile.mkdtemp(prefix="aios-qemu-monitor-"))
+    monitor_dir = DEFAULT_WORK_ROOT
+    if monitor_dir.exists():
+        import shutil
+        shutil.rmtree(monitor_dir, ignore_errors=True)
+    monitor_dir.mkdir(parents=True, exist_ok=True)
     monitor_path = monitor_dir / "monitor.sock"
 
     env = os.environ.copy()

@@ -16,6 +16,24 @@ PRECHECK=false
 NO_ARCHIVE=false
 SYNC_OVERLAY=""
 
+resolve_python_bin() {
+  if [[ -n "${AIOS_PYTHON_BIN:-}" ]]; then
+    printf '%s\n' "$AIOS_PYTHON_BIN"
+    return 0
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    printf 'python3\n'
+    return 0
+  fi
+  if command -v python >/dev/null 2>&1; then
+    printf 'python\n'
+    return 0
+  fi
+  printf 'python3\n'
+}
+
+PYTHON_BIN="$(resolve_python_bin)"
+
 PACKAGES=(
   aios-agentd
   aios-sessiond
@@ -64,20 +82,41 @@ if command -v docker >/dev/null 2>&1 && docker buildx version >/dev/null 2>&1; t
 fi
 
 if [[ "$PRECHECK" == "true" ]]; then
-  printf '{"status":"%s","docker_available":%s,"buildx_available":%s,"dockerfile":"%s","dockerfile_exists":%s,"docker_platform":"%s","builder_tag":"%s","output_dir":"%s","build_retries":"%s","cargo_bin":"%s","container_toolchain":"%s","reuse_local_builder":"%s","container_target_dir":"%s","linux_binary_strategy":"container-native-linux-x86_64"}\n' \
-    "$([[ "$docker_available" == "true" && "$buildx_available" == "true" ]] && printf ready || printf blocked)" \
-    "$docker_available" \
-    "$buildx_available" \
-    "$DOCKERFILE" \
-    "$([[ -f "$DOCKERFILE" ]] && printf true || printf false)" \
-    "$DOCKER_PLATFORM" \
-    "$BUILDER_TAG" \
-    "$OUTPUT_DIR" \
-    "$BUILD_RETRIES" \
-    "$CARGO_BIN" \
-    "$CONTAINER_TOOLCHAIN" \
-    "$REUSE_LOCAL_BUILDER" \
-    "$CONTAINER_TARGET_DIR"
+  dockerfile_exists=false
+  if [[ -f "$DOCKERFILE" ]]; then
+    dockerfile_exists=true
+  fi
+  preflight_status=blocked
+  if [[ "$docker_available" == "true" && "$buildx_available" == "true" ]]; then
+    preflight_status=ready
+  fi
+  "$PYTHON_BIN" -     "$preflight_status"     "$docker_available"     "$buildx_available"     "$DOCKERFILE"     "$dockerfile_exists"     "$DOCKER_PLATFORM"     "$BUILDER_TAG"     "$OUTPUT_DIR"     "$BUILD_RETRIES"     "$CARGO_BIN"     "$CONTAINER_TOOLCHAIN"     "$REUSE_LOCAL_BUILDER"     "$CONTAINER_TARGET_DIR" <<'PY'
+import json
+import sys
+
+
+def as_bool(value: str) -> bool:
+    return value == "true"
+
+
+payload = {
+    "status": sys.argv[1],
+    "docker_available": as_bool(sys.argv[2]),
+    "buildx_available": as_bool(sys.argv[3]),
+    "dockerfile": sys.argv[4],
+    "dockerfile_exists": as_bool(sys.argv[5]),
+    "docker_platform": sys.argv[6],
+    "builder_tag": sys.argv[7],
+    "output_dir": sys.argv[8],
+    "build_retries": sys.argv[9],
+    "cargo_bin": sys.argv[10],
+    "container_toolchain": sys.argv[11],
+    "reuse_local_builder": sys.argv[12],
+    "container_target_dir": sys.argv[13],
+    "linux_binary_strategy": "container-native-linux-x86_64",
+}
+print(json.dumps(payload, ensure_ascii=False))
+PY
   exit 0
 fi
 

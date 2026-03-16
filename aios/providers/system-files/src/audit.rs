@@ -207,14 +207,12 @@ impl AuditWriter {
             object.remove(&key);
         }
 
-        self.validator
-            .validate_value(&payload)
-            .with_context(|| {
-                format!(
-                    "failed to validate provider audit record for provider_id={}",
-                    self.provider_id
-                )
-            })?;
+        self.validator.validate_value(&payload).with_context(|| {
+            format!(
+                "failed to validate provider audit record for provider_id={}",
+                self.provider_id
+            )
+        })?;
 
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent)?;

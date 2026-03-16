@@ -5,10 +5,26 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
+import uuid
 from pathlib import Path
 
+from jsonschema import Draft202012Validator
+
 ROOT = Path(__file__).resolve().parent.parent
+TEMP_ROOT_DIR = ROOT / "out" / "tmp"
+
+
+def build_validator(path: Path) -> Draft202012Validator:
+    schema = json.loads(path.read_text())
+    Draft202012Validator.check_schema(schema)
+    return Draft202012Validator(schema, format_checker=Draft202012Validator.FORMAT_CHECKER)
+
+
+def make_temp_dir(prefix: str) -> Path:
+    TEMP_ROOT_DIR.mkdir(parents=True, exist_ok=True)
+    path = TEMP_ROOT_DIR / f"{prefix}{uuid.uuid4().hex}"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def write_json(path: Path, value: dict) -> None:
@@ -26,8 +42,23 @@ def require(condition: bool, message: str) -> None:
         raise RuntimeError(message)
 
 
+def emit_skip(reason: str) -> None:
+    print(json.dumps({"status": "skipped", "reason": reason}, indent=2, ensure_ascii=False))
+
+
 def main() -> int:
-    temp_root = Path(tempfile.mkdtemp(prefix="aios-hardware-evidence-smoke-"))
+    if sys.platform == "win32":
+        emit_skip("Windows 环境不支持直接执行 POSIX shell 启动证据采集脚本")
+        return 0
+
+    boot_report_validator = build_validator(
+        ROOT / "aios" / "hardware" / "schemas" / "hardware-boot-evidence-report.schema.json"
+    )
+    evidence_index_validator = build_validator(
+        ROOT / "aios" / "hardware" / "schemas" / "hardware-validation-evidence-index.schema.json"
+    )
+
+    temp_root = make_temp_dir("aios-hardware-evidence-smoke-")
     output_dir = temp_root / "boots"
     profile_path = temp_root / "tier1-profile.yaml"
     boot_id_path = temp_root / "boot_id"
@@ -121,12 +152,14 @@ def main() -> int:
         raise SystemExit(completed.returncode)
 
     report = json.loads(report_path.read_text())
+    boot_report_validator.validate(report)
     require(report["passed"] is True, "evidence report should pass")
     require(len(report["unique_boot_ids"]) == 2, "expected two unique boot ids")
     require(report["resolved_expectations"]["require_bootctl_status"] is True, "profile expectations not applied")
     require(report_md_path.exists(), "missing markdown report")
     require("## Checks" in report_md_path.read_text(), "markdown report missing checks section")
     evidence_index = json.loads(evidence_index_path.read_text())
+    evidence_index_validator.validate(evidence_index)
     require(evidence_index["validation_status"] == "passed", "evidence index status mismatch")
     require(len(evidence_index["records"]) == 2, "evidence index record count mismatch")
     print(json.dumps(report, indent=2, ensure_ascii=False))

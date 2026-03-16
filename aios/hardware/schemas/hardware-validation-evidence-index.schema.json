@@ -1,0 +1,204 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aios/hardware/hardware-validation-evidence-index.schema.json",
+  "title": "AIOS Hardware Validation Evidence Index",
+  "type": "object",
+  "required": [
+    "platform_id",
+    "profile",
+    "validation_status",
+    "generated_at",
+    "summary",
+    "artifacts",
+    "checks",
+    "notes",
+    "operator",
+    "date"
+  ],
+  "properties": {
+    "platform_id": { "type": "string", "minLength": 1 },
+    "profile": { "type": ["string", "null"] },
+    "validation_status": {
+      "type": "string",
+      "enum": ["pending", "passed", "failed"]
+    },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "summary": {
+      "type": "object",
+      "required": [
+        "passed",
+        "record_count",
+        "unique_boot_ids",
+        "final_current_slot",
+        "final_last_good_slot"
+      ],
+      "properties": {
+        "passed": { "type": ["boolean", "null"] },
+        "record_count": { "type": ["integer", "null"], "minimum": 0 },
+        "unique_boot_ids": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "final_current_slot": { "type": ["string", "null"] },
+        "final_last_good_slot": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "artifacts": {
+      "type": "object",
+      "required": [
+        "platform_media_manifest",
+        "installer_image",
+        "recovery_image",
+        "system_image",
+        "installer_report",
+        "vendor_firmware_hook_report",
+        "evaluator_json",
+        "evaluator_markdown",
+        "support_matrix",
+        "known_limitations",
+        "installer_log",
+        "recovery_log",
+        "device_backend_state_artifact",
+        "vendor_runtime_evidence",
+        "photos"
+      ],
+      "properties": {
+        "platform_media_manifest": { "type": ["string", "null"] },
+        "installer_image": { "type": ["string", "null"] },
+        "recovery_image": { "type": ["string", "null"] },
+        "system_image": { "type": ["string", "null"] },
+        "installer_report": { "type": ["string", "null"] },
+        "vendor_firmware_hook_report": { "type": ["string", "null"] },
+        "evaluator_json": { "type": "string", "minLength": 1 },
+        "evaluator_markdown": { "type": ["string", "null"] },
+        "support_matrix": { "type": ["string", "null"] },
+        "known_limitations": { "type": ["string", "null"] },
+        "installer_log": { "type": ["string", "null"] },
+        "recovery_log": { "type": ["string", "null"] },
+        "device_backend_state_artifact": { "type": ["string", "null"] },
+        "vendor_runtime_evidence": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "photos": {
+          "type": "array",
+          "items": { "type": ["string", "null"] }
+        },
+        "boot_evidence_report": { "type": ["string", "null"] },
+        "boot_evidence_markdown": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "device_runtime": {
+      "type": "object",
+      "required": ["backend_state_artifact", "release_grade_backends", "vendor_runtime"],
+      "properties": {
+        "backend_state_artifact": { "type": ["string", "null"] },
+        "release_grade_backends": {
+          "type": "object",
+          "required": ["backend_ids", "origins", "stacks", "contract_kinds"],
+          "properties": {
+            "backend_ids": { "type": "string" },
+            "origins": { "type": "string" },
+            "stacks": { "type": "string" },
+            "contract_kinds": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        "vendor_runtime": {
+          "type": "object",
+          "required": [
+            "vendor_runtime_signoff_status",
+            "evidence_count",
+            "evidence_paths",
+            "provider_ids",
+            "runtime_service_ids",
+            "provider_statuses",
+            "provider_kinds",
+            "backend_ids",
+            "runtime_binaries",
+            "engine_paths",
+            "contract_kinds",
+            "issues"
+          ],
+          "properties": {
+            "vendor_runtime_signoff_status": { "type": "string", "minLength": 1 },
+            "evidence_count": { "type": "integer", "minimum": 0 },
+            "evidence_paths": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "provider_ids": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "runtime_service_ids": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "provider_statuses": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "provider_kinds": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "backend_ids": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "runtime_binaries": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "engine_paths": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "contract_kinds": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "issues": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 }
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "passed", "detail"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "passed": { "type": "boolean" },
+          "detail": { "type": ["string", "null"] }
+        },
+        "additionalProperties": false
+      }
+    },
+    "notes": {
+      "type": "array",
+      "items": { "type": ["string", "null"] }
+    },
+    "operator": { "type": ["string", "null"] },
+    "date": { "type": ["string", "null"] },
+    "baseline_kind": { "type": ["string", "null"] },
+    "validation_scope": { "type": ["string", "null"] },
+    "real_machine_signoff_status": { "type": ["string", "null"] },
+    "nominated_machines_manifest": { "type": ["string", "null"] },
+    "nominated_machine_ids": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "nominated_machine_count": { "type": "integer", "minimum": 0 }
+  },
+  "additionalProperties": false
+}

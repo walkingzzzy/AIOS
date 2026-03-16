@@ -383,6 +383,7 @@ def write_remote_registry(path: Path, registrations: list[RemoteRegistration]) -
         path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "schema_version": "1.0.0",
+        "generated_at": utc_now(),
         "entries": [registration.to_payload() for registration in registrations],
     }
     path.write_text(

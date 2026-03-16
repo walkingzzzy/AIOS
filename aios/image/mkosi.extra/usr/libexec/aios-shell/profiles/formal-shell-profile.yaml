@@ -17,6 +17,8 @@ multimodal_capture:
 components:
   launcher: true
   notification_center: true
+  operator_audit: true
+  remote_governance: true
   task_surface: true
   approval_panel: true
   recovery_surface: true

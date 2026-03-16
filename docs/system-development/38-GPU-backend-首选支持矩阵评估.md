@@ -1,7 +1,7 @@
 # GPU backend 首选支持矩阵评估
 
 **状态**: `Baseline Delivered / Release-Grade Hardware Pending`  
-**更新日期**: 2026-03-14  
+**更新日期**: 2026-03-16  
 **关联任务**: `P5-GPU-001`、`P5-GPU-002`、`P5-GPU-003`、`P5-GPU-004`
 
 ---
@@ -36,7 +36,7 @@
 
 ### 2.3 当前优先平台判断
 
-截至 2026-03-14，AIOS 当前最强的仓库级 GPU 路线是：
+截至 2026-03-16，AIOS 当前最强的仓库级 GPU 路线是：
 
 1. `nvidia-jetson-orin-agx`
 2. 其余平台继续保持 `local-cpu` 默认
@@ -45,7 +45,10 @@
 
 - Jetson 已有独立 runtime profile
 - Jetson 已有 `launch-managed-worker.sh` bridge
-- Jetson 已有 managed worker 成功 smoke 与失败降级 smoke
+- Jetson 已有 reference worker 成功 smoke
+- Jetson 已有 builtin vendor helper 成功 smoke
+- Jetson 已有 vendor command bridge 成功 smoke
+- Jetson 已有 vendor bridge failure / CPU fallback smoke
 - Jetson 平台资产已被 platform media / image delivery 路径打包验证
 
 ---
@@ -69,6 +72,10 @@
   已作为 `local-gpu` / `local-npu` 的统一 bridge
 - `AIOS_JETSON_ALLOW_REFERENCE_WORKER=1`
   可在 bring-up 阶段启用 reference worker，用于先验证 managed worker contract 与路由
+- `vendor_accel_worker.py`
+  已作为 Jetson 默认 vendor managed worker helper，按 `AIOS_JETSON_TRTEXEC_BIN`、`AIOS_JETSON_VENDOR_ENGINE_ROOT` / `AIOS_JETSON_VENDOR_*_ENGINE_PATH`、`AIOS_JETSON_VENDOR_*_EXTRA_ARGS` 与 `AIOS_JETSON_VENDOR_EVIDENCE_DIR` 驱动 TensorRT / DLA 并写出 machine-readable evidence
+- `AIOS_JETSON_LOCAL_GPU_WORKER_COMMAND` / `AIOS_JETSON_LOCAL_NPU_WORKER_COMMAND`
+  仍可把 Jetson 平台 bridge 转接到显式 vendor worker；仓库现已用专门 smoke 覆盖该成功路径
 
 ### 3.3 Machine-readable 资产
 
@@ -113,6 +120,10 @@
 
 - `scripts/test-runtimed-jetson-platform-worker-smoke.py`
   验证 Jetson runtime profile、worker bridge、reference worker 与 `local-gpu` / `local-npu` 路由成立
+- `scripts/test-runtimed-jetson-platform-vendor-helper-smoke.py`
+  验证 Jetson 默认 `vendor_accel_worker.py` helper 能在无显式 worker command 时驱动 TensorRT / DLA、回填 `provider_id` / `provider_status` / `notes`，并把 machine-readable evidence 落盘
+- `scripts/test-runtimed-jetson-platform-vendor-worker-smoke.py`
+  验证 Jetson `launch-managed-worker.sh` 能通过 `AIOS_JETSON_LOCAL_GPU_WORKER_COMMAND` / `AIOS_JETSON_LOCAL_NPU_WORKER_COMMAND` 走通 vendor command bridge，并让 `local-gpu` / `local-npu` 两条 managed worker 成功执行
 - `scripts/test-image-delivery-smoke.py`
   验证 delivery bundle 已打包 Jetson runtime profile 与 managed worker bridge 资产
 - `scripts/test-platform-media-smoke.py`
@@ -132,7 +143,7 @@
 - AIOS 已完成 `local-gpu` 条件能力的首选支持矩阵评估
 - AIOS 已明确 `local-cpu` 是当前全平台默认运行时基线
 - AIOS 已明确 `nvidia-jetson-orin-agx` 是当前仓库内 GPU 路线最完整的平台目标
-- AIOS 已具备 GPU 成功路径与失败降级路径的最小 smoke 证据
+- AIOS 已具备 GPU 成功路径与失败降级路径的最小 smoke 证据，其中 Jetson 同时覆盖 reference worker bring-up、builtin vendor helper 与 vendor command bridge 成功路径
 
 ### 6.2 不能宣称的内容
 
@@ -147,11 +158,11 @@
 
 按当前任务口径，`P5-GPU-001` 的目标是“评估 GPU backend 首选支持矩阵”，而不是“完成真实 vendor GPU runtime”。
 
-截至 2026-03-14，该任务的完成依据已经成立：
+截至 2026-03-16，该任务的完成依据已经成立：
 
 - 已有 runtime / platform 仓库产物
 - 已有 machine-readable matrix
-- 已有成功路径与失败降级证据
+- 已有 reference worker、builtin vendor helper、vendor command bridge 成功路径与失败降级证据
 - 已有正式评估文档与支持声明口径
 
 因此 `P5-GPU-001` 可以进入 `Done`。
@@ -167,6 +178,6 @@
 
 ## 8. 当前结论
 
-截至 2026-03-14，AIOS 对 GPU backend 的最准确表述应为：
+截至 2026-03-16，AIOS 对 GPU backend 的最准确表述应为：
 
-> `local-cpu` 仍是 AIOS 当前唯一的全平台默认运行时基线；`local-gpu` 已形成条件能力、支持矩阵与失败降级闭环，其中 `nvidia-jetson-orin-agx` 是当前仓库内首选的 GPU 平台路径，但真实 vendor runtime 与实机 release-grade 证据仍待后续硬件任务收口。
+> `local-cpu` 仍是 AIOS 当前唯一的全平台默认运行时基线；`local-gpu` 已形成条件能力、支持矩阵与失败降级闭环，其中 `nvidia-jetson-orin-agx` 是当前仓库内首选的 GPU 平台路径，Jetson reference worker、builtin vendor helper 与 vendor command bridge 成功路径均已有仓库级 smoke 证据，但实机 release-grade 证据仍待后续硬件任务收口。

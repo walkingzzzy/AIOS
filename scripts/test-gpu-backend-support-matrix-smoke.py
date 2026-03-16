@@ -18,6 +18,9 @@ JETSON_RUNTIME_PROFILE = (
     ROOT / "aios" / "runtime" / "platforms" / "nvidia-jetson-orin-agx" / "default-runtime-profile.yaml"
 )
 DEFAULT_OUTPUT_PREFIX = ROOT / "out" / "validation" / "gpu-backend-support-matrix-report"
+JETSON_VENDOR_HELPER_SMOKE = "scripts/test-runtimed-jetson-platform-vendor-helper-smoke.py"
+JETSON_VENDOR_SMOKE = "scripts/test-runtimed-jetson-platform-vendor-worker-smoke.py"
+JETSON_FAILURE_SMOKE = "scripts/test-runtimed-jetson-platform-worker-failure-smoke.py"
 
 
 def parse_args() -> argparse.Namespace:
@@ -36,17 +39,17 @@ def require(condition: bool, message: str) -> None:
 
 
 def load_yaml(path: Path) -> dict[str, Any]:
-    return yaml.safe_load(path.read_text()) or {}
+    return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
 def write_markdown(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content + "\n")
+    path.write_text(content + "\n", encoding="utf-8")
 
 
 def result(name: str, detail: str) -> dict[str, str]:
@@ -106,6 +109,31 @@ def validate_matrix_structure(matrix: dict[str, Any], matrix_path: Path) -> list
         bridge = platform.get("managed_worker_bridge")
         if bridge:
             require((ROOT / bridge).exists(), f"managed worker bridge missing: {bridge}")
+
+    backend_rows = {entry["backend_id"]: entry for entry in matrix["backends"]}
+    require(
+        JETSON_VENDOR_HELPER_SMOKE in backend_rows["local-gpu"]["validation"],
+        "local-gpu validation list must include the Jetson vendor helper smoke",
+    )
+    require(
+        JETSON_VENDOR_SMOKE in backend_rows["local-gpu"]["validation"],
+        "local-gpu validation list must include the Jetson vendor worker smoke",
+    )
+
+    platform_rows = {entry["hardware_profile_id"]: entry for entry in matrix["platforms"]}
+    jetson_row = platform_rows["nvidia-jetson-orin-agx"]
+    require(
+        JETSON_VENDOR_HELPER_SMOKE in jetson_row["evidence"],
+        "Jetson platform evidence must include the vendor helper smoke",
+    )
+    require(
+        JETSON_VENDOR_SMOKE in jetson_row["evidence"],
+        "Jetson platform evidence must include the vendor worker smoke",
+    )
+    require(
+        any("vendor-command" in note for note in jetson_row.get("notes", [])),
+        "Jetson platform notes must mention the vendor-command bridge evidence",
+    )
 
     return [
         result(
@@ -170,7 +198,7 @@ def validate_runtime_profiles(matrix: dict[str, Any]) -> list[dict[str, str]]:
 
 def validate_doc(doc_path: Path, matrix: dict[str, Any]) -> list[dict[str, str]]:
     require(doc_path.exists(), f"GPU backend support doc missing: {doc_path}")
-    text = doc_path.read_text()
+    text = doc_path.read_text(encoding="utf-8")
     for needle in [
         "`P5-GPU-001`",
         "`local-cpu`",
@@ -178,16 +206,17 @@ def validate_doc(doc_path: Path, matrix: dict[str, Any]) -> list[dict[str, str]]
         "`nvidia-jetson-orin-agx`",
         "CPU fallback",
         "machine-readable",
+        JETSON_VENDOR_HELPER_SMOKE,
+        JETSON_VENDOR_SMOKE,
+        JETSON_FAILURE_SMOKE,
+        "vendor command bridge",
+        "vendor helper",
     ]:
         require(needle in text, f"GPU backend support doc missing required text: {needle}")
 
     require(
         "aios/runtime/gpu-backend-support-matrix.yaml" in text,
         "GPU backend support doc should reference the machine-readable matrix asset",
-    )
-    require(
-        "scripts/test-runtimed-jetson-platform-worker-failure-smoke.py" in text,
-        "GPU backend support doc should cite the Jetson failure smoke",
     )
 
     jetson_row = next(
@@ -200,7 +229,7 @@ def validate_doc(doc_path: Path, matrix: dict[str, Any]) -> list[dict[str, str]]
     return [
         result(
             "doc-alignment",
-            f"doc references matrix asset, key backends, Jetson path, and failure-mode evidence in {doc_path.relative_to(ROOT)}",
+            f"doc references matrix asset, key backends, Jetson vendor bridge success path, and failure-mode evidence in {doc_path.relative_to(ROOT)}",
         )
     ]
 

@@ -146,6 +146,15 @@ def checks() -> list[CheckSpec]:
             command=[python, str(ROOT / 'scripts' / 'test-hardware-boot-evidence-smoke.py')],
             evidence_paths=('aios/hardware/evidence/aios-boot-evidence.sh', 'scripts/evaluate-aios-hardware-boot-evidence.py'),
         ),
+        CheckSpec(
+            check_id='hardware-validation-report',
+            summary='Validate hardware validation report rendering and evidence index output against the frozen hardware schema',
+            command=[python, str(ROOT / 'scripts' / 'test-hardware-validation-report-smoke.py')],
+            evidence_paths=(
+                'scripts/render-aios-hardware-validation-report.py',
+                'aios/hardware/schemas/hardware-validation-evidence-index.schema.json',
+            ),
+        ),
     ]
 
 
@@ -169,6 +178,14 @@ def parse_embedded_json(stdout: str):
     return None
 
 
+def derive_check_status(returncode: int, parsed_output: object) -> str:
+    if returncode != 0:
+        return 'failed'
+    if isinstance(parsed_output, dict) and parsed_output.get('status') == 'skipped':
+        return 'skipped'
+    return 'passed'
+
+
 def run_check(spec: CheckSpec) -> dict:
     started = time.monotonic()
     completed = subprocess.run(
@@ -181,16 +198,17 @@ def run_check(spec: CheckSpec) -> dict:
     duration_seconds = round(time.monotonic() - started, 3)
     stdout = completed.stdout.strip()
     stderr = completed.stderr.strip()
+    parsed_output = parse_embedded_json(stdout)
     return {
         'check_id': spec.check_id,
         'summary': spec.summary,
         'command': ' '.join(spec.command),
-        'status': 'passed' if completed.returncode == 0 else 'failed',
+        'status': derive_check_status(completed.returncode, parsed_output),
         'returncode': completed.returncode,
         'duration_seconds': duration_seconds,
         'stdout': stdout,
         'stderr': stderr,
-        'parsed_output': parse_embedded_json(stdout),
+        'parsed_output': parsed_output,
         'evidence_paths': list(spec.evidence_paths),
     }
 
@@ -319,6 +337,7 @@ def build_evidence_index(report: dict, json_path: Path, md_path: Path) -> dict:
     status_counts = {
         'passed': sum(1 for item in report['checks'] if item['status'] == 'passed'),
         'failed': sum(1 for item in report['checks'] if item['status'] == 'failed'),
+        'skipped': sum(1 for item in report['checks'] if item['status'] == 'skipped'),
     }
 
     return {
@@ -345,7 +364,7 @@ def build_evidence_index(report: dict, json_path: Path, md_path: Path) -> dict:
         'failing_checks': [
             item['check_id']
             for item in report['checks']
-            if item['status'] != 'passed'
+            if item['status'] == 'failed'
         ],
     }
 
@@ -394,7 +413,7 @@ def main() -> int:
         return 1
 
     results = [run_check(spec) for spec in checks()]
-    overall_status = 'passed' if all(item['status'] == 'passed' for item in results) else 'failed'
+    overall_status = 'passed' if all(item['status'] != 'failed' for item in results) else 'failed'
     report = {
         'generated_at': datetime.now(timezone.utc).isoformat(),
         'workspace': str(ROOT),

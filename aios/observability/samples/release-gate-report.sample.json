@@ -28,10 +28,17 @@
       "status": "passed",
       "blocking": true,
       "detail": "validation_status=passed; record_count=2; baseline_kind=synthetic-tier1-release-gate"
+    },
+    {
+      "check_id": "hardware-vendor-runtime-signoff",
+      "status": "warning",
+      "blocking": false,
+      "detail": "vendor_runtime_signoff_status=not-attached; evidence_count=0; providers=-; runtime_services=-; backends=-; synthetic baseline requires separate real-machine vendor sign-off"
     }
   ],
   "blocking_checks": [],
   "warnings": [
-    "hardware evidence gate is satisfied by the synthetic Tier 1 baseline; attach real-machine sign-off separately"
+    "hardware evidence gate is satisfied by the synthetic Tier 1 baseline; attach real-machine sign-off separately",
+    "synthetic Tier 1 baseline does not attach vendor runtime sign-off; attach real-machine vendor evidence separately"
   ]
 }

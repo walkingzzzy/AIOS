@@ -14,7 +14,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from aios_cargo_bins import default_aios_bin_dir
+from aios_cargo_bins import default_aios_bin_dir, resolve_binary_path
 
 
 def parse_args() -> argparse.Namespace:
@@ -30,12 +30,17 @@ def repo_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+
 def resolve_binary(name: str, explicit: Path | None, bin_dir: Path | None) -> Path:
     if explicit is not None:
-        return explicit
+        return resolve_binary_path(explicit.parent, explicit.name)
     if bin_dir is not None:
-        return bin_dir / name
-    return default_aios_bin_dir(repo_root()) / name
+        return resolve_binary_path(bin_dir, name)
+    return resolve_binary_path(default_aios_bin_dir(repo_root()), name)
+
+
+def unix_rpc_supported() -> bool:
+    return hasattr(socket, "AF_UNIX") and os.name != "nt"
 
 
 def ensure_binary(path: Path) -> None:
@@ -93,11 +98,20 @@ def launch(binary: Path, env: dict[str, str]) -> subprocess.Popen:
     )
 
 
+def stop_process(process: subprocess.Popen | None) -> None:
+    if process is None or process.poll() is not None:
+        return
+    if os.name == "nt":
+        process.terminate()
+    else:
+        process.send_signal(signal.SIGINT)
+
+
 def terminate(process: subprocess.Popen | None) -> None:
     if process is None:
         return
     if process.poll() is None:
-        process.send_signal(signal.SIGINT)
+        stop_process(process)
         try:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
@@ -121,6 +135,9 @@ def start_deviced(binary: Path, env: dict[str, str], timeout: float) -> tuple[su
 
 def main() -> int:
     args = parse_args()
+    if not unix_rpc_supported():
+        print("deviced native backend smoke skipped: unix rpc transport unsupported on this platform")
+        return 0
     deviced = resolve_binary("deviced", args.deviced, args.bin_dir)
     ensure_binary(deviced)
 
@@ -158,7 +175,11 @@ def main() -> int:
         "available": True,
         "readiness": "native-live",
         "payload": {
-            "release_grade_backend": "portal-live-helper",
+            "release_grade_backend": "xdg-desktop-portal-screencast",
+            "release_grade_backend_id": "xdg-desktop-portal-screencast",
+            "release_grade_backend_origin": "os-native",
+            "release_grade_backend_stack": "portal+pipewire",
+            "release_grade_contract_kind": "release-grade-runtime-helper",
             "stream_node_id": 142,
             "portal_session_ref": "portal-release-1",
         },
@@ -167,7 +188,11 @@ def main() -> int:
         "available": True,
         "readiness": "native-live",
         "payload": {
-            "release_grade_backend": "pipewire-live-helper",
+            "release_grade_backend": "pipewire",
+            "release_grade_backend_id": "pipewire",
+            "release_grade_backend_origin": "os-native",
+            "release_grade_backend_stack": "pipewire",
+            "release_grade_contract_kind": "release-grade-runtime-helper",
             "sample_rate_hz": 48000,
         },
     }
@@ -175,7 +200,11 @@ def main() -> int:
         "available": True,
         "readiness": "native-live",
         "payload": {
-            "release_grade_backend": "libinput-live-helper",
+            "release_grade_backend": "libinput",
+            "release_grade_backend_id": "libinput",
+            "release_grade_backend_origin": "os-native",
+            "release_grade_backend_stack": "libinput",
+            "release_grade_contract_kind": "release-grade-runtime-helper",
             "collector": "libinput-live",
         },
     }
@@ -183,12 +212,15 @@ def main() -> int:
         "available": True,
         "readiness": "native-live",
         "payload": {
-            "release_grade_backend": "camera-live-helper",
+            "release_grade_backend": "v4l2",
+            "release_grade_backend_id": "v4l2",
+            "release_grade_backend_origin": "os-native",
+            "release_grade_backend_stack": "v4l2",
+            "release_grade_contract_kind": "release-grade-runtime-helper",
             "pixel_format": "MJPEG",
             "device_path": str(camera_root / "video0"),
         },
     }
-
     screen_live_command = (
         f"{sys.executable} -c "
         + shlex.quote(f"import json; print(json.dumps({screen_live_payload!r}))")
@@ -292,8 +324,16 @@ def main() -> int:
         require(screen_capture["preview_object"]["stream_node_id"] == 142, "screen stream node missing")
         require(screen_capture["preview_object"]["adapter_id"] == "screen.portal-native", "screen adapter id mismatch")
         require(
-            screen_capture["preview_object"]["release_grade_backend"] == "portal-live-helper",
+            screen_capture["preview_object"]["release_grade_backend"] == "xdg-desktop-portal-screencast",
             "screen live backend marker missing",
+        )
+        require(
+            screen_capture["preview_object"]["release_grade_backend_origin"] == "os-native",
+            "screen live backend origin missing",
+        )
+        require(
+            screen_capture["preview_object"]["release_grade_backend_stack"] == "portal+pipewire",
+            "screen live backend stack missing",
         )
         require(
             screen_capture["preview_object"]["ui_tree_snapshot"]["adapter_id"] == "ui_tree.atspi-native",
@@ -317,8 +357,12 @@ def main() -> int:
         require(camera_capture["preview_object"]["capture_mode"] == "native-live", "camera capture mode mismatch")
         require(camera_capture["preview_object"]["adapter_id"] == "camera.v4l-native", "camera adapter id mismatch")
         require(
-            camera_capture["preview_object"]["release_grade_backend"] == "camera-live-helper",
+            camera_capture["preview_object"]["release_grade_backend"] == "v4l2",
             "camera live backend marker missing",
+        )
+        require(
+            camera_capture["preview_object"]["release_grade_backend_origin"] == "os-native",
+            "camera live backend origin missing",
         )
         require(camera_capture["preview_object"]["device_path"].endswith("video0"), "camera device path mismatch")
         require(
@@ -337,8 +381,12 @@ def main() -> int:
             timeout=args.timeout,
         )
         require(
-            input_capture["preview_object"]["release_grade_backend"] == "libinput-live-helper",
+            input_capture["preview_object"]["release_grade_backend"] == "libinput",
             "input live backend marker missing",
+        )
+        require(
+            input_capture["preview_object"]["release_grade_backend_origin"] == "os-native",
+            "input live backend origin missing",
         )
         require(
             input_capture["preview_object"]["collector"] == "libinput-live",
@@ -356,8 +404,12 @@ def main() -> int:
             timeout=args.timeout,
         )
         require(
-            audio_capture["preview_object"]["release_grade_backend"] == "pipewire-live-helper",
+            audio_capture["preview_object"]["release_grade_backend"] == "pipewire",
             "audio live backend marker missing",
+        )
+        require(
+            audio_capture["preview_object"]["release_grade_backend_origin"] == "os-native",
+            "audio live backend origin missing",
         )
         require(
             audio_capture["preview_object"]["sample_rate_hz"] == 48000,
@@ -382,9 +434,26 @@ def main() -> int:
             "backend evidence artifact count note missing",
         )
         screen_artifact = json.loads((backend_evidence_dir / "screen-backend-evidence.json").read_text())
-        require(screen_artifact["baseline"] == "formal-native-helper-or-probe", "screen evidence baseline mismatch")
+        require(screen_artifact["baseline"] == "os-native-backend", "screen evidence baseline mismatch")
         require(
-            (((screen_artifact.get("probe") or {}).get("payload") or {}).get("release_grade_backend") == "portal-live-helper"),
+            screen_artifact.get("release_grade_backend_id") == "xdg-desktop-portal-screencast",
+            "screen evidence backend id mismatch",
+        )
+        require(
+            screen_artifact.get("release_grade_backend_origin") == "os-native",
+            "screen evidence backend origin mismatch",
+        )
+        require(
+            screen_artifact.get("release_grade_backend_stack") == "portal+pipewire",
+            "screen evidence backend stack mismatch",
+        )
+        require(
+            screen_artifact.get("contract_kind") == "release-grade-runtime-helper",
+            "screen evidence contract kind mismatch",
+        )
+        require(
+            (((screen_artifact.get("probe") or {}).get("payload") or {}).get("release_grade_backend")
+             == "xdg-desktop-portal-screencast"),
             "screen evidence probe payload mismatch",
         )
         require(
@@ -414,3 +483,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

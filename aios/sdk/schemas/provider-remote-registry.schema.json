@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "aios/provider-remote-registry.schema.json",
+  "title": "AIOS Provider Remote Registry",
+  "type": "object",
+  "required": ["schema_version", "generated_at", "entries"],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "entries": {
+      "type": "array",
+      "items": { "$ref": "aios/provider-remote-registration.schema.json" }
+    }
+  },
+  "additionalProperties": true
+}

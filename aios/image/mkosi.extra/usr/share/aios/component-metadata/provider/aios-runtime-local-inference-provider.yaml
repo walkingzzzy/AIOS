@@ -20,6 +20,7 @@ outputs:
   - runtime_embed_response
   - runtime_rerank_response
   - runtime_budget_snapshot
+  - provider_observability_trace
 dependencies:
   requires:
     - aios-agentd
@@ -29,5 +30,5 @@ blockers:
   - no-streaming-provider-envelope-yet
   - provider-budget-remains-process-local
 next_milestones:
-  - add-runtime-route-observability
+  - promote-vendor-embedding-rerank-backend
   - support-streaming-token-verified-infer

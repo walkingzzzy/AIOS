@@ -46,6 +46,12 @@ This document defines the repeatable acceptance path for Team C shell and portal
    - `python3 scripts/test-shell-stability-smoke.py`
 9. Validate compositor acceptance path:
    - `python3 scripts/test-shell-compositor-acceptance-smoke.py`
+10. Validate Unix-RPC-backed live/provider harnesses when the platform supports them:
+   - `python3 scripts/test-shell-live-smoke.py`
+   - `python3 scripts/test-shell-provider-smoke.py`
+   - `python3 scripts/test-shell-control-clients-live-smoke.py`
+   - `python3 scripts/test-shell-session-policy-registry-flow-smoke.py`
+   - On non-Unix/Windows developer machines these harnesses intentionally print `skip` and return 0, because the underlying Rust service binaries only expose Unix RPC transports today.
 
 ## Evidence Artifacts
 
@@ -68,3 +74,4 @@ When running with a compositor-backed formal session, the exported snapshot shou
 - `session_plan.entrypoint = formal`
 - `session_plan.session_backend = compositor`
 - resolved `panel_host_bridge` metadata and panel surface summary
+

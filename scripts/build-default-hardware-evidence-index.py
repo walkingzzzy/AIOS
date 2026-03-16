@@ -6,10 +6,12 @@ import json
 import shutil
 import subprocess
 import sys
-import tempfile
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from jsonschema import Draft202012Validator
 
 try:
     import yaml
@@ -18,11 +20,27 @@ except ModuleNotFoundError:  # pragma: no cover
 
 
 ROOT = Path(__file__).resolve().parent.parent
+TEMP_ROOT_DIR = ROOT / "out" / "tmp"
 DEFAULT_OUTPUT_DIR = ROOT / "out" / "validation"
 DEFAULT_PROFILE = ROOT / "aios" / "hardware" / "profiles" / "generic-x86_64-uefi.yaml"
 DEFAULT_TIER1_NOMINATIONS = ROOT / "aios" / "hardware" / "tier1-nominated-machines.yaml"
 HARDWARE_BOOT_EVIDENCE_EVALUATOR = ROOT / "scripts" / "evaluate-aios-hardware-boot-evidence.py"
 HARDWARE_VALIDATION_RENDERER = ROOT / "scripts" / "render-aios-hardware-validation-report.py"
+HARDWARE_BOOT_REPORT_SCHEMA = ROOT / "aios" / "hardware" / "schemas" / "hardware-boot-evidence-report.schema.json"
+HARDWARE_VALIDATION_EVIDENCE_SCHEMA = ROOT / "aios" / "hardware" / "schemas" / "hardware-validation-evidence-index.schema.json"
+
+
+def build_validator(path: Path) -> Draft202012Validator:
+    schema = json.loads(path.read_text(encoding="utf-8"))
+    Draft202012Validator.check_schema(schema)
+    return Draft202012Validator(schema, format_checker=Draft202012Validator.FORMAT_CHECKER)
+
+
+def make_temp_dir(prefix: str) -> Path:
+    TEMP_ROOT_DIR.mkdir(parents=True, exist_ok=True)
+    path = TEMP_ROOT_DIR / f"{prefix}{uuid.uuid4().hex}"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def parse_args() -> argparse.Namespace:
@@ -37,7 +55,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def load_yaml_or_json(path: Path) -> Any:
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     if yaml is not None:
         return yaml.safe_load(text)
     return json.loads(text)
@@ -45,12 +63,12 @@ def load_yaml_or_json(path: Path) -> Any:
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
 def write_text(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content)
+    path.write_text(content, encoding="utf-8")
 
 
 def run_command(command: list[str]) -> None:
@@ -104,6 +122,9 @@ def synthetic_boot_record(
 
 
 def main() -> int:
+    boot_report_validator = build_validator(HARDWARE_BOOT_REPORT_SCHEMA)
+    evidence_index_validator = build_validator(HARDWARE_VALIDATION_EVIDENCE_SCHEMA)
+
     args = parse_args()
     output_dir = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -115,7 +136,7 @@ def main() -> int:
     validation_report_md = output_dir / "tier1-hardware-validation-report.md"
     evidence_index_json = output_dir / "tier1-hardware-evidence-index.json"
 
-    temp_root = Path(tempfile.mkdtemp(prefix="aios-tier1-hardware-baseline-"))
+    temp_root = make_temp_dir("aios-tier1-hardware-baseline-")
     boots_dir = temp_root / "boots"
     boots_dir.mkdir(parents=True, exist_ok=True)
 
@@ -226,7 +247,7 @@ def main() -> int:
             ]
         )
 
-        evidence_index = json.loads(evidence_index_json.read_text())
+        evidence_index = json.loads(evidence_index_json.read_text(encoding="utf-8"))
         notes = [
             *[str(item) for item in evidence_index.get("notes", []) if isinstance(item, str) and item],
             "Synthetic Tier 1 release-gate baseline; attach real-machine sign-off separately.",
@@ -241,6 +262,9 @@ def main() -> int:
         evidence_index["artifacts"]["boot_evidence_markdown"] = str(boot_report_md)
         evidence_index["notes"] = notes
         write_json(evidence_index_json, evidence_index)
+
+        boot_report_validator.validate(json.loads(boot_report_json.read_text(encoding="utf-8")))
+        evidence_index_validator.validate(json.loads(evidence_index_json.read_text(encoding="utf-8")))
 
         print(
             json.dumps(

@@ -2,7 +2,7 @@ use std::{fs, io::ErrorKind, path::Path, process::Command};
 
 use serde_json::{json, Value};
 
-use crate::config::Config;
+use crate::{config::Config, release_grade};
 
 #[derive(Debug, Clone)]
 pub struct ProbeResult {
@@ -36,60 +36,71 @@ pub fn configured_modalities(config: &Config) -> Vec<&'static str> {
 
 pub fn builtin_capture_probe(config: &Config, modality: &str) -> Option<ProbeResult> {
     match modality {
-        "screen" => Some(builtin_screen_probe(config)),
-        "audio" => Some(builtin_audio_probe(config)),
-        "input" => Some(builtin_input_probe(config)),
-        "camera" => Some(builtin_camera_probe(config)),
+        "screen" => Some(finalize_probe_result(
+            "screen",
+            builtin_screen_probe(config),
+        )),
+        "audio" => Some(finalize_probe_result("audio", builtin_audio_probe(config))),
+        "input" => Some(finalize_probe_result("input", builtin_input_probe(config))),
+        "camera" => Some(finalize_probe_result(
+            "camera",
+            builtin_camera_probe(config),
+        )),
         _ => None,
     }
 }
 
 pub fn capture_probe(config: &Config, modality: &str) -> Option<ProbeResult> {
     match modality {
-        "screen" => Some(
+        "screen" => Some(finalize_probe_result(
+            "screen",
             config
                 .screen_probe_command
                 .as_deref()
                 .map(|command| run_probe(config, modality, command))
                 .unwrap_or_else(|| builtin_screen_probe(config)),
-        ),
-        "audio" => Some(
+        )),
+        "audio" => Some(finalize_probe_result(
+            "audio",
             config
                 .audio_probe_command
                 .as_deref()
                 .map(|command| run_probe(config, modality, command))
                 .unwrap_or_else(|| builtin_audio_probe(config)),
-        ),
-        "input" => Some(
+        )),
+        "input" => Some(finalize_probe_result(
+            "input",
             config
                 .input_probe_command
                 .as_deref()
                 .map(|command| run_probe(config, modality, command))
                 .unwrap_or_else(|| builtin_input_probe(config)),
-        ),
-        "camera" => Some(
+        )),
+        "camera" => Some(finalize_probe_result(
+            "camera",
             config
                 .camera_probe_command
                 .as_deref()
                 .map(|command| run_probe(config, modality, command))
                 .unwrap_or_else(|| builtin_camera_probe(config)),
-        ),
+        )),
         _ => None,
     }
 }
 
 pub fn builtin_ui_tree_probe(config: &Config) -> ProbeResult {
-    builtin_ui_tree_probe_result(config)
+    finalize_probe_result("ui_tree", builtin_ui_tree_probe_result(config))
 }
 
 pub fn ui_tree_probe(config: &Config) -> Option<ProbeResult> {
-    Some(
+    Some(finalize_probe_result(
+        "ui_tree",
         config
             .ui_tree_probe_command
             .as_deref()
             .map(|command| run_probe(config, "ui_tree", command))
             .unwrap_or_else(|| builtin_ui_tree_probe_result(config)),
-    )
+    ))
 }
 
 fn native_live_command<'a>(config: &'a Config, modality: &str) -> Option<&'a str> {
@@ -100,6 +111,18 @@ fn native_live_command<'a>(config: &'a Config, modality: &str) -> Option<&'a str
         "camera" => config.camera_live_command.as_deref(),
         _ => None,
     }
+}
+
+fn finalize_probe_result(modality: &str, mut result: ProbeResult) -> ProbeResult {
+    let source = result.source.as_str();
+    result.payload = release_grade::enrich_payload(
+        modality,
+        None,
+        Some(source),
+        release_grade::default_adapter_contract(Some(source)),
+        result.payload,
+    );
+    result
 }
 
 fn run_probe(config: &Config, modality: &str, command: &str) -> ProbeResult {

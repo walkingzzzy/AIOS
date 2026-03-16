@@ -22,13 +22,19 @@ pub struct ProviderObservabilitySink {
 }
 
 impl ProviderObservabilitySink {
-    pub fn new(path: PathBuf, service_id: impl Into<String>, provider_id: impl Into<String>) -> anyhow::Result<Self> {
+    pub fn new(
+        path: PathBuf,
+        service_id: impl Into<String>,
+        provider_id: impl Into<String>,
+    ) -> anyhow::Result<Self> {
         Ok(Self {
             path,
             service_id: service_id.into(),
             provider_id: provider_id.into(),
             trace_validator: schema::compile_observability_schema(ObservabilitySchema::TraceEvent)?,
-            health_validator: schema::compile_observability_schema(ObservabilitySchema::HealthEvent)?,
+            health_validator: schema::compile_observability_schema(
+                ObservabilitySchema::HealthEvent,
+            )?,
         })
     }
 

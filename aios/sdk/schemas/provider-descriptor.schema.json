@@ -74,55 +74,7 @@
       "$ref": "aios/compat-permission-manifest.schema.json"
     },
     "remote_registration": {
-      "type": "object",
-      "properties": {
-        "source_provider_id": { "type": "string" },
-        "provider_ref": { "type": "string" },
-        "endpoint": { "type": "string" },
-        "auth_mode": { "type": "string" },
-        "auth_header_name": { "type": "string" },
-        "auth_secret_env": { "type": "string" },
-        "target_hash": { "type": "string" },
-        "capabilities": {
-          "type": "array",
-          "items": { "type": "string" }
-        },
-        "registered_at": { "type": "string" },
-        "display_name": { "type": "string" },
-        "control_plane_provider_id": { "type": "string" },
-        "registration_status": { "type": "string" },
-        "last_heartbeat_at": { "type": "string" },
-        "heartbeat_ttl_seconds": { "type": "integer" },
-        "revoked_at": { "type": "string" },
-        "revocation_reason": { "type": "string" },
-        "attestation": {
-          "type": "object",
-          "properties": {
-            "mode": { "type": "string" },
-            "issuer": { "type": "string" },
-            "subject": { "type": "string" },
-            "issued_at": { "type": "string" },
-            "expires_at": { "type": "string" },
-            "evidence_ref": { "type": "string" },
-            "digest": { "type": "string" },
-            "status": { "type": "string" }
-          },
-          "additionalProperties": true
-        },
-        "governance": {
-          "type": "object",
-          "properties": {
-            "fleet_id": { "type": "string" },
-            "governance_group": { "type": "string" },
-            "policy_group": { "type": "string" },
-            "registered_by": { "type": "string" },
-            "approval_ref": { "type": "string" },
-            "allow_lateral_movement": { "type": "boolean" }
-          },
-          "additionalProperties": true
-        }
-      },
-      "additionalProperties": true
+      "$ref": "aios/provider-remote-registration.schema.json"
     }
   },
   "additionalProperties": true

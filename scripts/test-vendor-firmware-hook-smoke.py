@@ -3,19 +3,40 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import stat
 import subprocess
 import sys
-import tempfile
+import uuid
 from pathlib import Path
 
+from jsonschema import Draft202012Validator
+
 ROOT = Path(__file__).resolve().parent.parent
+TEMP_ROOT_DIR = ROOT / "out" / "tmp"
 PLATFORM_ID = "nvidia-jetson-orin-agx"
+
+
+def build_validator(path: Path) -> Draft202012Validator:
+    schema = json.loads(path.read_text())
+    Draft202012Validator.check_schema(schema)
+    return Draft202012Validator(schema, format_checker=Draft202012Validator.FORMAT_CHECKER)
+
+
+def make_temp_dir(prefix: str) -> Path:
+    TEMP_ROOT_DIR.mkdir(parents=True, exist_ok=True)
+    path = TEMP_ROOT_DIR / f"{prefix}{uuid.uuid4().hex}"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise RuntimeError(message)
+
+
+def emit_skip(reason: str) -> None:
+    print(json.dumps({"status": "skipped", "reason": reason}, indent=2, ensure_ascii=False))
 
 
 def write_executable(path: Path, content: str) -> Path:
@@ -39,7 +60,18 @@ def load_env(path: Path) -> dict[str, str]:
 
 
 def main() -> int:
-    temp_root = Path(tempfile.mkdtemp(prefix="aios-vendor-fw-"))
+    if sys.platform == "win32":
+        emit_skip("Windows 环境不支持 bash 固件 hook 冒烟验证")
+        return 0
+    if shutil.which("bash") is None:
+        emit_skip("当前环境缺少 bash，无法执行固件 hook 冒烟验证")
+        return 0
+
+    hook_report_validator = build_validator(
+        ROOT / "aios" / "image" / "schemas" / "vendor-firmware-hook-report.schema.json"
+    )
+
+    temp_root = make_temp_dir("aios-vendor-fw-")
     system_image = temp_root / "system.raw"
     installer_image = temp_root / "installer.raw"
     recovery_image = temp_root / "recovery.raw"
@@ -148,6 +180,8 @@ def main() -> int:
     )
     pre_report = json.loads((report_dir / "hook-reports" / "nvidia-pre-install.json").read_text())
     post_report = json.loads((sysroot / "etc" / "aios" / "installer" / "nvidia-firmware-hook-report.json").read_text())
+    hook_report_validator.validate(pre_report)
+    hook_report_validator.validate(post_report)
     require(pre_report["vendor_id"] == "nvidia", "pre-install report vendor mismatch")
     require(post_report["install_slot"] == "b", "post-install report slot mismatch")
 

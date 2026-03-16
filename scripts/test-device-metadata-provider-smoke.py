@@ -12,7 +12,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from aios_cargo_bins import default_aios_bin_dir
+from aios_cargo_bins import default_aios_bin_dir, resolve_binary_path
 
 
 def parse_args() -> argparse.Namespace:
@@ -26,16 +26,21 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def unix_rpc_supported() -> bool:
+    return hasattr(socket, "AF_UNIX") and os.name != "nt"
+
+
 def repo_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+
 def resolve_binary(name: str, explicit: Path | None, bin_dir: Path | None) -> Path:
     if explicit is not None:
-        return explicit
+        return resolve_binary_path(explicit.parent, explicit.name)
     if bin_dir is not None:
-        return bin_dir / name
-    return default_aios_bin_dir(repo_root()) / name
+        return resolve_binary_path(bin_dir, name)
+    return resolve_binary_path(default_aios_bin_dir(repo_root()), name)
 
 
 def ensure_binaries(paths: dict[str, Path]) -> None:
@@ -130,7 +135,7 @@ def wait_for_provider_health(socket_path: Path, provider_id: str, expected_statu
     while time.time() < deadline:
         health = rpc_call(
             socket_path,
-            "provider.health.get",
+            "agent.provider.health.get",
             {"provider_id": provider_id},
             timeout=min(timeout, 1.5),
         )
@@ -153,10 +158,18 @@ def launch(binary: Path, env: dict[str, str]) -> subprocess.Popen:
     )
 
 
+
+def stop_process(process: subprocess.Popen) -> None:
+    if process.poll() is not None:
+        return
+    if os.name == "nt":
+        process.terminate()
+    else:
+        process.send_signal(signal.SIGINT)
+
 def terminate(processes: list[subprocess.Popen]) -> None:
     for process in processes:
-        if process.poll() is None:
-            process.send_signal(signal.SIGINT)
+        stop_process(process)
     deadline = time.time() + 5
     for process in processes:
         if process.poll() is not None:
@@ -167,7 +180,6 @@ def terminate(processes: list[subprocess.Popen]) -> None:
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait(timeout=2)
-
 
 def print_logs(processes: dict[str, subprocess.Popen]) -> None:
     for name, process in processes.items():
@@ -284,6 +296,10 @@ def make_env(root: Path) -> dict[str, str]:
 
 def main() -> int:
     args = parse_args()
+    if not unix_rpc_supported():
+        print("device metadata provider smoke skipped: unix rpc transport unsupported on this platform")
+        return 0
+
     binaries = {
         "agentd": resolve_binary("agentd", args.agentd, args.bin_dir),
         "deviced": resolve_binary("deviced", args.deviced, args.bin_dir),
@@ -320,11 +336,23 @@ def main() -> int:
             == env["AIOS_DEVICE_METADATA_PROVIDER_OBSERVABILITY_LOG"],
             "provider health missing observability log path",
         )
+        require(
+            provider_notes.get("device_backend_overall_status") == "ready",
+            "provider health missing backend overall status",
+        )
+        require(
+            provider_notes.get("device_backend_attention_count") == "0",
+            "provider health missing backend attention count",
+        )
+        require(
+            "xdg-desktop-portal-screencast" in (provider_notes.get("device_release_grade_backend_ids") or ""),
+            "provider health missing release-grade backend ids",
+        )
         wait_for_provider_health(sockets["agentd"], provider_id, "available", args.timeout)
 
         resolution = rpc_call(
             sockets["agentd"],
-            "provider.resolve_capability",
+            "agent.provider.resolve_capability",
             {
                 "capability_id": "device.metadata.get",
                 "require_healthy": True,
@@ -339,7 +367,7 @@ def main() -> int:
 
         descriptor = rpc_call(
             sockets["agentd"],
-            "provider.get_descriptor",
+            "agent.provider.get_descriptor",
             {"provider_id": provider_id},
             timeout=args.timeout,
         )
@@ -367,6 +395,12 @@ def main() -> int:
             "metadata summary requested modalities mismatch",
         )
         require(metadata["summary"]["continuous_collector_count"] == 0, "unexpected continuous collectors in readiness summary")
+        require(metadata["backend_summary"]["overall_status"] == "ready", "metadata backend summary should report ready")
+        require(metadata["backend_summary"]["attention_count"] == 0, "metadata backend summary should not report attention items")
+        require(
+            metadata["backend_summary"]["available_status_count"] >= 4,
+            "metadata backend summary should expose available backend status count",
+        )
         require(isinstance(metadata.get("ui_tree_support_matrix"), list), "ui_tree support matrix missing from metadata response")
         entries = {entry["modality"]: entry for entry in metadata["entries"]}
         require(set(entries) == {"screen", "audio", "input", "camera"}, f"unexpected metadata modalities: {sorted(entries)}")
@@ -375,8 +409,29 @@ def main() -> int:
         require(entries["input"]["adapter_id"] == "input.libinput-native", "input adapter id mismatch")
         require(entries["camera"]["adapter_id"] == "camera.v4l-native", "camera adapter id mismatch")
         require(entries["camera"]["available"] is True, "camera should be available")
+        require(
+            "release_grade_backend_id=xdg-desktop-portal-screencast" in entries["screen"]["backend_details"],
+            "screen metadata entry missing release-grade backend id",
+        )
+        require(
+            "release_grade_backend_stack=portal+pipewire" in entries["screen"]["backend_details"],
+            "screen metadata entry missing release-grade backend stack",
+        )
+        require(
+            "release_grade_backend_id=pipewire" in entries["audio"]["backend_details"],
+            "audio metadata entry missing release-grade backend id",
+        )
+        require(
+            any(note.startswith("release_grade_backend_ids=") for note in metadata["notes"]),
+            "metadata response missing aggregated release-grade backend ids",
+        )
+        require(
+            any(note.startswith("release_grade_backend_id[screen]=") for note in metadata["notes"]),
+            "metadata response missing screen release-grade backend note",
+        )
         require("approval_mode=metadata-only" in metadata["notes"], "state notes not included in metadata response")
         require("overall_status=ready" in metadata["notes"], "metadata response missing overall status note")
+        require("backend_overall_status=ready" in metadata["notes"], "metadata response missing backend overall status note")
 
         screen_only = rpc_call(
             sockets["provider"],
@@ -392,7 +447,7 @@ def main() -> int:
         require(screen_only["entries"][0]["modality"] == "screen", "screen-only filter returned wrong modality")
 
         deviced_process = processes["deviced"]
-        deviced_process.send_signal(signal.SIGINT)
+        stop_process(deviced_process)
         deviced_process.wait(timeout=5)
 
         dependency_outage = wait_for_provider_health(sockets["agentd"], provider_id, "unavailable", args.timeout)
@@ -405,6 +460,11 @@ def main() -> int:
             timeout=args.timeout,
         )
         require(provider_health["status"] == "degraded", "provider health should degrade when deviced is unavailable")
+        provider_health_notes = note_map(provider_health)
+        require(
+            provider_health_notes.get("device_backend_overall_status") == "unavailable",
+            "provider health missing unavailable backend overall status",
+        )
         require(
             "deviced_status=unavailable" in provider_health.get("notes", []),
             "provider health missing deviced unavailable note",
@@ -424,7 +484,15 @@ def main() -> int:
             unavailable_metadata["summary"]["overall_status"] == "unavailable",
             "metadata fallback should report unavailable during deviced outage",
         )
+        require(
+            unavailable_metadata["backend_summary"]["overall_status"] == "unavailable",
+            "metadata fallback should expose unavailable backend summary during deviced outage",
+        )
         require(unavailable_metadata["entries"] == [], "metadata outage response should not include stale entries")
+        require(
+            "backend_overall_status=unavailable" in unavailable_metadata["notes"],
+            "metadata outage response missing backend overall status note",
+        )
         require(
             "device_state_source=unavailable" in unavailable_metadata["notes"],
             "metadata outage response missing unavailable source note",
@@ -432,7 +500,7 @@ def main() -> int:
 
         post_stop_resolution = rpc_call(
             sockets["agentd"],
-            "provider.resolve_capability",
+            "agent.provider.resolve_capability",
             {
                 "capability_id": "device.metadata.get",
                 "require_healthy": True,
@@ -465,7 +533,7 @@ def main() -> int:
         )
 
         provider_process = processes["provider"]
-        provider_process.send_signal(signal.SIGINT)
+        stop_process(provider_process)
         provider_process.wait(timeout=5)
 
         observability_entries = wait_for_json_lines(
@@ -495,7 +563,7 @@ def main() -> int:
 
         post_shutdown_resolution = rpc_call(
             sockets["agentd"],
-            "provider.resolve_capability",
+            "agent.provider.resolve_capability",
             {
                 "capability_id": "device.metadata.get",
                 "require_healthy": True,

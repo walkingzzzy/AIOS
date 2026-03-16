@@ -11,12 +11,13 @@ import socket
 import subprocess
 import sys
 import tempfile
+import uuid
 import time
 from pathlib import Path
 
 import yaml
 
-from aios_cargo_bins import default_aios_bin_dir
+from aios_cargo_bins import default_aios_bin_dir, resolve_binary_path
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -63,11 +64,14 @@ def repo_root() -> Path:
 
 def resolve_binary(name: str, explicit: Path | None, bin_dir: Path | None) -> Path:
     if explicit is not None:
-        return explicit
+        return resolve_binary_path(explicit.parent, explicit.name)
     if bin_dir is not None:
-        return bin_dir / name
-    return default_aios_bin_dir(repo_root()) / name
+        return resolve_binary_path(bin_dir, name)
+    return resolve_binary_path(default_aios_bin_dir(repo_root()), name)
 
+
+def unix_rpc_supported() -> bool:
+    return hasattr(socket, "AF_UNIX") and os.name != "nt"
 
 def ensure_paths(paths: dict[str, Path]) -> None:
     missing = [f"{name}={path}" for name, path in paths.items() if not path.exists()]
@@ -172,6 +176,203 @@ def require(condition: bool, message: str) -> None:
 def write_json(path: Path, payload: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+
+
+def write_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+
+
+def assert_vendor_runtime_health_report(report: dict, hardware_validation_index: Path, vendor_evidence: Path) -> None:
+    require(
+        "nvidia.jetson.tensorrt" in report["summary"].get("provider_ids", []),
+        "health report summary missing vendor provider id",
+    )
+    require(
+        "aios-runtimed.jetson-vendor-helper" in report["summary"].get("runtime_service_ids", []),
+        "health report summary missing runtime service id",
+    )
+    require(
+        "available" in report["summary"].get("provider_statuses", []),
+        "health report summary missing provider status",
+    )
+    require(
+        "local-gpu" in report["summary"].get("backend_ids", []),
+        "health report summary missing vendor backend id",
+    )
+    require(
+        str(vendor_evidence) in report["summary"].get("artifact_paths", []),
+        "health report summary missing vendor evidence artifact",
+    )
+    require(
+        str(hardware_validation_index) in report["summary"].get("artifact_paths", []),
+        "health report summary missing hardware evidence index artifact",
+    )
+    require(
+        any(
+            event.get("service_id") == "aios-hardware-validation"
+            and event.get("component_kind") == "hardware"
+            and event.get("artifact_path") == str(hardware_validation_index)
+            and event.get("provider_id") == "nvidia.jetson.tensorrt"
+            and event.get("runtime_service_id") == "aios-runtimed.jetson-vendor-helper"
+            and event.get("provider_status") == "available"
+            and event.get("backend_id") == "local-gpu"
+            and event.get("evidence_count") == 1
+            and str(vendor_evidence) in (event.get("artifact_paths") or [])
+            for event in report["events"]
+        ),
+        "hardware validation event missing vendor runtime metadata",
+    )
+
+
+def run_synthetic_fallback(args: argparse.Namespace) -> int:
+    temp_parent = ROOT / "out" / "tmp"
+    temp_parent.mkdir(parents=True, exist_ok=True)
+    temp_root = temp_parent / f"aios-cross-service-health-synthetic-{uuid.uuid4().hex}"
+    temp_root.mkdir(parents=True, exist_ok=True)
+    failed = False
+    try:
+        delivery_manifest = temp_root / "manifest.json"
+        write_json(
+            delivery_manifest,
+            {
+                "generated_at": "2026-03-16T00:00:00+00:00",
+                "schema_version": "2026-03-16",
+                "bundle_name": "aios-synthetic-delivery",
+                "rootfs_overlay": {},
+                "firstboot": {},
+                "shell": {},
+                "recovery": {},
+                "installer": {},
+                "schemas": {},
+                "files": [],
+            },
+        )
+        vendor_evidence = temp_root / "hardware" / "vendor-execution.json"
+        write_json(
+            vendor_evidence,
+            {
+                "backend_id": "local-gpu",
+                "provider_id": "nvidia.jetson.tensorrt",
+                "provider_status": "available",
+                "runtime_service_id": "aios-runtimed.jetson-vendor-helper",
+                "contract_kind": "vendor-runtime-evidence-v1",
+            },
+        )
+        hardware_validation_index = temp_root / "hardware" / "hardware-validation-evidence.json"
+        write_json(
+            hardware_validation_index,
+            {
+                "platform_id": "nvidia-jetson-orin-agx",
+                "index_id": "hardware-validation-nvidia-jetson-orin-agx",
+                "validation_kind": "hardware-validation",
+                "validation_status": "passed",
+                "generated_at": "2026-03-16T00:00:00+00:00",
+                "artifacts": {
+                    "report": str(temp_root / "hardware" / "hardware-validation-report.md"),
+                    "vendor_runtime_evidence": [str(vendor_evidence)],
+                },
+                "device_runtime": {
+                    "vendor_runtime": {
+                        "vendor_runtime_signoff_status": "evidence-attached",
+                        "evidence_count": 1,
+                        "evidence_paths": [str(vendor_evidence)],
+                        "provider_ids": ["nvidia.jetson.tensorrt"],
+                        "runtime_service_ids": ["aios-runtimed.jetson-vendor-helper"],
+                        "provider_statuses": ["available"],
+                        "backend_ids": ["local-gpu"],
+                    }
+                },
+            },
+        )
+        write_text(temp_root / "hardware" / "hardware-validation-report.md", "# Synthetic Hardware Validation\n")
+        spec_path = temp_root / "cross-service-health-spec.yaml"
+        spec_path.write_text(
+            yaml.safe_dump(
+                {
+                    "sources": [
+                        {
+                            "source_id": "delivery-bundle",
+                            "kind": "delivery-artifact",
+                            "component_kind": "platform",
+                            "service_id": "aios-system-delivery",
+                            "manifest_path": str(delivery_manifest),
+                            "summary": "Synthetic delivery manifest health export",
+                        },
+                        {
+                            "source_id": "hardware-validation",
+                            "kind": "evidence-index",
+                            "component_kind": "hardware",
+                            "service_id": "aios-hardware-validation",
+                            "index_path": str(hardware_validation_index),
+                            "summary": "Synthetic hardware validation evidence index export",
+                        },
+                    ]
+                },
+                sort_keys=False,
+                allow_unicode=False,
+            ),
+            encoding="utf-8",
+        )
+        output_prefix = temp_root / "cross-service-health-report"
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(BUILD_REPORT_SCRIPT),
+                "--spec",
+                str(spec_path),
+                "--output-prefix",
+                str(output_prefix),
+                "--timeout",
+                str(min(args.timeout, 8.0)),
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if completed.stdout.strip():
+            print(completed.stdout.rstrip())
+        if completed.stderr.strip():
+            print(completed.stderr.rstrip())
+        require(completed.returncode == 0, "synthetic cross-service health report builder returned non-zero")
+
+        report_path = output_prefix.with_suffix(".json")
+        events_path = (output_prefix.parent / output_prefix.name.replace("-report", "-events")).with_suffix(".jsonl")
+        require(report_path.exists(), "synthetic cross-service health report json missing")
+        require(events_path.exists(), "synthetic cross-service health events jsonl missing")
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        require(report["overall_status"] == "passed", "synthetic cross-service health report did not pass")
+        require(report["summary"]["source_count"] == 2, f"unexpected synthetic source_count: {report['summary']['source_count']}")
+        require(report["summary"]["event_count"] == 2, f"unexpected synthetic event_count: {report['summary']['event_count']}")
+        require(
+            set(report["summary"]["component_kinds"]) >= {"platform", "hardware"},
+            "synthetic component kind coverage missing",
+        )
+        assert_vendor_runtime_health_report(report, hardware_validation_index, vendor_evidence)
+        print(
+            json.dumps(
+                {
+                    "mode": "synthetic-fallback",
+                    "state_root": str(temp_root),
+                    "report": str(report_path),
+                    "events": str(events_path),
+                    "source_count": report["summary"]["source_count"],
+                    "event_count": report["summary"]["event_count"],
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        return 0
+    except Exception:
+        failed = True
+        raise
+    finally:
+        if failed or args.keep_state:
+            print(f"state kept at: {temp_root}")
+        else:
+            shutil.rmtree(temp_root, ignore_errors=True)
 
 
 def make_control_plane_env(root: Path) -> dict[str, str]:
@@ -533,6 +734,7 @@ def build_spec(
             "component_kind": "provider",
             "service_id": "aios-agentd",
             "socket_path": control_env["AIOS_AGENTD_SOCKET_PATH"],
+            "rpc_method": "agent.provider.health.get",
             "provider_ids": [
                 "system.files.local",
                 "system.intent.local",
@@ -633,6 +835,9 @@ def build_spec(
 
 def main() -> int:
     args = parse_args()
+    if not unix_rpc_supported():
+        print("cross-service health smoke fallback: unix rpc transport unsupported on this platform")
+        return run_synthetic_fallback(args)
     binaries = {
         "sessiond": resolve_binary("sessiond", args.sessiond, args.bin_dir),
         "policyd": resolve_binary("policyd", args.policyd, args.bin_dir),
@@ -721,6 +926,17 @@ def main() -> int:
 
         spec_path = temp_root / "cross-service-health-spec.yaml"
         hardware_validation_index = temp_root / "state" / "hardware-validation" / "evidence-index.json"
+        hardware_vendor_evidence = temp_root / "state" / "hardware-validation" / "vendor-execution.json"
+        write_json(
+            hardware_vendor_evidence,
+            {
+                "backend_id": "local-gpu",
+                "provider_id": "nvidia.jetson.tensorrt",
+                "provider_status": "available",
+                "runtime_service_id": "aios-runtimed.jetson-vendor-helper",
+                "contract_kind": "vendor-runtime-evidence-v1",
+            },
+        )
         write_json(
             hardware_validation_index,
             {
@@ -734,6 +950,18 @@ def main() -> int:
                 },
                 "artifacts": {
                     "report": "hardware-validation-report.md",
+                    "vendor_runtime_evidence": [str(hardware_vendor_evidence)],
+                },
+                "device_runtime": {
+                    "vendor_runtime": {
+                        "vendor_runtime_signoff_status": "evidence-attached",
+                        "evidence_count": 1,
+                        "evidence_paths": [str(hardware_vendor_evidence)],
+                        "provider_ids": ["nvidia.jetson.tensorrt"],
+                        "runtime_service_ids": ["aios-runtimed.jetson-vendor-helper"],
+                        "provider_statuses": ["available"],
+                        "backend_ids": ["local-gpu"],
+                    }
                 },
             },
         )
@@ -819,15 +1047,7 @@ def main() -> int:
         require(events_path.exists(), "cross-service health events jsonl missing")
         require(any(event.get("provider_id") == "runtime.local.inference" for event in report["events"]), "provider registry event missing runtime.local.inference")
         require(any(event.get("service_id") == "aios-system-delivery" for event in report["events"]), "delivery event missing")
-        require(
-            any(
-                event.get("service_id") == "aios-hardware-validation"
-                and event.get("component_kind") == "hardware"
-                and event.get("artifact_path") == str(hardware_validation_index)
-                for event in report["events"]
-            ),
-            "hardware validation event missing",
-        )
+        assert_vendor_runtime_health_report(report, hardware_validation_index, hardware_vendor_evidence)
         require(
             any(event.get("service_id") == "aios-updated" and event.get("artifact_path") == str(updated_paths["health_probe_path"]) for event in report["events"]),
             "updated event missing health probe artifact path",

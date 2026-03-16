@@ -3,57 +3,199 @@
   "$id": "aios/health-event.schema.json",
   "title": "AIOS Health Event",
   "type": "object",
-  "required": ["event_id", "generated_at", "service_id", "component_kind", "overall_status"],
+  "required": [
+    "event_id",
+    "generated_at",
+    "service_id",
+    "component_kind",
+    "overall_status"
+  ],
   "properties": {
-    "schema_version": { "type": "string" },
-    "event_id": { "type": "string", "minLength": 1 },
-    "generated_at": { "type": "string", "format": "date-time" },
-    "service_id": { "type": "string", "minLength": 1 },
-    "component_id": { "type": "string" },
+    "schema_version": {
+      "type": "string"
+    },
+    "event_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "service_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "component_id": {
+      "type": "string"
+    },
     "component_kind": {
       "type": "string",
-      "enum": ["service", "provider", "runtime", "shell", "device", "update", "platform", "hardware"]
+      "enum": [
+        "service",
+        "provider",
+        "runtime",
+        "shell",
+        "device",
+        "update",
+        "platform",
+        "hardware"
+      ]
     },
     "source": {
       "type": "string",
-      "enum": ["probe", "rpc", "startup", "background", "operator"]
+      "enum": [
+        "probe",
+        "rpc",
+        "startup",
+        "background",
+        "operator"
+      ]
     },
     "overall_status": {
       "type": "string",
-      "enum": ["ready", "idle", "degraded", "blocked", "failed"]
+      "enum": [
+        "ready",
+        "idle",
+        "degraded",
+        "blocked",
+        "failed"
+      ]
     },
-    "readiness": { "type": "boolean" },
-    "last_check_at": { "type": ["string", "null"], "format": "date-time" },
-    "summary": { "type": ["string", "null"] },
-    "session_id": { "type": "string" },
-    "task_id": { "type": "string" },
-    "provider_id": { "type": "string" },
-    "approval_id": { "type": "string" },
-    "update_id": { "type": "string" },
-    "boot_id": { "type": "string" },
-    "image_id": { "type": "string" },
-    "artifact_path": { "type": "string" },
+    "readiness": {
+      "type": "boolean"
+    },
+    "last_check_at": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "summary": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "task_id": {
+      "type": "string"
+    },
+    "provider_id": {
+      "type": "string"
+    },
+    "approval_id": {
+      "type": "string"
+    },
+    "update_id": {
+      "type": "string"
+    },
+    "boot_id": {
+      "type": "string"
+    },
+    "image_id": {
+      "type": "string"
+    },
+    "artifact_path": {
+      "type": "string"
+    },
     "recovery_points": {
       "type": "array",
-      "items": { "type": "string" }
+      "items": {
+        "type": "string"
+      }
     },
     "diagnostic_bundles": {
       "type": "array",
-      "items": { "type": "string" }
+      "items": {
+        "type": "string"
+      }
     },
     "probe": {
-      "type": ["object", "null"],
+      "type": [
+        "object",
+        "null"
+      ],
       "properties": {
-        "status": { "type": "string" },
-        "checked_at": { "type": ["string", "null"], "format": "date-time" },
-        "command": { "type": ["string", "null"] },
-        "summary": { "type": ["string", "null"] }
+        "status": {
+          "type": "string"
+        },
+        "checked_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "command": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "summary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
       },
       "additionalProperties": true
     },
     "notes": {
       "type": "array",
-      "items": { "type": "string" }
+      "items": {
+        "type": "string"
+      }
+    },
+    "provider_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "runtime_service_id": {
+      "type": "string"
+    },
+    "runtime_service_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "provider_status": {
+      "type": "string"
+    },
+    "provider_statuses": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "backend_id": {
+      "type": "string"
+    },
+    "backend_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "artifact_paths": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "evidence_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "vendor_runtime_signoff_status": {
+      "type": "string"
     }
   },
   "additionalProperties": true

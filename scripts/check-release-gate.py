@@ -170,6 +170,111 @@ def evaluate_hardware_evidence_index(path: Path) -> tuple[str, str, list[str]]:
     return "passed", "; ".join(detail_parts), [str(path)]
 
 
+def as_unique_string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    items: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        text = str(item).strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        items.append(text)
+    return items
+
+
+def collect_vendor_runtime_metadata(payload: dict[str, Any]) -> dict[str, Any]:
+    device_runtime = payload.get("device_runtime")
+    if not isinstance(device_runtime, dict):
+        device_runtime = {}
+    vendor_runtime = device_runtime.get("vendor_runtime")
+    if not isinstance(vendor_runtime, dict):
+        vendor_runtime = {}
+    return {
+        "vendor_runtime_signoff_status": str(vendor_runtime.get("vendor_runtime_signoff_status") or "").strip(),
+        "evidence_count": vendor_runtime.get("evidence_count"),
+        "evidence_paths": as_unique_string_list(vendor_runtime.get("evidence_paths")),
+        "provider_ids": as_unique_string_list(vendor_runtime.get("provider_ids")),
+        "runtime_service_ids": as_unique_string_list(vendor_runtime.get("runtime_service_ids")),
+        "provider_statuses": as_unique_string_list(vendor_runtime.get("provider_statuses")),
+        "backend_ids": as_unique_string_list(vendor_runtime.get("backend_ids")),
+    }
+
+
+def evaluate_vendor_runtime_signoff(
+    payload: dict[str, Any],
+    hardware_required: bool,
+) -> tuple[str, bool, str, list[str]]:
+    metadata = collect_vendor_runtime_metadata(payload)
+    baseline_kind = str(payload.get("baseline_kind") or "").strip()
+    real_machine_signoff_status = str(payload.get("real_machine_signoff_status") or "").strip()
+
+    evidence_count = metadata["evidence_count"]
+    evidence_count_value = evidence_count if isinstance(evidence_count, int) else 0
+    detail_parts = [
+        f"vendor_runtime_signoff_status={metadata['vendor_runtime_signoff_status'] or '<missing>'}",
+        f"evidence_count={evidence_count!r}",
+        f"providers={','.join(metadata['provider_ids']) or '-'}",
+        f"runtime_services={','.join(metadata['runtime_service_ids']) or '-'}",
+        f"backends={','.join(metadata['backend_ids']) or '-'}",
+    ]
+    warnings: list[str] = []
+
+    if baseline_kind == "synthetic-tier1-release-gate" and metadata["vendor_runtime_signoff_status"] != "evidence-attached":
+        warnings.append(
+            "synthetic Tier 1 baseline does not attach vendor runtime sign-off; attach real-machine vendor evidence separately"
+        )
+        detail_parts.append("synthetic baseline requires separate real-machine vendor sign-off")
+        return "warning", False, "; ".join(detail_parts), warnings
+
+    if metadata["vendor_runtime_signoff_status"] == "evidence-attached":
+        missing_fields: list[str] = []
+        if not isinstance(evidence_count, int) or evidence_count < 1:
+            missing_fields.append("evidence_count>=1")
+        if not metadata["evidence_paths"]:
+            missing_fields.append("evidence_paths")
+        if not metadata["provider_ids"]:
+            missing_fields.append("provider_ids")
+        if not metadata["runtime_service_ids"]:
+            missing_fields.append("runtime_service_ids")
+        if not metadata["provider_statuses"]:
+            missing_fields.append("provider_statuses")
+        if not metadata["backend_ids"]:
+            missing_fields.append("backend_ids")
+        if isinstance(evidence_count, int) and evidence_count != len(metadata["evidence_paths"]):
+            missing_fields.append(
+                f"evidence_count={evidence_count} mismatches evidence_paths={len(metadata['evidence_paths'])}"
+            )
+        if missing_fields:
+            detail_parts.append("attached vendor runtime evidence is incomplete")
+            detail_parts.append(f"missing={', '.join(missing_fields)}")
+            return "failed", hardware_required, "; ".join(detail_parts), warnings
+        detail_parts.append(f"real_machine_signoff_status={real_machine_signoff_status or '<missing>'}")
+        return "passed", hardware_required, "; ".join(detail_parts), warnings
+
+    has_partial_vendor_metadata = any(
+        [
+            evidence_count_value > 0,
+            bool(metadata["evidence_paths"]),
+            bool(metadata["provider_ids"]),
+            bool(metadata["runtime_service_ids"]),
+            bool(metadata["provider_statuses"]),
+            bool(metadata["backend_ids"]),
+        ]
+    )
+    if has_partial_vendor_metadata:
+        detail_parts.append("vendor runtime metadata is present but sign-off is not attached")
+        return "failed", hardware_required, "; ".join(detail_parts), warnings
+
+    if real_machine_signoff_status and real_machine_signoff_status != "pending-separate-evidence":
+        warnings.append(
+            "real-machine hardware evidence did not attach vendor runtime sign-off; vendor GPU/NPU release-grade evidence remains pending"
+        )
+    detail_parts.append("no vendor runtime sign-off attached")
+    return "warning", False, "; ".join(detail_parts), warnings
+
+
 def evaluate_evidence_index_checks(
     evidence_checks: dict[str, dict[str, Any]],
     use_matrix_blocking: bool,
@@ -382,6 +487,21 @@ def main() -> int:
             status, detail, _artifacts = evaluate_hardware_evidence_index(hardware_evidence_index)
             checks.append(make_check("hardware-evidence-index", status, hardware_required, detail))
             payload = read_json(hardware_evidence_index)
+            (
+                vendor_status,
+                vendor_blocking,
+                vendor_detail,
+                vendor_warnings,
+            ) = evaluate_vendor_runtime_signoff(payload, hardware_required)
+            checks.append(
+                make_check(
+                    "hardware-vendor-runtime-signoff",
+                    vendor_status,
+                    vendor_blocking,
+                    vendor_detail,
+                )
+            )
+            warnings.extend(vendor_warnings)
             if payload.get("baseline_kind") == "synthetic-tier1-release-gate":
                 warnings.append("hardware evidence gate is satisfied by the synthetic Tier 1 baseline; attach real-machine sign-off separately")
         except Exception as exc:  # noqa: BLE001

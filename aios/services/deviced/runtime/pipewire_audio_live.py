@@ -43,7 +43,11 @@ def main() -> int:
         os.environ.get("AIOS_DEVICED_PIPEWIRE_NODE_PATH", "/var/lib/aios/deviced/pipewire-node.json")
     )
     payload: dict[str, object] = {
-        "release_grade_backend": "pipewire-audio-helper",
+        "release_grade_backend": "pipewire",
+        "release_grade_backend_id": "pipewire",
+        "release_grade_backend_origin": "os-native",
+        "release_grade_backend_stack": "pipewire",
+        "release_grade_contract_kind": "release-grade-runtime-helper",
         "adapter_hint": "audio.pipewire-native",
         "pipewire_socket": str(socket_path),
     }
@@ -57,7 +61,10 @@ def main() -> int:
     payload = apply_helper_contract(
         payload,
         modality="audio",
-        release_grade_backend="pipewire-audio-helper",
+        release_grade_backend="pipewire",
+        release_grade_backend_id="pipewire",
+        release_grade_backend_origin="os-native",
+        release_grade_backend_stack="pipewire",
         adapter_hint="audio.pipewire-native",
         collector="audio.pipewire-live",
         transport=build_transport(
@@ -74,7 +81,10 @@ def main() -> int:
             state_ref=str(node_path) if node_path.exists() else None,
             probe_tool=tool,
             probe_excerpt=excerpt,
-            details={"pipewire_socket": str(socket_path)},
+            details={
+                "pipewire_socket": str(socket_path),
+                "socket_present": socket_path.exists(),
+            },
         ),
     )
 

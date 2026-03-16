@@ -78,6 +78,119 @@ def default_profile() -> Path:
     return SHELL_ROOT / "profiles" / "default-shell-profile.yaml"
 
 
+def parse_int(value, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def load_json_payload(path: Path | None) -> tuple[dict, str | None]:
+    if path is None:
+        return {}, None
+    if not path.exists():
+        return {}, f"missing:{path}"
+    try:
+        payload = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as error:
+        return {}, str(error)
+    if isinstance(payload, dict):
+        return payload, None
+    return {}, f"invalid-json-object:{path}"
+
+
+def derive_managed_windows(window_payload: dict, runtime_session: dict) -> list[dict[str, Any]]:
+    managed_windows: list[dict[str, Any]] = []
+    for entry in window_payload.get("windows", []):
+        if not isinstance(entry, dict):
+            continue
+        workspace_index = parse_int(entry.get("workspace_index"), 0)
+        rect = entry.get("rect") if isinstance(entry.get("rect"), dict) else {}
+        minimized = bool(entry.get("minimized"))
+        managed_windows.append(
+            {
+                "window_key": entry.get("window_key"),
+                "title": entry.get("title"),
+                "app_id": entry.get("app_id"),
+                "output_id": entry.get("output_id") or runtime_session.get("active_output_id") or "display-1",
+                "workspace_id": f"workspace-{workspace_index + 1}",
+                "window_policy": entry.get("window_policy") or "workspace-window",
+                "visible": not minimized,
+                "minimized": minimized,
+                "layout_x": parse_int(rect.get("x"), 0),
+                "layout_y": parse_int(rect.get("y"), 0),
+                "layout_width": parse_int(rect.get("width"), 0),
+                "layout_height": parse_int(rect.get("height"), 0),
+            }
+        )
+    return managed_windows
+
+
+def load_compositor_window_manager(profile: dict) -> dict[str, Any]:
+    compositor = profile.get("compositor", {}) or {}
+    runtime_state_path = None
+    if compositor.get("runtime_state_path"):
+        runtime_state_path = Path(str(compositor["runtime_state_path"]))
+    window_state_path = None
+    if compositor.get("window_state_path"):
+        window_state_path = Path(str(compositor["window_state_path"]))
+
+    runtime_payload, runtime_error = load_json_payload(runtime_state_path)
+    window_payload, window_error = load_json_payload(window_state_path)
+    runtime_session = runtime_payload.get("session")
+    if not isinstance(runtime_session, dict):
+        runtime_session = runtime_payload if isinstance(runtime_payload, dict) else {}
+
+    managed_windows = [
+        item
+        for item in runtime_session.get("managed_windows", [])
+        if isinstance(item, dict)
+    ]
+    if not managed_windows:
+        managed_windows = derive_managed_windows(window_payload, runtime_session)
+
+    workspace_window_counts = runtime_session.get("workspace_window_counts")
+    if not isinstance(workspace_window_counts, dict):
+        workspace_window_counts = {}
+    if not workspace_window_counts:
+        derived_counts: dict[str, int] = {}
+        for window in managed_windows:
+            workspace_id = str(window.get("workspace_id") or "workspace-1")
+            derived_counts[workspace_id] = derived_counts.get(workspace_id, 0) + 1
+        workspace_window_counts = derived_counts
+
+    data_status = "ready" if runtime_payload or window_payload else "unavailable"
+    errors = [error for error in (runtime_error, window_error) if error]
+    if errors and data_status == "ready":
+        data_status = "partial"
+
+    return {
+        "data_status": data_status,
+        "data_error": "; ".join(errors) if errors else None,
+        "runtime_phase": runtime_payload.get("phase"),
+        "runtime_state_status": runtime_session.get("runtime_state_status"),
+        "runtime_state_path": str(runtime_state_path) if runtime_state_path else None,
+        "window_state_path": str(window_state_path) if window_state_path else None,
+        "window_manager_status": runtime_session.get("window_manager_status"),
+        "workspace_count": parse_int(runtime_session.get("workspace_count"), max(len(workspace_window_counts), 1)),
+        "active_workspace_index": parse_int(runtime_session.get("active_workspace_index"), 0),
+        "active_workspace_id": runtime_session.get("active_workspace_id") or "workspace-1",
+        "active_output_id": runtime_session.get("active_output_id") or window_payload.get("active_output_id"),
+        "managed_window_count": parse_int(runtime_session.get("managed_window_count"), len(managed_windows)),
+        "visible_window_count": parse_int(runtime_session.get("visible_window_count"), sum(1 for item in managed_windows if item.get("visible"))),
+        "floating_window_count": parse_int(runtime_session.get("floating_window_count"), sum(1 for item in managed_windows if item.get("window_policy") and "floating" in str(item.get("window_policy")))) ,
+        "minimized_window_count": parse_int(runtime_session.get("minimized_window_count"), sum(1 for item in managed_windows if item.get("minimized"))),
+        "window_move_count": parse_int(runtime_session.get("window_move_count"), 0),
+        "window_resize_count": parse_int(runtime_session.get("window_resize_count"), 0),
+        "window_minimize_count": parse_int(runtime_session.get("window_minimize_count"), 0),
+        "window_restore_count": parse_int(runtime_session.get("window_restore_count"), 0),
+        "last_minimized_window_key": runtime_session.get("last_minimized_window_key"),
+        "last_restored_window_key": runtime_session.get("last_restored_window_key"),
+        "workspace_window_counts": dict(sorted(workspace_window_counts.items())),
+        "managed_windows": managed_windows,
+    }
+
+
 def add_snapshot_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--profile", type=Path, default=default_profile())
     parser.add_argument("--session-id")
@@ -403,6 +516,7 @@ def build_summary(
     skipped: list[dict[str, str]],
     args: argparse.Namespace,
     shell_layout: dict[str, Any],
+    compositor_window_manager: dict[str, Any],
 ) -> dict[str, Any]:
     status_counts = Counter(surface.get("status", "unknown") for surface in visible_surfaces)
     tone_counts = Counter(surface.get("tone", "neutral") for surface in visible_surfaces)
@@ -451,6 +565,28 @@ def build_summary(
         "workspace_surface": shell_layout.get("workspace_surface"),
         "stack_order": shell_layout.get("stack_order", []),
         "top_stack_surface": (shell_layout.get("stack_order") or [None])[0],
+        "window_manager_status": compositor_window_manager.get("window_manager_status"),
+        "compositor_data_status": compositor_window_manager.get("data_status"),
+        "compositor_data_error": compositor_window_manager.get("data_error"),
+        "runtime_phase": compositor_window_manager.get("runtime_phase"),
+        "runtime_state_status": compositor_window_manager.get("runtime_state_status"),
+        "runtime_state_path": compositor_window_manager.get("runtime_state_path"),
+        "window_state_path": compositor_window_manager.get("window_state_path"),
+        "workspace_count": compositor_window_manager.get("workspace_count", 1),
+        "active_workspace_index": compositor_window_manager.get("active_workspace_index", 0),
+        "active_workspace_id": compositor_window_manager.get("active_workspace_id"),
+        "active_output_id": compositor_window_manager.get("active_output_id"),
+        "managed_window_count": compositor_window_manager.get("managed_window_count", 0),
+        "visible_window_count": compositor_window_manager.get("visible_window_count", 0),
+        "floating_window_count": compositor_window_manager.get("floating_window_count", 0),
+        "minimized_window_count": compositor_window_manager.get("minimized_window_count", 0),
+        "window_move_count": compositor_window_manager.get("window_move_count", 0),
+        "window_resize_count": compositor_window_manager.get("window_resize_count", 0),
+        "window_minimize_count": compositor_window_manager.get("window_minimize_count", 0),
+        "window_restore_count": compositor_window_manager.get("window_restore_count", 0),
+        "last_minimized_window_key": compositor_window_manager.get("last_minimized_window_key"),
+        "last_restored_window_key": compositor_window_manager.get("last_restored_window_key"),
+        "workspace_window_counts": compositor_window_manager.get("workspace_window_counts", {}),
         "applied_filters": {
             "components": requested_surfaces,
             "status": args.status_filter,
@@ -491,7 +627,15 @@ def build_snapshot(profile: dict, args: argparse.Namespace) -> dict[str, Any]:
 
     visible_surfaces = apply_surface_filters(surfaces, args)
     visible_surfaces, shell_layout = annotate_visible_surfaces(visible_surfaces)
-    summary = build_summary(surfaces, visible_surfaces, skipped, args, shell_layout)
+    compositor_window_manager = load_compositor_window_manager(profile)
+    summary = build_summary(
+        surfaces,
+        visible_surfaces,
+        skipped,
+        args,
+        shell_layout,
+        compositor_window_manager,
+    )
     return {
         "profile_id": profile.get("profile_id", "unknown"),
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -501,6 +645,7 @@ def build_snapshot(profile: dict, args: argparse.Namespace) -> dict[str, Any]:
         "total_surface_count": len(surfaces),
         "surfaces": visible_surfaces,
         "skipped": skipped,
+        "window_manager": compositor_window_manager,
         "summary": summary,
     }
 
@@ -562,6 +707,21 @@ def render_overview(snapshot: dict[str, Any]) -> str:
         lines.append(f"workspace_surface: {summary['workspace_surface']}")
     if summary.get("top_stack_surface"):
         lines.append(f"top_stack_surface: {summary['top_stack_surface']}")
+    if summary.get("window_manager_status"):
+        lines.append(f"window_manager_status: {summary['window_manager_status']}")
+    if summary.get("active_workspace_id"):
+        lines.append(f"active_workspace_id: {summary['active_workspace_id']}")
+    if summary.get("active_output_id"):
+        lines.append(f"active_output_id: {summary['active_output_id']}")
+    lines.append(f"managed_windows: {summary.get('managed_window_count', 0)}")
+    lines.append(f"minimized_windows: {summary.get('minimized_window_count', 0)}")
+    if summary.get("workspace_window_counts"):
+        lines.append(
+            "workspace_window_counts: "
+            + ", ".join(
+                f"{key}={value}" for key, value in sorted(summary["workspace_window_counts"].items())
+            )
+        )
     stack_order = summary.get("stack_order", [])
     if stack_order:
         lines.append("stack_order: " + " > ".join(stack_order))
@@ -608,9 +768,10 @@ def write_outputs(snapshot: dict[str, Any], args: argparse.Namespace) -> dict[st
     output_prefix.parent.mkdir(parents=True, exist_ok=True)
     json_path = output_prefix.with_suffix(".json")
     text_path = output_prefix.with_suffix(".txt")
-    json_path.write_text(json.dumps(snapshot, indent=2, ensure_ascii=False) + "\n")
-    text_path.write_text(render_snapshot(snapshot) + "\n")
+    json_path.write_text(json.dumps(snapshot, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    text_path.write_text(render_snapshot(snapshot) + "\n", encoding="utf-8")
     return {
         "json": str(json_path),
         "text": str(text_path),
     }
+

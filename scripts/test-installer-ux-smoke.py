@@ -23,6 +23,10 @@ def write_executable(path: Path, content: str) -> Path:
 
 
 def main() -> int:
+    if os.name == "nt":
+        print("installer ux smoke skipped: guided installer shell flow is validated on Linux hosts")
+        return 0
+
     temp_root = Path(tempfile.mkdtemp(prefix="aios-installer-ux-"))
     env_file = temp_root / "aios-installer.env"
     report_dir = temp_root / "reports"

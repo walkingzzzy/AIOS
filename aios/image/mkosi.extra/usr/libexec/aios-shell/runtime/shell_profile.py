@@ -73,6 +73,10 @@ def resolve_optional_profile_relative(profile_path: Path, value: str | Path | No
     if value in (None, ""):
         return None
 
+    raw_value = str(value)
+    if os.name == "nt" and raw_value.startswith("/"):
+        return raw_value
+
     candidate = Path(value).expanduser()
     if candidate.is_absolute():
         return str(candidate.resolve())
@@ -112,6 +116,45 @@ def build_session_plan(
         profile_path.resolve(),
         env_map.get("AIOS_SHELL_COMPOSITOR_DRM_DEVICE_PATH")
         or compositor.get("drm_device_path"),
+    )
+    drm_preferred_connector = (
+        env_map.get("AIOS_SHELL_COMPOSITOR_DRM_PREFERRED_CONNECTOR")
+        or compositor.get("drm_preferred_connector")
+    )
+    drm_output_width = env_map.get("AIOS_SHELL_COMPOSITOR_DRM_OUTPUT_WIDTH") or compositor.get(
+        "drm_output_width"
+    )
+    drm_output_height = env_map.get("AIOS_SHELL_COMPOSITOR_DRM_OUTPUT_HEIGHT") or compositor.get(
+        "drm_output_height"
+    )
+    drm_output_refresh_millihz = env_map.get(
+        "AIOS_SHELL_COMPOSITOR_DRM_OUTPUT_REFRESH_MILLIHZ"
+    ) or compositor.get("drm_output_refresh_millihz")
+    workspace_toplevel_mode = (
+        env_map.get("AIOS_SHELL_COMPOSITOR_WORKSPACE_TOPLEVEL_MODE")
+        or compositor.get("workspace_toplevel_mode")
+        or "maximized"
+    )
+    workspace_count = env_map.get("AIOS_SHELL_COMPOSITOR_WORKSPACE_COUNT") or compositor.get(
+        "workspace_count"
+    )
+    default_workspace_index = env_map.get(
+        "AIOS_SHELL_COMPOSITOR_DEFAULT_WORKSPACE_INDEX"
+    ) or compositor.get("default_workspace_index")
+    output_layout_mode = (
+        env_map.get("AIOS_SHELL_COMPOSITOR_OUTPUT_LAYOUT_MODE")
+        or compositor.get("output_layout_mode")
+        or "horizontal"
+    )
+    virtual_outputs = env_map.get("AIOS_SHELL_COMPOSITOR_VIRTUAL_OUTPUTS") or compositor.get(
+        "virtual_outputs"
+    )
+    if isinstance(virtual_outputs, list):
+        virtual_outputs = ",".join(str(item) for item in virtual_outputs if str(item).strip())
+    window_state_path = resolve_optional_profile_relative(
+        profile_path.resolve(),
+        env_map.get("AIOS_SHELL_COMPOSITOR_WINDOW_STATE_PATH")
+        or compositor.get("window_state_path"),
     )
     drm_disable_connectors = parse_optional_bool(
         env_map.get("AIOS_SHELL_COMPOSITOR_DRM_DISABLE_CONNECTORS")
@@ -247,7 +290,17 @@ def build_session_plan(
             "env": {
                 "AIOS_SHELL_COMPOSITOR_BACKEND": compositor_backend,
                 "AIOS_SHELL_COMPOSITOR_DRM_DEVICE_PATH": drm_device_path,
+                "AIOS_SHELL_COMPOSITOR_DRM_PREFERRED_CONNECTOR": drm_preferred_connector,
+                "AIOS_SHELL_COMPOSITOR_DRM_OUTPUT_WIDTH": drm_output_width,
+                "AIOS_SHELL_COMPOSITOR_DRM_OUTPUT_HEIGHT": drm_output_height,
+                "AIOS_SHELL_COMPOSITOR_DRM_OUTPUT_REFRESH_MILLIHZ": drm_output_refresh_millihz,
                 "AIOS_SHELL_COMPOSITOR_DRM_DISABLE_CONNECTORS": str(drm_disable_connectors).lower(),
+                "AIOS_SHELL_COMPOSITOR_WORKSPACE_TOPLEVEL_MODE": workspace_toplevel_mode,
+                "AIOS_SHELL_COMPOSITOR_WORKSPACE_COUNT": workspace_count,
+                "AIOS_SHELL_COMPOSITOR_DEFAULT_WORKSPACE_INDEX": default_workspace_index,
+                "AIOS_SHELL_COMPOSITOR_OUTPUT_LAYOUT_MODE": output_layout_mode,
+                "AIOS_SHELL_COMPOSITOR_VIRTUAL_OUTPUTS": virtual_outputs,
+                "AIOS_SHELL_COMPOSITOR_WINDOW_STATE_PATH": window_state_path,
                 "AIOS_SHELL_COMPOSITOR_RUNTIME_LOCK_PATH": runtime_lock_path,
                 "AIOS_SHELL_COMPOSITOR_RUNTIME_READY_PATH": runtime_ready_path,
                 "AIOS_SHELL_COMPOSITOR_RUNTIME_STATE_PATH": runtime_state_path,
@@ -413,6 +466,55 @@ def render_session_plan(plan: dict[str, Any]) -> str:
         lines.append(
             "drm_device_path: " + compositor["env"]["AIOS_SHELL_COMPOSITOR_DRM_DEVICE_PATH"]
         )
+    if compositor["env"].get("AIOS_SHELL_COMPOSITOR_DRM_PREFERRED_CONNECTOR"):
+        lines.append(
+            "drm_preferred_connector: "
+            + compositor["env"]["AIOS_SHELL_COMPOSITOR_DRM_PREFERRED_CONNECTOR"]
+        )
+    if compositor["env"].get("AIOS_SHELL_COMPOSITOR_DRM_OUTPUT_WIDTH"):
+        lines.append(
+            "drm_output_width: "
+            + str(compositor["env"]["AIOS_SHELL_COMPOSITOR_DRM_OUTPUT_WIDTH"])
+        )
+    if compositor["env"].get("AIOS_SHELL_COMPOSITOR_DRM_OUTPUT_HEIGHT"):
+        lines.append(
+            "drm_output_height: "
+            + str(compositor["env"]["AIOS_SHELL_COMPOSITOR_DRM_OUTPUT_HEIGHT"])
+        )
+    if compositor["env"].get("AIOS_SHELL_COMPOSITOR_DRM_OUTPUT_REFRESH_MILLIHZ"):
+        lines.append(
+            "drm_output_refresh_millihz: "
+            + str(compositor["env"]["AIOS_SHELL_COMPOSITOR_DRM_OUTPUT_REFRESH_MILLIHZ"])
+        )
+    lines.append(
+        "workspace_toplevel_mode: "
+        + str(compositor["env"].get("AIOS_SHELL_COMPOSITOR_WORKSPACE_TOPLEVEL_MODE", "maximized"))
+    )
+    if compositor["env"].get("AIOS_SHELL_COMPOSITOR_WORKSPACE_COUNT"):
+        lines.append(
+            "workspace_count: "
+            + str(compositor["env"]["AIOS_SHELL_COMPOSITOR_WORKSPACE_COUNT"])
+        )
+    if compositor["env"].get("AIOS_SHELL_COMPOSITOR_DEFAULT_WORKSPACE_INDEX") is not None:
+        lines.append(
+            "default_workspace_index: "
+            + str(compositor["env"]["AIOS_SHELL_COMPOSITOR_DEFAULT_WORKSPACE_INDEX"])
+        )
+    if compositor["env"].get("AIOS_SHELL_COMPOSITOR_OUTPUT_LAYOUT_MODE"):
+        lines.append(
+            "output_layout_mode: "
+            + str(compositor["env"]["AIOS_SHELL_COMPOSITOR_OUTPUT_LAYOUT_MODE"])
+        )
+    if compositor["env"].get("AIOS_SHELL_COMPOSITOR_VIRTUAL_OUTPUTS"):
+        lines.append(
+            "virtual_outputs: "
+            + str(compositor["env"]["AIOS_SHELL_COMPOSITOR_VIRTUAL_OUTPUTS"])
+        )
+    if compositor["env"].get("AIOS_SHELL_COMPOSITOR_WINDOW_STATE_PATH"):
+        lines.append(
+            "window_state_path: "
+            + str(compositor["env"]["AIOS_SHELL_COMPOSITOR_WINDOW_STATE_PATH"])
+        )
     if host_runtime["gtk_host_command"]:
         lines.append("gtk_host_command: " + host_runtime["gtk_host_command"])
     if host_runtime.get("gtk_panel_client_command"):
@@ -426,3 +528,4 @@ def render_session_plan(plan: dict[str, Any]) -> str:
     if panel_host_bridge["action_log_path"]:
         lines.append("panel_action_log_path: " + panel_host_bridge["action_log_path"])
     return "\n".join(lines)
+

@@ -9,7 +9,7 @@ import os
 import socket
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -27,6 +27,14 @@ from aios.compat.runtime_support import (
     append_jsonl,
     resolve_policy_context,
     standalone_policy_context,
+)
+from aios.compat.remote_runtime_support import (
+    RemoteAttestation,
+    RemoteGovernance,
+    VALID_REMOTE_ATTESTATION_MODES,
+    agentd_rpc,
+    agentd_socket_path,
+    normalize_remote_provider_id,
 )
 
 
@@ -51,8 +59,16 @@ DEFAULT_TASK_ID = "compat-task"
 DEFAULT_TRUST_MODE = "permissive"
 DEFAULT_REMOTE_REGISTRY_ENV = "AIOS_MCP_BRIDGE_REMOTE_REGISTRY"
 DEFAULT_REMOTE_AUTH_SECRET_ENV = "AIOS_MCP_BRIDGE_REMOTE_AUTH_SECRET"
+DEFAULT_TRUST_MODE_ENV = "AIOS_MCP_BRIDGE_TRUST_MODE"
+DEFAULT_ALLOWLIST_ENV = "AIOS_MCP_BRIDGE_ALLOWLIST"
+DEFAULT_REMOTE_ATTESTATION_MODE_ENV = "AIOS_MCP_BRIDGE_REMOTE_ATTESTATION_MODE"
+DEFAULT_REMOTE_FLEET_ID_ENV = "AIOS_MCP_BRIDGE_REMOTE_FLEET_ID"
+DEFAULT_REMOTE_GOVERNANCE_GROUP_ENV = "AIOS_MCP_BRIDGE_REMOTE_GOVERNANCE_GROUP"
+DEFAULT_REMOTE_POLICY_GROUP_ENV = "AIOS_MCP_BRIDGE_REMOTE_POLICY_GROUP"
+DEFAULT_REMOTE_APPROVAL_REF_ENV = "AIOS_MCP_BRIDGE_REMOTE_APPROVAL_REF"
 VALID_TRUST_MODES = {"permissive", "allowlist", "deny"}
 VALID_REMOTE_AUTH_MODES = {"none", "bearer", "header", "execution-token"}
+PROVIDER_REGISTER_METHOD = "provider.register"
 COMMAND_EXIT_CODES = {
     "invalid_request": 2,
     "precondition_failed": 3,
@@ -90,9 +106,17 @@ class RemoteRegistration:
     target_hash: str
     registered_at: str
     display_name: str | None = None
+    control_plane_provider_id: str | None = None
+    registration_status: str | None = None
+    last_heartbeat_at: str | None = None
+    heartbeat_ttl_seconds: int | None = None
+    revoked_at: str | None = None
+    revocation_reason: str | None = None
+    attestation: RemoteAttestation | None = None
+    governance: RemoteGovernance | None = None
 
     def to_payload(self) -> dict[str, object]:
-        return {
+        payload = {
             "provider_ref": self.provider_ref,
             "endpoint": self.endpoint,
             "capabilities": self.capabilities,
@@ -102,7 +126,18 @@ class RemoteRegistration:
             "target_hash": self.target_hash,
             "registered_at": self.registered_at,
             "display_name": self.display_name,
+            "control_plane_provider_id": self.control_plane_provider_id,
+            "registration_status": remote_registration_status(self),
+            "last_heartbeat_at": self.last_heartbeat_at,
+            "heartbeat_ttl_seconds": self.heartbeat_ttl_seconds,
+            "revoked_at": self.revoked_at,
+            "revocation_reason": self.revocation_reason,
         }
+        if self.attestation is not None:
+            payload["attestation"] = self.attestation.to_payload()
+        if self.governance is not None:
+            payload["governance"] = self.governance.to_payload()
+        return payload
 
 
 class BridgeCommandError(RuntimeError):
@@ -141,6 +176,194 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def optional_text(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def optional_int(value: object) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_rfc3339(value: str | None) -> datetime | None:
+    if value is None:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def load_remote_attestation(payload: object) -> RemoteAttestation | None:
+    if not isinstance(payload, dict):
+        return None
+    mode = optional_text(payload.get("mode"))
+    if mode is None:
+        return None
+    return RemoteAttestation(
+        mode=mode,
+        issuer=optional_text(payload.get("issuer")),
+        subject=optional_text(payload.get("subject")),
+        issued_at=optional_text(payload.get("issued_at")),
+        expires_at=optional_text(payload.get("expires_at")),
+        evidence_ref=optional_text(payload.get("evidence_ref")),
+        digest=optional_text(payload.get("digest")),
+        status=optional_text(payload.get("status")),
+    )
+
+
+def load_remote_governance(payload: object) -> RemoteGovernance | None:
+    if not isinstance(payload, dict):
+        return None
+    fleet_id = optional_text(payload.get("fleet_id"))
+    governance_group = optional_text(payload.get("governance_group"))
+    if fleet_id is None or governance_group is None:
+        return None
+    return RemoteGovernance(
+        fleet_id=fleet_id,
+        governance_group=governance_group,
+        policy_group=optional_text(payload.get("policy_group")),
+        registered_by=optional_text(payload.get("registered_by")),
+        approval_ref=optional_text(payload.get("approval_ref")),
+        allow_lateral_movement=bool(payload.get("allow_lateral_movement", False)),
+    )
+
+
+def remote_registration_status(
+    registration: RemoteRegistration,
+    *,
+    now: datetime | None = None,
+) -> str:
+    current = (registration.registration_status or "active").strip().lower() or "active"
+    if registration.revoked_at:
+        return "revoked"
+    if current == "revoked":
+        return "revoked"
+    ttl = registration.heartbeat_ttl_seconds
+    if ttl is not None and ttl > 0:
+        heartbeat = parse_rfc3339(registration.last_heartbeat_at) or parse_rfc3339(registration.registered_at)
+        if heartbeat is None:
+            return "stale"
+        current_time = now or datetime.now(timezone.utc)
+        if (current_time - heartbeat).total_seconds() > ttl:
+            return "stale"
+    return current
+
+
+def remote_registration_summary(registrations: list[RemoteRegistration]) -> dict[str, object]:
+    counts: dict[str, int] = {}
+    stale_provider_refs: list[str] = []
+    revoked_provider_refs: list[str] = []
+    for registration in registrations:
+        status = remote_registration_status(registration)
+        counts[status] = counts.get(status, 0) + 1
+        if status == "stale":
+            stale_provider_refs.append(registration.provider_ref)
+        if status == "revoked":
+            revoked_provider_refs.append(registration.provider_ref)
+    return {
+        "counts": counts,
+        "stale_provider_refs": sorted(stale_provider_refs),
+        "revoked_provider_refs": sorted(revoked_provider_refs),
+    }
+
+
+def touch_remote_registration(
+    registration: RemoteRegistration,
+    *,
+    timestamp: str | None = None,
+) -> RemoteRegistration:
+    touched_at = timestamp or utc_now()
+    return replace(
+        registration,
+        registration_status="active",
+        last_heartbeat_at=touched_at,
+        revoked_at=None,
+        revocation_reason=None,
+    )
+
+
+def revoke_remote_registration(
+    registration: RemoteRegistration,
+    *,
+    reason: str | None = None,
+    timestamp: str | None = None,
+) -> RemoteRegistration:
+    revoked_at = timestamp or utc_now()
+    return replace(
+        registration,
+        registration_status="revoked",
+        revoked_at=revoked_at,
+        revocation_reason=reason or registration.revocation_reason,
+    )
+
+
+def find_remote_registration(
+    registrations: list[RemoteRegistration],
+    *,
+    provider_ref: str | None = None,
+    endpoint: str | None = None,
+) -> tuple[int, RemoteRegistration] | tuple[None, None]:
+    for index, registration in enumerate(registrations):
+        if provider_ref and registration.provider_ref == provider_ref:
+            return index, registration
+        if endpoint and registration.endpoint == endpoint:
+            return index, registration
+    return None, None
+
+
+def upsert_remote_registration(
+    registrations: list[RemoteRegistration],
+    registration: RemoteRegistration,
+) -> list[RemoteRegistration]:
+    _, existing = find_remote_registration(
+        registrations,
+        provider_ref=registration.provider_ref,
+        endpoint=registration.endpoint,
+    )
+    if existing is not None:
+        registration = replace(
+            registration,
+            control_plane_provider_id=registration.control_plane_provider_id or existing.control_plane_provider_id,
+        )
+    updated = [
+        item
+        for item in registrations
+        if item.provider_ref != registration.provider_ref and item.endpoint != registration.endpoint
+    ]
+    updated.append(registration)
+    updated.sort(key=lambda item: (item.provider_ref, item.endpoint))
+    return updated
+
+
+def remove_remote_registration(
+    registrations: list[RemoteRegistration],
+    *,
+    provider_ref: str | None = None,
+    endpoint: str | None = None,
+) -> tuple[list[RemoteRegistration], RemoteRegistration | None]:
+    index, match = find_remote_registration(registrations, provider_ref=provider_ref, endpoint=endpoint)
+    if index is None or match is None:
+        return registrations, None
+    updated = registrations[:index] + registrations[index + 1 :]
+    return updated, match
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="AIOS MCP bridge provider baseline runtime")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -167,7 +390,47 @@ def parse_args() -> argparse.Namespace:
     register_parser.add_argument("--auth-header-name")
     register_parser.add_argument("--auth-secret-env")
     register_parser.add_argument("--display-name")
+    register_parser.add_argument(
+        "--attestation-mode",
+        choices=sorted(VALID_REMOTE_ATTESTATION_MODES),
+    )
+    register_parser.add_argument("--attestation-issuer")
+    register_parser.add_argument("--attestation-subject")
+    register_parser.add_argument("--attestation-issued-at")
+    register_parser.add_argument("--attestation-expires-at")
+    register_parser.add_argument("--attestation-evidence-ref")
+    register_parser.add_argument("--attestation-digest")
+    register_parser.add_argument("--attestation-status")
+    register_parser.add_argument("--fleet-id")
+    register_parser.add_argument("--governance-group")
+    register_parser.add_argument("--policy-group")
+    register_parser.add_argument("--registered-by")
+    register_parser.add_argument("--approval-ref")
+    register_parser.add_argument("--allow-lateral-movement", action="store_true")
+    register_parser.add_argument("--heartbeat-ttl-seconds", type=int)
     register_parser.add_argument("--remote-registry", type=Path)
+
+    heartbeat_parser = subparsers.add_parser("heartbeat-remote")
+    heartbeat_parser.add_argument("--provider-ref", required=True)
+    heartbeat_parser.add_argument("--heartbeat-at")
+    heartbeat_parser.add_argument("--remote-registry", type=Path)
+
+    revoke_parser = subparsers.add_parser("revoke-remote")
+    revoke_parser.add_argument("--provider-ref", required=True)
+    revoke_parser.add_argument("--reason")
+    revoke_parser.add_argument("--revoked-at")
+    revoke_parser.add_argument("--remote-registry", type=Path)
+
+    unregister_parser = subparsers.add_parser("unregister-remote")
+    unregister_parser.add_argument("--provider-ref", required=True)
+    unregister_parser.add_argument("--remote-registry", type=Path)
+
+    control_plane_parser = subparsers.add_parser("register-control-plane")
+    control_plane_parser.add_argument("--provider-ref", required=True)
+    control_plane_parser.add_argument("--remote-registry", type=Path)
+    control_plane_parser.add_argument("--agentd-socket", type=Path)
+    control_plane_parser.add_argument("--provider-id")
+    control_plane_parser.add_argument("--display-name")
 
     call_parser = subparsers.add_parser("call")
     call_parser.add_argument("--endpoint")
@@ -238,10 +501,11 @@ def load_remote_registry(args: argparse.Namespace | None = None) -> tuple[Path, 
     for item in entries:
         if not isinstance(item, dict):
             continue
+        endpoint = str(item.get("endpoint") or "")
         registrations.append(
             RemoteRegistration(
                 provider_ref=str(item.get("provider_ref") or ""),
-                endpoint=str(item.get("endpoint") or ""),
+                endpoint=endpoint,
                 capabilities=[
                     str(capability)
                     for capability in item.get("capabilities", [])
@@ -258,13 +522,25 @@ def load_remote_registry(args: argparse.Namespace | None = None) -> tuple[Path, 
                     if item.get("auth_secret_env") is not None
                     else None
                 ),
-                target_hash=str(item.get("target_hash") or remote_target_hash(str(item.get("endpoint") or ""))),
+                target_hash=str(item.get("target_hash") or remote_target_hash(endpoint)),
                 registered_at=str(item.get("registered_at") or ""),
                 display_name=(
                     str(item.get("display_name"))
                     if item.get("display_name") is not None
                     else None
                 ),
+                control_plane_provider_id=(
+                    str(item.get("control_plane_provider_id"))
+                    if item.get("control_plane_provider_id") is not None
+                    else None
+                ),
+                registration_status=optional_text(item.get("registration_status")),
+                last_heartbeat_at=optional_text(item.get("last_heartbeat_at")),
+                heartbeat_ttl_seconds=optional_int(item.get("heartbeat_ttl_seconds")),
+                revoked_at=optional_text(item.get("revoked_at")),
+                revocation_reason=optional_text(item.get("revocation_reason")),
+                attestation=load_remote_attestation(item.get("attestation")),
+                governance=load_remote_governance(item.get("governance")),
             )
         )
     return path, registrations
@@ -316,9 +592,82 @@ def compat_capability(capability_id: str | None) -> dict[str, object]:
     return {}
 
 
+def bridge_remote_attestation(args: argparse.Namespace) -> RemoteAttestation:
+    mode = (
+        args.attestation_mode
+        or os.environ.get(DEFAULT_REMOTE_ATTESTATION_MODE_ENV)
+        or "bootstrap"
+    ).strip().lower()
+    issuer = args.attestation_issuer or (
+        f"{PROVIDER_ID}.attestor" if mode == "verified" else None
+    )
+    subject = args.attestation_subject or args.provider_ref
+    evidence_ref = (
+        args.attestation_evidence_ref
+        or f"attestation://compat-mcp-bridge/{args.provider_ref}"
+    )
+    digest = args.attestation_digest or f"sha256:{remote_target_hash(args.endpoint)}"
+    status = args.attestation_status or ("trusted" if mode == "verified" else "bootstrap")
+    return RemoteAttestation(
+        mode=mode,
+        issuer=issuer,
+        subject=subject,
+        issued_at=args.attestation_issued_at or utc_now(),
+        expires_at=args.attestation_expires_at,
+        evidence_ref=evidence_ref,
+        digest=digest,
+        status=status,
+    )
+
+
+def bridge_remote_governance(args: argparse.Namespace) -> RemoteGovernance:
+    return RemoteGovernance(
+        fleet_id=(
+            args.fleet_id
+            or os.environ.get(DEFAULT_REMOTE_FLEET_ID_ENV)
+            or "compat-mcp-bridge-local"
+        ),
+        governance_group=(
+            args.governance_group
+            or os.environ.get(DEFAULT_REMOTE_GOVERNANCE_GROUP_ENV)
+            or "operator-audit"
+        ),
+        policy_group=(
+            args.policy_group
+            or os.environ.get(DEFAULT_REMOTE_POLICY_GROUP_ENV)
+            or "compat-mcp-bridge-remote"
+        ),
+        registered_by=args.registered_by or PROVIDER_ID,
+        approval_ref=args.approval_ref or os.environ.get(DEFAULT_REMOTE_APPROVAL_REF_ENV),
+        allow_lateral_movement=bool(args.allow_lateral_movement),
+    )
+
+
 def build_manifest() -> dict[str, object]:
     trust_policy = resolve_trust_policy()
     registry_path, registrations = load_remote_registry()
+    summary = remote_registration_summary(registrations)
+    attestation_modes = sorted(
+        {
+            registration.attestation.mode
+            for registration in registrations
+            if registration.attestation is not None
+        }
+    )
+    fleet_ids = sorted(
+        {
+            registration.governance.fleet_id
+            for registration in registrations
+            if registration.governance is not None
+        }
+    )
+    governance_groups = sorted(
+        {
+            registration.governance.governance_group
+            for registration in registrations
+            if registration.governance is not None
+        }
+    )
     return {
         "provider_id": PROVIDER_ID,
         "execution_location": "sandbox",
@@ -335,6 +684,7 @@ def build_manifest() -> dict[str, object]:
             "audit-jsonl",
             "remote-register",
             "remote-list",
+            "remote-control-plane-register",
             "remote-auth-header-v1",
         ],
         "compat_permission_schema_ref": COMPAT_PERMISSION_SCHEMA_REF,
@@ -346,12 +696,17 @@ def build_manifest() -> dict[str, object]:
             "registered_remote_count": len(registrations),
             "registered_providers": [registration.provider_ref for registration in registrations],
             "auth_modes": sorted({registration.auth_mode for registration in registrations}),
+            "attestation_modes": attestation_modes,
+            "fleet_ids": fleet_ids,
+            "governance_groups": governance_groups,
+            "status_counts": summary["counts"],
         },
         "notes": [
             "Baseline HTTP bridge runtime is available",
             "Structured compat-mcp-bridge-v1 result protocol is emitted on success and failure",
             "Optional JSONL audit sink can be configured for machine-readable evidence",
             "Persistent remote registration and remote auth header strategies are available",
+            "Remote registrations can carry attestation and fleet governance metadata for control-plane promotion",
         ],
     }
 
@@ -375,12 +730,12 @@ def enforce_timeout_budget(timeout_seconds: float) -> None:
 
 
 def configured_allowlist() -> list[str]:
-    raw_value = os.environ.get("AIOS_MCP_BRIDGE_ALLOWLIST", "")
+    raw_value = os.environ.get(DEFAULT_ALLOWLIST_ENV, "")
     return [item.strip() for item in raw_value.split(",") if item.strip()]
 
 
 def resolve_trust_policy() -> dict[str, object]:
-    configured_mode = os.environ.get("AIOS_MCP_BRIDGE_TRUST_MODE", DEFAULT_TRUST_MODE).strip().lower()
+    configured_mode = os.environ.get(DEFAULT_TRUST_MODE_ENV, DEFAULT_TRUST_MODE).strip().lower()
     if not configured_mode:
         configured_mode = DEFAULT_TRUST_MODE
 
@@ -392,19 +747,19 @@ def resolve_trust_policy() -> dict[str, object]:
     if mode == "invalid":
         status = "degraded"
         notes.append(
-            "Unrecognized AIOS_MCP_BRIDGE_TRUST_MODE; remote calls will be rejected until configuration is fixed"
+            f"Unrecognized {DEFAULT_TRUST_MODE_ENV}; remote calls will be rejected until configuration is fixed"
         )
     elif mode == "permissive":
         status = "degraded"
         notes.append(
-            "Trust policy is permissive; set AIOS_MCP_BRIDGE_TRUST_MODE=allowlist to enforce AIOS_MCP_BRIDGE_ALLOWLIST"
+            f"Trust policy is permissive; set {DEFAULT_TRUST_MODE_ENV}=allowlist to enforce {DEFAULT_ALLOWLIST_ENV}"
         )
     elif mode == "allowlist":
         if allowlist:
-            notes.append("Endpoint host must match AIOS_MCP_BRIDGE_ALLOWLIST")
+            notes.append(f"Endpoint host must match {DEFAULT_ALLOWLIST_ENV}")
         else:
             status = "degraded"
-            notes.append("Allowlist mode is configured without AIOS_MCP_BRIDGE_ALLOWLIST entries")
+            notes.append(f"Allowlist mode is configured without {DEFAULT_ALLOWLIST_ENV} entries")
     elif mode == "deny":
         status = "degraded"
         notes.append("Trust policy denies all remote bridge calls")
@@ -417,6 +772,43 @@ def resolve_trust_policy() -> dict[str, object]:
         "status": status,
         "notes": notes,
     }
+
+
+def ensure_remote_registration_usable(
+    registration: RemoteRegistration,
+    *,
+    registry_path: Path,
+) -> None:
+    status = remote_registration_status(registration)
+    if status == "active":
+        return
+    if status == "revoked":
+        raise BridgeCommandError(
+            category="permission_denied",
+            error_code="bridge_remote_provider_revoked",
+            message=f"registered remote bridge provider is revoked: {registration.provider_ref}",
+            retryable=False,
+            details={
+                "provider_ref": registration.provider_ref,
+                "registration_status": status,
+                "revoked_at": registration.revoked_at,
+                "revocation_reason": registration.revocation_reason,
+                "remote_registry": str(registry_path),
+            },
+        )
+    raise BridgeCommandError(
+        category="precondition_failed",
+        error_code="bridge_remote_provider_stale",
+        message=f"registered remote bridge provider is not active: {registration.provider_ref}",
+        retryable=False,
+        details={
+            "provider_ref": registration.provider_ref,
+            "registration_status": status,
+            "last_heartbeat_at": registration.last_heartbeat_at,
+            "heartbeat_ttl_seconds": registration.heartbeat_ttl_seconds,
+            "remote_registry": str(registry_path),
+        },
+    )
 
 
 def resolve_remote_registration(
@@ -476,6 +868,7 @@ def resolve_remote_registration(
             },
         )
 
+    ensure_remote_registration_usable(match, registry_path=path)
     return path, match
 
 
@@ -517,6 +910,22 @@ def remote_auth_description(
         "capabilities": registration.capabilities,
         "endpoint": registration.endpoint,
         "registered_at": registration.registered_at,
+        "control_plane_provider_id": registration.control_plane_provider_id,
+        "registration_status": remote_registration_status(registration),
+        "last_heartbeat_at": registration.last_heartbeat_at,
+        "heartbeat_ttl_seconds": registration.heartbeat_ttl_seconds,
+        "revoked_at": registration.revoked_at,
+        "revocation_reason": registration.revocation_reason,
+        "attestation": (
+            registration.attestation.to_payload()
+            if registration.attestation is not None
+            else None
+        ),
+        "governance": (
+            registration.governance.to_payload()
+            if registration.governance is not None
+            else None
+        ),
         "registry_path": str(registry_path) if registry_path is not None else None,
     }
 
@@ -685,7 +1094,7 @@ def validate_endpoint(endpoint: str, trust_policy: dict[str, object]) -> dict[st
             raise BridgeCommandError(
                 category="precondition_failed",
                 error_code="bridge_allowlist_missing",
-                message="allowlist trust mode requires AIOS_MCP_BRIDGE_ALLOWLIST to contain at least one host",
+                message=f"allowlist trust mode requires {DEFAULT_ALLOWLIST_ENV} to contain at least one host",
                 retryable=False,
                 details={"target": target, "trust_policy": trust_policy},
             )
@@ -1140,6 +1549,28 @@ def handle_health(
 ) -> dict[str, object]:
     permission_manifest = load_compat_permission_manifest()
     registry_path, registrations = load_remote_registry(args)
+    summary = remote_registration_summary(registrations)
+    attestation_modes = sorted(
+        {
+            registration.attestation.mode
+            for registration in registrations
+            if registration.attestation is not None
+        }
+    )
+    fleet_ids = sorted(
+        {
+            registration.governance.fleet_id
+            for registration in registrations
+            if registration.governance is not None
+        }
+    )
+    governance_groups = sorted(
+        {
+            registration.governance.governance_group
+            for registration in registrations
+            if registration.governance is not None
+        }
+    )
     return {
         "status": trust_policy["status"],
         "provider_id": PROVIDER_ID,
@@ -1156,6 +1587,12 @@ def handle_health(
         "registered_remote_count": len(registrations),
         "registered_remotes": [registration.to_payload() for registration in registrations],
         "remote_auth_modes": sorted({registration.auth_mode for registration in registrations}),
+        "remote_attestation_modes": attestation_modes,
+        "remote_fleet_ids": fleet_ids,
+        "remote_governance_groups": governance_groups,
+        "remote_status_counts": summary["counts"],
+        "remote_stale_provider_refs": summary["stale_provider_refs"],
+        "remote_revoked_provider_refs": summary["revoked_provider_refs"],
         "audit_log_configured": audit_log is not None,
         "audit_log_path": str(audit_log) if audit_log is not None else None,
         "shared_audit_log_configured": policy_context.shared_audit_log is not None,
@@ -1174,6 +1611,7 @@ def handle_health(
             "Supports bounded HTTP/HTTPS POST bridging",
             "Structured compat-mcp-bridge-v1 success/error payloads are enabled",
             "Centralized policy/token verification is enabled when policyd_socket + execution_token are supplied",
+            "Registered remote bridge workers can be promoted through attested control-plane descriptors",
             f"registered_remotes={len(registrations)}",
             *[str(note) for note in trust_policy.get("notes", [])],
         ],
@@ -1297,9 +1735,8 @@ def handle_forward(
 
 
 def handle_register_remote(args: argparse.Namespace) -> dict[str, object]:
-    _, existing = load_remote_registry(args)
     endpoint_details = validate_endpoint(args.endpoint, resolve_trust_policy())
-    capabilities = [capability for capability in args.capabilities if capability in DECLARED_CAPABILITIES]
+    capabilities = sorted({capability for capability in args.capabilities if capability in DECLARED_CAPABILITIES})
     if len(capabilities) != len(args.capabilities):
         raise BridgeCommandError(
             category="invalid_request",
@@ -1318,31 +1755,238 @@ def handle_register_remote(args: argparse.Namespace) -> dict[str, object]:
         target_hash=remote_target_hash(args.endpoint),
         registered_at=utc_now(),
         display_name=args.display_name,
+        registration_status="active",
+        last_heartbeat_at=utc_now(),
+        heartbeat_ttl_seconds=args.heartbeat_ttl_seconds,
+        attestation=bridge_remote_attestation(args),
+        governance=bridge_remote_governance(args),
     )
-    filtered = [item for item in existing if item.provider_ref != registration.provider_ref]
-    filtered.append(registration)
-    filtered.sort(key=lambda item: item.provider_ref)
-    path = resolve_remote_registry_path(args)
-    write_remote_registry(path, filtered)
+    path, existing = load_remote_registry(args)
+    updated = upsert_remote_registration(existing, registration)
+    write_remote_registry(path, updated)
     return {
         "provider_id": PROVIDER_ID,
         "status": "ok",
         "command": "register-remote",
         "remote_registry_path": str(path),
-        "registered_remote_count": len(filtered),
+        "registered_remote_count": len(updated),
         "registration": registration.to_payload(),
         "endpoint": endpoint_details,
     }
 
 
+def handle_heartbeat_remote(args: argparse.Namespace) -> dict[str, object]:
+    path, registrations = load_remote_registry(args)
+    index, registration = find_remote_registration(registrations, provider_ref=args.provider_ref)
+    if index is None or registration is None:
+        raise BridgeCommandError(
+            category="precondition_failed",
+            error_code="bridge_remote_provider_not_registered",
+            message=f"remote provider is not registered: {args.provider_ref}",
+            retryable=False,
+            details={"remote_registry": str(path)},
+        )
+    updated_registration = touch_remote_registration(registration, timestamp=args.heartbeat_at)
+    updated = list(registrations)
+    updated[index] = updated_registration
+    write_remote_registry(path, updated)
+    return {
+        "provider_id": PROVIDER_ID,
+        "status": "ok",
+        "command": "heartbeat-remote",
+        "remote_registry_path": str(path),
+        "registered_remote_count": len(updated),
+        "registration": updated_registration.to_payload(),
+    }
+
+
+def handle_revoke_remote(args: argparse.Namespace) -> dict[str, object]:
+    path, registrations = load_remote_registry(args)
+    index, registration = find_remote_registration(registrations, provider_ref=args.provider_ref)
+    if index is None or registration is None:
+        raise BridgeCommandError(
+            category="precondition_failed",
+            error_code="bridge_remote_provider_not_registered",
+            message=f"remote provider is not registered: {args.provider_ref}",
+            retryable=False,
+            details={"remote_registry": str(path)},
+        )
+    updated_registration = revoke_remote_registration(
+        registration,
+        reason=args.reason,
+        timestamp=args.revoked_at,
+    )
+    updated = list(registrations)
+    updated[index] = updated_registration
+    write_remote_registry(path, updated)
+    return {
+        "provider_id": PROVIDER_ID,
+        "status": "ok",
+        "command": "revoke-remote",
+        "remote_registry_path": str(path),
+        "registered_remote_count": len(updated),
+        "registration": updated_registration.to_payload(),
+    }
+
+
+def handle_unregister_remote(args: argparse.Namespace) -> dict[str, object]:
+    path, registrations = load_remote_registry(args)
+    updated, removed = remove_remote_registration(registrations, provider_ref=args.provider_ref)
+    if removed is None:
+        raise BridgeCommandError(
+            category="precondition_failed",
+            error_code="bridge_remote_provider_not_registered",
+            message=f"remote provider is not registered: {args.provider_ref}",
+            retryable=False,
+            details={"remote_registry": str(path)},
+        )
+    write_remote_registry(path, updated)
+    return {
+        "provider_id": PROVIDER_ID,
+        "status": "ok",
+        "command": "unregister-remote",
+        "remote_registry_path": str(path),
+        "registered_remote_count": len(updated),
+        "unregistered": True,
+        "registration": removed.to_payload(),
+    }
+
+
+def build_control_plane_descriptor(
+    registration: RemoteRegistration,
+    *,
+    provider_id: str,
+    display_name: str | None,
+) -> dict[str, object]:
+    descriptor = json.loads(Path(resolve_descriptor_path()).read_text(encoding="utf-8"))
+    descriptor["provider_id"] = provider_id
+    descriptor["display_name"] = display_name or registration.display_name or registration.provider_ref
+    descriptor["execution_location"] = "attested_remote"
+    descriptor["trust_policy_modes"] = sorted({"registered-remote", registration.auth_mode})
+    descriptor["degradation_policy"] = "fallback-to-local-mcp-bridge"
+    descriptor["audit_tags"] = sorted({*descriptor.get("audit_tags", []), "remote"})
+    descriptor["supported_targets"] = sorted({*descriptor.get("supported_targets", []), "registered-remote"})
+    descriptor["capabilities"] = [
+        capability
+        for capability in descriptor.get("capabilities", [])
+        if isinstance(capability, dict)
+        and capability.get("capability_id") in registration.capabilities
+    ]
+    compat_manifest = descriptor.get("compat_permission_manifest") or {}
+    if isinstance(compat_manifest, dict):
+        compat_manifest["provider_id"] = provider_id
+        compat_manifest["execution_location"] = "attested_remote"
+        compat_manifest["capabilities"] = [
+            capability
+            for capability in compat_manifest.get("capabilities", [])
+            if isinstance(capability, dict)
+            and capability.get("capability_id") in registration.capabilities
+        ]
+        descriptor["compat_permission_manifest"] = compat_manifest
+    descriptor["remote_registration"] = {
+        "source_provider_id": PROVIDER_ID,
+        "provider_ref": registration.provider_ref,
+        "endpoint": registration.endpoint,
+        "auth_mode": registration.auth_mode,
+        "auth_header_name": registration.auth_header_name,
+        "auth_secret_env": registration.auth_secret_env,
+        "target_hash": registration.target_hash,
+        "capabilities": registration.capabilities,
+        "registered_at": registration.registered_at,
+        "display_name": registration.display_name,
+        "control_plane_provider_id": provider_id,
+        "registration_status": remote_registration_status(registration),
+        "last_heartbeat_at": registration.last_heartbeat_at,
+        "heartbeat_ttl_seconds": registration.heartbeat_ttl_seconds,
+        "revoked_at": registration.revoked_at,
+        "revocation_reason": registration.revocation_reason,
+        "attestation": (
+            registration.attestation.to_payload()
+            if registration.attestation is not None
+            else None
+        ),
+        "governance": (
+            registration.governance.to_payload()
+            if registration.governance is not None
+            else None
+        ),
+    }
+    return descriptor
+
+
+def handle_register_control_plane(args: argparse.Namespace) -> dict[str, object]:
+    registry_path, registrations = load_remote_registry(args)
+    registration = next(
+        (item for item in registrations if item.provider_ref == args.provider_ref),
+        None,
+    )
+    if registration is None:
+        raise BridgeCommandError(
+            category="precondition_failed",
+            error_code="bridge_remote_provider_not_registered",
+            message=f"remote provider is not registered: {args.provider_ref}",
+            retryable=False,
+            details={"remote_registry": str(registry_path)},
+        )
+    ensure_remote_registration_usable(registration, registry_path=registry_path)
+    provider_id = args.provider_id or normalize_remote_provider_id(
+        "compat.mcp.remote",
+        registration.provider_ref,
+    )
+    descriptor = build_control_plane_descriptor(
+        registration,
+        provider_id=provider_id,
+        display_name=args.display_name,
+    )
+    try:
+        record = agentd_rpc(
+            agentd_socket_path(args.agentd_socket),
+            PROVIDER_REGISTER_METHOD,
+            {"descriptor": descriptor},
+            error_prefix="bridge",
+        )
+    except Exception as exc:
+        if isinstance(exc, BridgeCommandError):
+            raise
+        if hasattr(exc, "category") and hasattr(exc, "error_code") and hasattr(exc, "message"):
+            raise BridgeCommandError(
+                category=exc.category,
+                error_code=exc.error_code,
+                message=exc.message,
+                retryable=getattr(exc, "retryable", False),
+                details=getattr(exc, "details", {}) or {},
+            ) from exc
+        raise
+    updated_registrations = [
+        replace(
+            item,
+            control_plane_provider_id=(provider_id if item.provider_ref == registration.provider_ref else item.control_plane_provider_id),
+        )
+        for item in registrations
+    ]
+    write_remote_registry(registry_path, updated_registrations)
+    return {
+        "provider_id": PROVIDER_ID,
+        "status": "ok",
+        "command": "register-control-plane",
+        "remote_registry_path": str(registry_path),
+        "registered_remote_count": len(updated_registrations),
+        "control_plane_provider_id": provider_id,
+        "descriptor": descriptor,
+        "record": record,
+    }
+
+
 def handle_list_remotes(args: argparse.Namespace) -> dict[str, object]:
     path, registrations = load_remote_registry(args)
+    summary = remote_registration_summary(registrations)
     return {
         "provider_id": PROVIDER_ID,
         "status": "ok",
         "command": "list-remotes",
         "remote_registry_path": str(path),
         "registered_remote_count": len(registrations),
+        "remote_status_counts": summary["counts"],
         "registered_remotes": [registration.to_payload() for registration in registrations],
     }
 
@@ -1372,6 +2016,14 @@ def main() -> int:
             payload = load_compat_permission_manifest()
         elif args.command == "register-remote":
             payload = handle_register_remote(args)
+        elif args.command == "heartbeat-remote":
+            payload = handle_heartbeat_remote(args)
+        elif args.command == "revoke-remote":
+            payload = handle_revoke_remote(args)
+        elif args.command == "unregister-remote":
+            payload = handle_unregister_remote(args)
+        elif args.command == "register-control-plane":
+            payload = handle_register_control_plane(args)
         elif args.command == "list-remotes":
             payload = handle_list_remotes(args)
         elif args.command == "call":

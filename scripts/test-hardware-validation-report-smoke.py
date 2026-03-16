@@ -4,10 +4,26 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-import tempfile
+import uuid
 from pathlib import Path
 
+from jsonschema import Draft202012Validator
+
 ROOT = Path(__file__).resolve().parent.parent
+TEMP_ROOT_DIR = ROOT / "out" / "tmp"
+
+
+def build_validator(path: Path) -> Draft202012Validator:
+    schema = json.loads(path.read_text())
+    Draft202012Validator.check_schema(schema)
+    return Draft202012Validator(schema, format_checker=Draft202012Validator.FORMAT_CHECKER)
+
+
+def make_temp_dir(prefix: str) -> Path:
+    TEMP_ROOT_DIR.mkdir(parents=True, exist_ok=True)
+    path = TEMP_ROOT_DIR / f"{prefix}{uuid.uuid4().hex}"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def require(condition: bool, message: str) -> None:
@@ -16,13 +32,18 @@ def require(condition: bool, message: str) -> None:
 
 
 def main() -> int:
-    temp_root = Path(tempfile.mkdtemp(prefix="aios-hardware-validation-report-"))
+    evidence_index_validator = build_validator(
+        ROOT / "aios" / "hardware" / "schemas" / "hardware-validation-evidence-index.schema.json"
+    )
+
+    temp_root = make_temp_dir("aios-hardware-validation-report-")
     profile_path = temp_root / "tier1-profile.yaml"
     evaluator_path = temp_root / "evaluator.json"
     report_out = temp_root / "hardware-validation-report.md"
     evidence_index_out = temp_root / "hardware-validation-evidence.json"
     support_matrix_path = temp_root / "support-matrix.md"
     known_limitations_path = temp_root / "known-limitations.md"
+    vendor_runtime_evidence = temp_root / "vendor-runtime-evidence.json"
 
     profile_path.write_text(
         "\n".join(
@@ -36,6 +57,79 @@ def main() -> int:
     )
     support_matrix_path.write_text("# Support Matrix\n\n- GPU: optional\n")
     known_limitations_path.write_text("# Known Limitations\n\n- Hardware evidence pending\n")
+    backend_evidence_dir = temp_root / "backend-evidence"
+    backend_evidence_dir.mkdir(parents=True, exist_ok=True)
+    screen_evidence = backend_evidence_dir / "screen-backend-evidence.json"
+    screen_evidence.write_text(
+        json.dumps(
+            {
+                "modality": "screen",
+                "release_grade_backend_id": "xdg-desktop-portal-screencast",
+                "release_grade_backend_origin": "os-native",
+                "release_grade_backend_stack": "portal+pipewire",
+                "release_grade_contract_kind": "release-grade-runtime-helper",
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
+        + "\n"
+    )
+    audio_evidence = backend_evidence_dir / "audio-backend-evidence.json"
+    audio_evidence.write_text(
+        json.dumps(
+            {
+                "modality": "audio",
+                "release_grade_backend_id": "pipewire",
+                "release_grade_backend_origin": "os-native",
+                "release_grade_backend_stack": "pipewire",
+                "contract_kind": "release-grade-runtime-helper",
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
+        + "\n"
+    )
+    backend_state_path = temp_root / "backend-state.json"
+    vendor_runtime_evidence.write_text(
+        json.dumps(
+            {
+                "backend_id": "local-gpu",
+                "provider_id": "nvidia.jetson.tensorrt",
+                "provider_kind": "trtexec",
+                "provider_status": "available",
+                "runtime_service_id": "aios-runtimed.jetson-vendor-helper",
+                "contract_kind": "vendor-runtime-evidence-v1",
+                "engine_path": "/var/lib/aios/runtime/vendor-engines/local-gpu.plan",
+                "runtime_binary": "/usr/bin/trtexec",
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
+        + "\n"
+    )
+    backend_state_path.write_text(
+        json.dumps(
+            {
+                "notes": [
+                    f"backend_evidence_artifact[screen]={screen_evidence}",
+                    f"backend_evidence_artifact[audio]={audio_evidence}",
+                ],
+                "statuses": [
+                    {
+                        "modality": "screen",
+                        "details": [f"evidence_artifact={screen_evidence}"],
+                    },
+                    {
+                        "modality": "audio",
+                        "details": [f"evidence_artifact={audio_evidence}"],
+                    },
+                ],
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
+        + "\n"
+    )
     evaluator_path.write_text(
         json.dumps(
             {
@@ -100,6 +194,24 @@ def main() -> int:
             str(support_matrix_path),
             "--known-limitations",
             str(known_limitations_path),
+            "--deviced-health",
+            "ready",
+            "--device-backend-overall-status",
+            "ready",
+            "--device-backend-available-count",
+            "5",
+            "--device-ui-tree-support",
+            "native-live",
+            "--device-metadata-status",
+            "ready",
+            "--device-metadata-backend-status",
+            "ready",
+            "--device-available-modalities",
+            "audio,camera,input,screen,ui_tree",
+            "--device-backend-state-artifact",
+            str(backend_state_path),
+            "--vendor-runtime-evidence",
+            str(vendor_runtime_evidence),
             "--photo",
             "photo-1.jpg",
             "--note",
@@ -123,14 +235,66 @@ def main() -> int:
     require("- Validation status: passed" in report_text, "report validation status mismatch")
     require(f"- Support matrix: {support_matrix_path}" in report_text, "report support matrix mismatch")
     require(f"- Known limitations: {known_limitations_path}" in report_text, "report known limitations mismatch")
+    require("## Device And Multimodal Validation" in report_text, "report device validation section missing")
+    require("- deviced health: ready" in report_text, "report deviced health mismatch")
+    require("- device.state.get overall backend status: ready" in report_text, "report device backend overall status mismatch")
+    require("- device.state.get available backend count: 5" in report_text, "report device backend count mismatch")
+    require("- device.state.get ui_tree current support: native-live" in report_text, "report device ui_tree support mismatch")
+    require("- device.metadata.get readiness status: ready" in report_text, "report device metadata status mismatch")
+    require("- device.metadata.get backend overall status: ready" in report_text, "report device metadata backend status mismatch")
+    require(
+        "- device.metadata.get available modalities: audio,camera,input,screen,ui_tree" in report_text,
+        "report device metadata modalities mismatch",
+    )
+    require(
+        "- release-grade backend ids: pipewire,xdg-desktop-portal-screencast" in report_text,
+        "report release-grade backend ids mismatch",
+    )
+    require(
+        "- release-grade backend origins: os-native" in report_text,
+        "report release-grade backend origins mismatch",
+    )
+    require(
+        "- release-grade backend stacks: pipewire,portal+pipewire" in report_text,
+        "report release-grade backend stacks mismatch",
+    )
+    require(
+        "- release-grade contract kinds: release-grade-runtime-helper" in report_text,
+        "report release-grade contract kinds mismatch",
+    )
+    require(
+        f"- backend-state artifact attached: {backend_state_path}" in report_text,
+        "report backend-state artifact mismatch",
+    )
+    require(
+        "- vendor runtime sign-off status: evidence-attached" in report_text,
+        "report vendor runtime sign-off status mismatch",
+    )
+    require(
+        "- vendor runtime provider ids: nvidia.jetson.tensorrt" in report_text,
+        "report vendor runtime provider ids mismatch",
+    )
+    require(
+        "- vendor runtime service ids: aios-runtimed.jetson-vendor-helper" in report_text,
+        "report vendor runtime service ids mismatch",
+    )
+    require(
+        f"- vendor runtime evidence attached: {vendor_runtime_evidence}" in report_text,
+        "report vendor runtime evidence path mismatch",
+    )
 
     evidence_index = json.loads(evidence_index_out.read_text())
+    evidence_index_validator.validate(evidence_index)
     require(evidence_index["platform_id"] == "generic-x86_64-uefi", "evidence index platform mismatch")
     require(evidence_index["validation_status"] == "passed", "evidence index status mismatch")
     require(evidence_index["summary"]["final_current_slot"] == "b", "evidence index final current slot mismatch")
     require(evidence_index["artifacts"]["photos"] == ["photo-1.jpg"], "evidence index photos mismatch")
     require(evidence_index["artifacts"]["support_matrix"] == str(support_matrix_path), "evidence index support matrix mismatch")
     require(evidence_index["artifacts"]["known_limitations"] == str(known_limitations_path), "evidence index known limitations mismatch")
+    require(evidence_index["artifacts"]["device_backend_state_artifact"] == str(backend_state_path), "evidence index backend-state artifact mismatch")
+    require(evidence_index["artifacts"]["vendor_runtime_evidence"] == [str(vendor_runtime_evidence)], "evidence index vendor runtime evidence mismatch")
+    require(evidence_index["device_runtime"]["vendor_runtime"]["vendor_runtime_signoff_status"] == "evidence-attached", "evidence index vendor runtime signoff mismatch")
+    require(evidence_index["device_runtime"]["vendor_runtime"]["provider_ids"] == ["nvidia.jetson.tensorrt"], "evidence index vendor runtime provider ids mismatch")
     require(evidence_index["operator"] == "codex", "evidence index operator mismatch")
     print(json.dumps({"report_out": str(report_out), "evidence_index_out": str(evidence_index_out)}, indent=2))
     return 0

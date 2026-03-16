@@ -216,3 +216,4 @@ def summarize_action_result(component: str, action: dict[str, Any], result: dict
 
 def process_error_text(error: subprocess.CalledProcessError) -> str:
     return error.stderr.strip() or error.stdout.strip() or str(error)
+

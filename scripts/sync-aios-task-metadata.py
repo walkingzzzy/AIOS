@@ -67,7 +67,7 @@ def phase_metadata(section_title: str) -> tuple[str, str]:
 
 
 def parse_master_doc(path: Path) -> tuple[list[dict[str, Any]], list[str]]:
-    lines = path.read_text().splitlines()
+    lines = path.read_text(encoding="utf-8").splitlines()
     current_section = ""
     current_section_number = ""
     in_task_table = False
@@ -153,7 +153,7 @@ def parse_markdown_table(lines: list[str], start_index: int) -> tuple[list[dict[
 
 
 def parse_board_doc(path: Path, known_task_ids: set[str]) -> tuple[dict[str, Any], list[str]]:
-    lines = path.read_text().splitlines()
+    lines = path.read_text(encoding="utf-8").splitlines()
     current_section = ""
     current_section_number = ""
     current_subsection = ""
@@ -331,9 +331,9 @@ def build_board_payload(board: dict[str, Any]) -> dict[str, Any]:
 
 def write_or_check(path: Path, content: str, check_only: bool) -> bool:
     if check_only:
-        return path.exists() and path.read_text() == content
+        return path.exists() and path.read_text(encoding="utf-8") == content
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content)
+    path.write_text(content, encoding="utf-8")
     return True
 
 

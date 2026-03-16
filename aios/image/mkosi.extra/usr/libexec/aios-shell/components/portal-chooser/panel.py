@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from prototype import default_sessiond_socket, handle_kind_summary, load_handles
+from prototype import default_agent_socket, default_sessiond_socket, handle_kind_summary, load_payload
 
 
 STATUS_TONES = {
@@ -78,7 +78,49 @@ def handle_scope(handle: dict[str, Any]) -> dict[str, Any]:
     return scope if isinstance(scope, dict) else {}
 
 
+def load_mock_rpc_transport(socket_path: Path) -> dict[str, Any] | None:
+    if not socket_path.exists() or not socket_path.is_file():
+        return None
+    try:
+        payload = json.loads(socket_path.read_text() or "{}")
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("transport") != "mock-file":
+        return None
+    return payload
+
+
 def rpc_call(socket_path: Path, method: str, params: dict[str, Any]) -> dict[str, Any]:
+    mock_transport = load_mock_rpc_transport(socket_path)
+    if mock_transport is not None:
+        service_kind = str(mock_transport.get("service_kind") or "")
+        service_id = str(mock_transport.get("service_id") or socket_path.stem or "mock-deviced")
+        if service_kind == "device-capture" and method == DEVICE_CAPTURE_REQUEST:
+            capture_id = str(mock_transport.get("capture_id") or f"{service_id}-capture")
+            return {
+                "capture": {
+                    "capture_id": capture_id,
+                    "modality": params.get("modality", "screen"),
+                    "status": str(mock_transport.get("capture_status") or "capturing"),
+                    "continuous": bool(params.get("continuous")),
+                    "session_id": params.get("session_id"),
+                    "task_id": params.get("task_id"),
+                    "window_ref": params.get("window_ref"),
+                    "source_device": params.get("source_device"),
+                },
+                "preview_object": {
+                    "kind": "screen_frame",
+                    "capture_id": capture_id,
+                    "source": service_id,
+                },
+            }
+        raise RuntimeError(f"unsupported mock rpc method: {method}")
+
+    if not hasattr(socket, "AF_UNIX"):
+        raise RuntimeError(f"unix-domain-socket-unavailable:{socket_path}")
+
     payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
         client.connect(str(socket_path))
@@ -518,12 +560,16 @@ def chooser_fixture_request(fixture: Path | None) -> dict[str, Any]:
 
 def list_handles_with_request(
     socket_path: Path,
+    agent_socket_path: Path | None,
     session_id: str | None,
     fixture: Path | None,
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    handles = load_handles(socket_path, session_id, fixture)
-    request = normalize_request(chooser_fixture_request(fixture), handles, session_id)
-    return handles, request
+) -> tuple[list[dict[str, Any]], dict[str, Any], str | None]:
+    payload = load_payload(socket_path, agent_socket_path, session_id, fixture)
+    handles = payload.get("handles", []) if isinstance(payload.get("handles"), list) else []
+    raw_request = payload.get("request") or chooser_fixture_request(fixture)
+    request = normalize_request(raw_request, handles, session_id)
+    data_source_error = request.get("source_error") if isinstance(request.get("source_error"), str) else None
+    return handles, request, data_source_error
 
 
 def handle_item_status(
@@ -849,7 +895,7 @@ def history_section_items(request: dict[str, Any]) -> list[dict[str, Any]]:
     return items
 
 
-def build_model(handles: list[dict[str, Any]], session_id: str | None, request: dict[str, Any] | None = None) -> dict[str, Any]:
+def build_model(handles: list[dict[str, Any]], session_id: str | None, request: dict[str, Any] | None = None, data_source_error: str | None = None) -> dict[str, Any]:
     request = normalize_request(request, handles, session_id)
     summary = handle_kind_summary(handles)
     selected_handle = find_handle(handles, request.get("selected_handle_id"))
@@ -992,7 +1038,7 @@ def build_model(handles: list[dict[str, Any]], session_id: str | None, request: 
     return {
         "component_id": "portal-chooser",
         "panel_id": "portal-chooser-panel",
-        "panel_kind": "shell-panel-skeleton",
+        "panel_kind": "shell-panel",
         "header": {
             "title": request.get("title", "Portal Chooser"),
             "subtitle": request.get("subtitle", f"{len(handles)} handles bound to session"),
@@ -1064,6 +1110,8 @@ def build_model(handles: list[dict[str, Any]], session_id: str | None, request: 
             "capture_provider_id": request.get("capture_provider_id"),
             "audit_tag_count": len(request.get("audit_tags", [])) if isinstance(request.get("audit_tags"), list) else 0,
             "history_count": len(request.get("history", [])) if isinstance(request.get("history"), list) else 0,
+            "data_source_status": "ready" if data_source_error is None else ("partial" if handles else "fallback-empty"),
+            "data_source_error": data_source_error,
         },
     }
 
@@ -1073,6 +1121,11 @@ def render_text(panel: dict[str, Any]) -> str:
     header = panel["header"]
     lines.append(f"{header['title']} [{header['status']}]")
     lines.append(header["subtitle"])
+    meta = panel.get("meta") or {}
+    if meta.get("data_source_status") != "ready":
+        lines.append(f"source: {meta.get('data_source_status')}")
+        if meta.get("data_source_error"):
+            lines.append(f"source_error: {meta['data_source_error']}")
     lines.append("actions: " + ", ".join(action["label"] for action in panel["actions"] if action.get("enabled", False)))
     for section in panel["sections"]:
         lines.append(f"[{section['title']}]")
@@ -1184,6 +1237,7 @@ def action_result(
         "capture": (request or {}).get("capture"),
         "preview_object": (request or {}).get("preview_object"),
         "history_count": len((request or {}).get("history", [])) if isinstance((request or {}).get("history"), list) else 0,
+        "data_source_error": (request or {}).get("source_error"),
     }
 
 
@@ -1210,6 +1264,7 @@ def handle_failure_payload(candidate: dict[str, Any] | None) -> tuple[str, str |
 
 def perform_action(
     socket_path: Path,
+    agent_socket_path: Path | None,
     session_id: str | None,
     fixture: Path | None,
     action: str,
@@ -1222,7 +1277,9 @@ def perform_action(
     deviced_socket: Path = DEFAULT_DEVICED_SOCKET,
     screen_provider_socket: Path = DEFAULT_SCREEN_CAPTURE_PROVIDER_SOCKET,
 ) -> dict[str, Any]:
-    handles, request = list_handles_with_request(socket_path, session_id, fixture)
+    handles, request, data_source_error = list_handles_with_request(socket_path, agent_socket_path, session_id, fixture)
+    if data_source_error and request.get("error_message") in (None, ""):
+        request["error_message"] = data_source_error
     focus_handle = choose_focus_handle(handles, request)
     selected_handle = find_handle(handles, request.get("selected_handle_id"))
     confirmed_handle = find_handle(handles, request.get("confirmed_handle_id"))
@@ -1574,9 +1631,10 @@ def perform_action(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="AIOS portal chooser panel skeleton")
+    parser = argparse.ArgumentParser(description="AIOS portal chooser panel")
     parser.add_argument("command", nargs="?", default="render", choices=["render", "model", "action", "watch"])
     parser.add_argument("--socket", type=Path, default=default_sessiond_socket())
+    parser.add_argument("--agent-socket", type=Path, default=default_agent_socket())
     parser.add_argument("--session-id")
     parser.add_argument("--task-id")
     parser.add_argument("--user-id", default="local-user")
@@ -1598,20 +1656,21 @@ def main() -> int:
 
     if args.command == "watch":
         for index in range(max(1, args.iterations)):
-            handles, request = list_handles_with_request(args.socket, args.session_id, args.handle_fixture)
-            model = build_model(handles, args.session_id, request)
+            handles, request, data_source_error = list_handles_with_request(args.socket, args.agent_socket, args.session_id, args.handle_fixture)
+            model = build_model(handles, args.session_id, request, data_source_error)
             print(json.dumps(model, indent=2, ensure_ascii=False) if args.json else render_text(model))
             if index + 1 < args.iterations:
                 time.sleep(args.interval)
         return 0
 
-    handles, request = list_handles_with_request(args.socket, args.session_id, args.handle_fixture)
-    model = build_model(handles, args.session_id, request)
+    handles, request, data_source_error = list_handles_with_request(args.socket, args.agent_socket, args.session_id, args.handle_fixture)
+    model = build_model(handles, args.session_id, request, data_source_error)
     if args.command == "action":
         if not args.action:
             raise SystemExit("--action is required for action")
         result = perform_action(
             args.socket,
+            args.agent_socket,
             args.session_id,
             args.handle_fixture,
             args.action,
@@ -1635,3 +1694,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+

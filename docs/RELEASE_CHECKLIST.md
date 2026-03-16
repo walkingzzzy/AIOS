@@ -97,6 +97,7 @@ python3 scripts/run-aios-ci-local.py --stage full --output-prefix out/validation
 - `python3 scripts/build-audit-evidence-report.py ...`
 - `python3 scripts/test-audit-evidence-export-smoke.py --bin-dir aios/target/debug`
 - `python3 scripts/test-cross-service-health-smoke.py --bin-dir aios/target/debug --delivery-manifest out/aios-system-delivery/manifest.json`
+- `python3 scripts/test-release-gate-smoke.py`
 
 升级/恢复交付与实机取证流程统一见：
 
@@ -164,6 +165,7 @@ python3 scripts/run-aios-ci-local.py --stage full --output-prefix out/validation
 - `validate` 阶段现也会跑 observability correlation smoke，验证 `sessiond` / `policyd` / `runtimed` 证据能 stitch 成统一报告
 - `validate` 阶段现也会跑 audit evidence export smoke，验证 control-plane approval / token / runtime / observability / audit-store 证据，以及 `updated` apply / rollback / recovery retained evidence，能导出为 operator-facing report
 - `validate` 阶段现会构建默认 `Tier 1 hardware evidence` baseline，生成 `out/validation/tier1-hardware-evidence-index.json` 供 release gate 默认消费
+- `validate` 阶段现也会跑 `release gate vendor runtime smoke`，固定验证 synthetic baseline 只告警、real-machine `vendor_runtime_signoff_status=evidence-attached` 可通过，而 attached metadata 不闭合会直接阻断 gate
 - `validate` 阶段现会额外产出 `ci-artifact-governance-report`，冻结 artifact 命名、上传目录、下载复用、失败保留与 retention 规则
 - `validate` / `system-validation` 阶段现会产出 `cross-service-health-report`，用于卡口 control plane / device / update / shell provider / compat / delivery 证据是否断链
 - `system-validation` 阶段现会先下载 `validate` artifact，再生成 `governance-evidence-index`，把 validation matrix、artifact governance、cross-service exporter、system delivery suite 与 release-governance 证据统一收口
@@ -174,3 +176,4 @@ python3 scripts/check-release-gate.py --hardware-evidence-index <path>
 ```
 
 - 默认 baseline 只解决 machine-readable blocking gate，不替代真实 nominated machine 的 install / rollback / recovery sign-off
+- release gate 现会显式输出 `hardware-vendor-runtime-signoff` 检查；synthetic baseline 只会给出 warning，真实实机 sign-off 若声明 `evidence-attached` 但缺少 provider/runtime/evidence 元数据则会判为 blocking failure

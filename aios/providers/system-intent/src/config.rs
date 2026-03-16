@@ -33,10 +33,10 @@ impl Config {
         let descriptor_path = std::env::var_os("AIOS_SYSTEM_INTENT_PROVIDER_DESCRIPTOR_PATH")
             .map(PathBuf::from)
             .unwrap_or_else(default_descriptor_path);
-        let observability_log_path = env_path_or(
-            "AIOS_SYSTEM_INTENT_PROVIDER_OBSERVABILITY_LOG",
-            || paths.state_dir.join("observability.jsonl"),
-        );
+        let observability_log_path =
+            env_path_or("AIOS_SYSTEM_INTENT_PROVIDER_OBSERVABILITY_LOG", || {
+                paths.state_dir.join("observability.jsonl")
+            });
         let max_concurrency = std::env::var("AIOS_SYSTEM_INTENT_PROVIDER_MAX_CONCURRENCY")
             .ok()
             .and_then(|value| value.parse::<u32>().ok())

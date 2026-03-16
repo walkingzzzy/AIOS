@@ -49,6 +49,10 @@ def default_policy_socket() -> Path:
     return Path(os.environ.get("AIOS_POLICYD_SOCKET_PATH", "/run/aios/policyd/policyd.sock"))
 
 
+def default_agent_socket() -> Path:
+    return Path(os.environ.get("AIOS_AGENTD_SOCKET_PATH", "/run/aios/agentd/agentd.sock"))
+
+
 def default_panel_action_log() -> Path | None:
     value = os.environ.get("AIOS_SHELL_COMPOSITOR_PANEL_ACTION_LOG_PATH")
     if not value:
@@ -163,14 +167,14 @@ def rpc_call(socket_path: Path, method: str, params: dict) -> dict:
     return response["result"]
 
 
-def list_approvals(socket_path: Path | None, fixture: Path | None) -> list[dict]:
+def list_approvals(agent_socket_path: Path | None, fixture: Path | None) -> list[dict]:
     if fixture is not None:
         payload = load_json(fixture) or {"approvals": []}
         return payload.get("approvals", [])
-    if socket_path is None:
+    if agent_socket_path is None:
         return []
     try:
-        response = rpc_call(socket_path, "approval.list", {})
+        response = rpc_call(agent_socket_path, "agent.approval.list", {})
     except Exception:
         return []
     return response.get("approvals", [])
@@ -222,6 +226,37 @@ def summarize_backend_evidence(backend_state: dict | None) -> dict:
             if isinstance(item.get("baseline"), str) and item.get("baseline")
         }
     )
+    backend_ids = sorted(
+        {
+            item.get("release_grade_backend_id")
+            for item in artifacts
+            if isinstance(item.get("release_grade_backend_id"), str)
+            and item.get("release_grade_backend_id")
+        }
+    )
+    origins = sorted(
+        {
+            item.get("release_grade_backend_origin")
+            for item in artifacts
+            if isinstance(item.get("release_grade_backend_origin"), str)
+            and item.get("release_grade_backend_origin")
+        }
+    )
+    stacks = sorted(
+        {
+            item.get("release_grade_backend_stack")
+            for item in artifacts
+            if isinstance(item.get("release_grade_backend_stack"), str)
+            and item.get("release_grade_backend_stack")
+        }
+    )
+    contract_kinds = sorted(
+        {
+            item.get("contract_kind")
+            for item in artifacts
+            if isinstance(item.get("contract_kind"), str) and item.get("contract_kind")
+        }
+    )
     summary_items = [
         {
             "modality": item.get("modality"),
@@ -230,6 +265,10 @@ def summarize_backend_evidence(backend_state: dict | None) -> dict:
             "baseline": item.get("baseline"),
             "execution_path": item.get("execution_path"),
             "source": item.get("source"),
+            "release_grade_backend_id": item.get("release_grade_backend_id"),
+            "release_grade_backend_origin": item.get("release_grade_backend_origin"),
+            "release_grade_backend_stack": item.get("release_grade_backend_stack"),
+            "contract_kind": item.get("contract_kind"),
         }
         for item in artifacts[:6]
     ]
@@ -238,6 +277,10 @@ def summarize_backend_evidence(backend_state: dict | None) -> dict:
         "present_count": sum(1 for item in artifacts if item.get("artifact_present")),
         "missing_count": sum(1 for item in artifacts if not item.get("artifact_present")),
         "baselines": baselines,
+        "backend_ids": backend_ids,
+        "origins": origins,
+        "stacks": stacks,
+        "contract_kinds": contract_kinds,
         "evidence_dir": evidence_dir,
         "artifacts": summary_items,
     }
@@ -544,21 +587,30 @@ def build_notifications(
         adapter_map = {
             item.get("modality"): item for item in backend_state.get("adapters", []) if item.get("modality")
         }
+        evidence_map = {
+            item.get("modality"): item
+            for item in backend_state.get("evidence_artifacts", [])
+            if item.get("modality")
+        }
         for status in backend_state.get("statuses", []):
             if not include_backend_status(status):
                 continue
             modality = status.get("modality", "unknown")
             adapter = adapter_map.get(modality)
+            evidence = evidence_map.get(modality)
             adapter_detail = ""
             if adapter is not None:
                 adapter_detail = f" adapter={adapter.get('adapter_id')} path={adapter.get('execution_path')}"
+            release_grade_detail = ""
+            if isinstance(evidence, dict) and evidence.get("release_grade_backend_id"):
+                release_grade_detail = f" release_grade={evidence.get('release_grade_backend_id')}"
             notifications.append(
                 {
                     "source": "deviced",
                     "severity": severity_for_backend(status),
                     "kind": "backend-status",
                     "title": f"Backend attention: {modality} is {status.get('readiness')}",
-                    "detail": f"backend={status.get('backend')}{adapter_detail}",
+                    "detail": f"backend={status.get('backend')}{release_grade_detail}{adapter_detail}",
                 }
             )
 
@@ -632,6 +684,7 @@ if __name__ == "__main__":
     parser.add_argument("--backend-state", type=Path, default=default_backend_state())
     parser.add_argument("--deviced-socket", type=Path, default=default_deviced_socket())
     parser.add_argument("--policy-socket", type=Path, default=default_policy_socket())
+    parser.add_argument("--agent-socket", type=Path, default=default_agent_socket())
     parser.add_argument("--panel-action-log", type=Path, default=default_panel_action_log())
     parser.add_argument("--policy-audit-log", type=Path, default=default_policy_audit_log())
     parser.add_argument("--runtime-events-log", type=Path, default=default_runtime_events_log())
@@ -645,7 +698,7 @@ if __name__ == "__main__":
     indicator_state = load_json(args.indicator_state)
     backend_state = load_backend_state(args.backend_state, args.deviced_socket)
     panel_action_events = load_panel_action_events(args.panel_action_log)
-    approvals = list_approvals(args.policy_socket, args.approval_fixture)
+    approvals = list_approvals(args.agent_socket, args.approval_fixture)
     audit_summary = operator_audit_notifications(
         args.policy_audit_log,
         args.runtime_events_log,

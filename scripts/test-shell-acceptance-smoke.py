@@ -103,6 +103,8 @@ def main() -> int:
         recovery_surface = temp_root / "recovery-surface.json"
         indicator_state = temp_root / "indicator-state.json"
         backend_state = temp_root / "backend-state.json"
+        compositor_runtime_state = temp_root / "compositor-runtime-state.json"
+        compositor_window_state = temp_root / "compositor-window-state.json"
         panel_action_log = temp_root / "panel-action-events.jsonl"
         profile = temp_root / "formal-shell-profile.json"
         export_prefix = temp_root / "acceptance-artifacts" / "shell-acceptance"
@@ -306,6 +308,90 @@ def main() -> int:
                 "notes": ["available_backends=2"],
             },
         )
+        write_json(
+            compositor_runtime_state,
+            {
+                "phase": "ready",
+                "session": {
+                    "runtime_state_status": "published(ready)",
+                    "window_manager_status": "persistent(saved=2)",
+                    "workspace_count": 3,
+                    "active_workspace_index": 1,
+                    "active_workspace_id": "workspace-2",
+                    "active_output_id": "display-2",
+                    "managed_window_count": 2,
+                    "visible_window_count": 1,
+                    "floating_window_count": 1,
+                    "minimized_window_count": 1,
+                    "window_move_count": 4,
+                    "window_resize_count": 2,
+                    "window_minimize_count": 1,
+                    "window_restore_count": 1,
+                    "last_minimized_window_key": "window-beta",
+                    "last_restored_window_key": "window-alpha",
+                    "workspace_window_counts": {
+                        "workspace-1": 1,
+                        "workspace-2": 1,
+                    },
+                    "managed_windows": [
+                        {
+                            "window_key": "window-alpha",
+                            "title": "Docs",
+                            "app_id": "org.demo.docs",
+                            "output_id": "display-2",
+                            "workspace_id": "workspace-2",
+                            "window_policy": "workspace-window",
+                            "visible": True,
+                            "minimized": False,
+                        },
+                        {
+                            "window_key": "window-beta",
+                            "title": "Chat",
+                            "app_id": "org.demo.chat",
+                            "output_id": "display-1",
+                            "workspace_id": "workspace-2",
+                            "window_policy": "floating-utility",
+                            "visible": False,
+                            "minimized": True,
+                        },
+                    ],
+                },
+            },
+        )
+        write_json(
+            compositor_window_state,
+            {
+                "schema": "aios.shell.compositor.window-state/v1",
+                "active_workspace_index": 1,
+                "active_output_id": "display-2",
+                "windows": [
+                    {
+                        "window_key": "window-alpha",
+                        "app_id": "org.demo.docs",
+                        "title": "Docs",
+                        "slot_id": None,
+                        "output_id": "display-2",
+                        "workspace_index": 1,
+                        "window_policy": "workspace-window",
+                        "rect": {"x": 24, "y": 24, "width": 1280, "height": 720},
+                        "minimized": False,
+                        "last_seen_at_ms": 1,
+                    },
+                    {
+                        "window_key": "window-beta",
+                        "app_id": "org.demo.chat",
+                        "title": "Chat",
+                        "slot_id": None,
+                        "output_id": "display-1",
+                        "workspace_index": 1,
+                        "window_policy": "floating-utility",
+                        "rect": {"x": 128, "y": 96, "width": 960, "height": 640},
+                        "minimized": True,
+                        "last_seen_at_ms": 2,
+                    },
+                ],
+            },
+        )
         panel_action_log.write_text(
             "\n".join(
                 [
@@ -367,6 +453,8 @@ def main() -> int:
                     "manifest_path": str((ROOT / "aios/shell/compositor/Cargo.toml").resolve()),
                     "config_path": str((ROOT / "aios/shell/compositor/default-compositor.conf").resolve()),
                     "panel_action_log_path": str(panel_action_log),
+                    "runtime_state_path": str(compositor_runtime_state),
+                    "window_state_path": str(compositor_window_state),
                 },
             },
         )
@@ -399,6 +487,9 @@ def main() -> int:
             require(snapshot["session_plan"]["entrypoint"] == "formal", "shell acceptance entrypoint mismatch")
             require(snapshot["session_plan"]["session_backend"] == "compositor", "shell acceptance backend mismatch")
             require(snapshot["summary"]["active_modal_surface"] == "approval-panel", "shell acceptance active modal mismatch")
+            require(snapshot["summary"]["managed_window_count"] == 2, "shell acceptance managed window count mismatch")
+            require(snapshot["summary"]["minimized_window_count"] == 1, "shell acceptance minimized window count mismatch")
+            require(snapshot["summary"]["active_workspace_id"] == "workspace-2", "shell acceptance workspace summary mismatch")
 
             shell_desktop_gtk, shellctl = load_shell_modules()
             loaded_profile = shellctl.load_profile(profile)
@@ -410,6 +501,8 @@ def main() -> int:
                 chooser_fixture=chooser_fixture,
             )
             component_map = {surface["component"]: surface for surface in snapshot["surfaces"]}
+            require(component_map["task-surface"]["model"]["meta"]["managed_window_count"] == 2, "shell acceptance task panel window count mismatch")
+            require(component_map["notification-center"]["model"]["meta"]["compositor_minimized_window_count"] == 1, "shell acceptance notification compositor mismatch")
             launcher_meta = component_map["launcher"]["model"]["meta"]
             require(launcher_meta["restore_available"] is True, "launcher restore availability mismatch")
             require(launcher_meta["restore_target_component"] == "task-surface", "launcher restore target mismatch")
@@ -540,6 +633,19 @@ def main() -> int:
             )
             require(notification_recovery["result"]["target_component"] == "recovery-surface", "recovery route mismatch")
 
+            recovery_export = shell_desktop_gtk.dispatch_panel_action(
+                loaded_profile,
+                action_args,
+                selected_snapshot,
+                "recovery-surface",
+                next(action for action in selected_components["recovery-surface"]["model"]["actions"] if action.get("action_id") == "export-bundle"),
+            )
+            require(recovery_export["result"]["target_component"] == "recovery-surface", "recovery export route mismatch")
+            require(recovery_export["result"]["route_reason"] == "bundle-exported", "recovery export route reason mismatch")
+            require(Path(recovery_export["result"]["bundle_path"]).exists(), "recovery export bundle missing")
+            recovery_payload = json.loads(recovery_surface.read_text())
+            require(len(recovery_payload["diagnostic_bundles"]) >= 2, "recovery export bundle count mismatch")
+
             notification_device = shell_desktop_gtk.dispatch_panel_action(
                 loaded_profile,
                 action_args,
@@ -548,6 +654,15 @@ def main() -> int:
                 next(action for action in selected_components["notification-center"]["model"]["actions"] if action.get("action_id") == "inspect-device-health"),
             )
             require(notification_device["result"]["target_component"] == "device-backend-status", "device route mismatch")
+
+            notification_window_manager = shell_desktop_gtk.dispatch_panel_action(
+                loaded_profile,
+                action_args,
+                selected_snapshot,
+                "notification-center",
+                next(action for action in selected_components["notification-center"]["model"]["actions"] if action.get("action_id") == "inspect-window-manager"),
+            )
+            require(notification_window_manager["result"]["target_component"] == "task-surface", "window manager route mismatch")
 
             backend_focus = shell_desktop_gtk.dispatch_panel_action(
                 loaded_profile,
@@ -642,6 +757,13 @@ def main() -> int:
                         "confirmed_handle_id": chooser_confirm["result"]["confirmed_handle_id"],
                     },
                     {
+                        "phase": "recovery-export",
+                        "action": "recovery.export-bundle",
+                        "target_component": recovery_export["result"]["target_component"],
+                        "status": recovery_export["result"]["status"],
+                        "bundle_path": recovery_export["result"]["bundle_path"],
+                    },
+                    {
                         "phase": "device-route",
                         "action": "notification.inspect-device-health",
                         "target_component": notification_device["result"]["target_component"],
@@ -695,6 +817,12 @@ def main() -> int:
                         "capture_transport": chooser_confirm["result"].get("capture_transport"),
                         "capture_status": chooser_confirm["result"].get("capture_status"),
                     },
+                    "recovery": {
+                        "route_target_component": recovery_export["result"]["target_component"],
+                        "route_reason": recovery_export["result"]["route_reason"],
+                        "bundle_path": recovery_export["result"]["bundle_path"],
+                        "diagnostic_bundle_count": recovery_export["result"]["diagnostic_bundle_count"],
+                    },
                     "backend_status": {
                         "route_target_component": notification_device["result"]["target_component"],
                         "attention_only": backend_focus["result"]["attention_only"],
@@ -722,7 +850,7 @@ def main() -> int:
                 manifest["snapshot"]["active_modal_surface"] == export_payload["snapshot"]["summary"]["active_modal_surface"],
                 "shell acceptance manifest active modal mismatch",
             )
-            require(len(manifest["records"]) == 8, "shell acceptance manifest record count mismatch")
+            require(len(manifest["records"]) == 9, "shell acceptance manifest record count mismatch")
             require(manifest["evidence"]["restore"]["available"] is True, "shell acceptance restore evidence missing")
             require(
                 manifest["evidence"]["restore"]["route_target_component"] == "task-surface",
@@ -735,6 +863,14 @@ def main() -> int:
             require(
                 manifest["evidence"]["chooser"]["capture_status"] == "capturing",
                 "shell acceptance chooser capture evidence mismatch",
+            )
+            require(
+                manifest["evidence"]["recovery"]["route_target_component"] == "recovery-surface",
+                "shell acceptance recovery evidence mismatch",
+            )
+            require(
+                manifest["evidence"]["recovery"]["route_reason"] == "bundle-exported",
+                "shell acceptance recovery route reason mismatch",
             )
             require(
                 manifest["evidence"]["backend_status"]["route_target_component"] == "device-backend-status",

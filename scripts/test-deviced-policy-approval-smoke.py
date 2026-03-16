@@ -12,7 +12,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from aios_cargo_bins import default_aios_bin_dir
+from aios_cargo_bins import default_aios_bin_dir, resolve_binary_path
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -27,12 +27,17 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+
 def resolve_binary(name: str, explicit: Path | None, bin_dir: Path | None) -> Path:
     if explicit is not None:
-        return explicit
+        return resolve_binary_path(explicit.parent, explicit.name)
     if bin_dir is not None:
-        return bin_dir / name
-    return default_aios_bin_dir(ROOT) / name
+        return resolve_binary_path(bin_dir, name)
+    return resolve_binary_path(default_aios_bin_dir(ROOT), name)
+
+
+def unix_rpc_supported() -> bool:
+    return hasattr(socket, "AF_UNIX") and os.name != "nt"
 
 
 def ensure_binary(path: Path, package: str) -> None:
@@ -96,10 +101,18 @@ def launch(binary: Path, env: dict[str, str]) -> subprocess.Popen:
     )
 
 
+def stop_process(process: subprocess.Popen) -> None:
+    if process.poll() is not None:
+        return
+    if os.name == "nt":
+        process.terminate()
+    else:
+        process.send_signal(signal.SIGINT)
+
+
 def terminate(processes: list[subprocess.Popen]) -> None:
     for process in processes:
-        if process.poll() is None:
-            process.send_signal(signal.SIGINT)
+        stop_process(process)
     deadline = time.time() + 5
     for process in processes:
         if process.poll() is not None:
@@ -189,6 +202,9 @@ def make_env(root: Path) -> dict[str, str]:
 
 def main() -> int:
     args = parse_args()
+    if not unix_rpc_supported():
+        print("deviced policy approval smoke skipped: unix rpc transport unsupported on this platform")
+        return 0
     binaries = {
         "deviced": resolve_binary("deviced", args.deviced, args.bin_dir),
         "policyd": resolve_binary("policyd", args.policyd, args.bin_dir),
@@ -196,7 +212,7 @@ def main() -> int:
     ensure_binary(binaries["deviced"], "aios-deviced")
     ensure_binary(binaries["policyd"], "aios-policyd")
 
-    temp_root = Path(tempfile.mkdtemp(prefix="adpa-", dir="/tmp"))
+    temp_root = Path(tempfile.mkdtemp(prefix="adpa-", dir="/tmp" if Path("/tmp").exists() else None))
     env = make_env(temp_root)
     failed = False
 

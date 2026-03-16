@@ -6,6 +6,7 @@
   "owner": "aios-compat",
   "worker_contract": "compat-browser-fetch-v1",
   "result_protocol_schema_ref": "aios/compat-browser-result.schema.json",
+  "trust_policy_modes": ["registered-remote", "none", "bearer", "header", "execution-token"],
   "capabilities": [
     {
       "capability_id": "compat.browser.navigate",
@@ -81,7 +82,7 @@
     "audit_tags": ["browser", "compat", "sandbox"],
     "taint_behavior": "input-propagates"
   },
-  "supported_targets": ["url", "tab", "page"],
+  "supported_targets": ["url", "tab", "page", "registered-remote"],
   "timeout_policy": "bounded-30s",
   "retry_policy": "retry-once",
   "healthcheck": {

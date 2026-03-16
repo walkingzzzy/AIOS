@@ -40,8 +40,26 @@ def expected_aios_binaries() -> list[str]:
     return list(EXPECTED_AIOS_BINARIES)
 
 
+def binary_artifact_name(name: str) -> str:
+    if os.name == "nt" and not name.lower().endswith(".exe"):
+        return f"{name}.exe"
+    return name
+
+
+def resolve_binary_path(bin_dir: Path, name: str) -> Path:
+    direct = bin_dir / name
+    if direct.exists():
+        return direct
+
+    artifact = bin_dir / binary_artifact_name(name)
+    if artifact.exists():
+        return artifact
+
+    return artifact if artifact != direct else direct
+
+
 def has_expected_aios_binaries(bin_dir: Path) -> bool:
-    return all((bin_dir / name).exists() for name in EXPECTED_AIOS_BINARIES)
+    return all(resolve_binary_path(bin_dir, name).exists() for name in EXPECTED_AIOS_BINARIES)
 
 
 def default_aios_bin_dir(root: Path) -> Path:

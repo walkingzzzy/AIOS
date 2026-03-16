@@ -30,6 +30,24 @@ OVMF_CODE="${AIOS_QEMU_OVMF_CODE:-}"
 OVMF_VARS="${AIOS_QEMU_OVMF_VARS:-}"
 KERNEL_CMDLINE_EXTRA="${AIOS_QEMU_KERNEL_CMDLINE_EXTRA:-}"
 
+resolve_python_bin() {
+  if [[ -n "${AIOS_PYTHON_BIN:-}" ]]; then
+    printf '%s\n' "$AIOS_PYTHON_BIN"
+    return 0
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    printf 'python3\n'
+    return 0
+  fi
+  if command -v python >/dev/null 2>&1; then
+    printf 'python\n'
+    return 0
+  fi
+  printf 'python3\n'
+}
+
+PYTHON_BIN="$(resolve_python_bin)"
+
 if [[ -z "$OVMF_CODE" ]]; then
   for candidate in \
     /opt/homebrew/Cellar/qemu/*/share/qemu/edk2-x86_64-code.fd \
@@ -60,12 +78,37 @@ if [[ "${1:-}" == "--preflight" ]]; then
   if [[ -n "$IMAGE_PATH" ]]; then
     IMAGE_FOUND=true
   fi
+  OVMF_CODE_FOUND=false
+  if [[ -n "$OVMF_CODE" ]]; then
+    OVMF_CODE_FOUND=true
+  fi
   STATUS="ready"
   if [[ "$QEMU_AVAILABLE" != "true" || "$IMAGE_FOUND" != "true" ]]; then
     STATUS="blocked"
   fi
-  printf '{"status":"%s","qemu_available":%s,"image_found":%s,"default_accel":"%s","cpu_model":"%s","display":"%s","serial":"%s","ovmf_code_found":%s,"output_dir":"%s","image_path":"%s"}
-'     "$STATUS"     "$QEMU_AVAILABLE"     "$IMAGE_FOUND"     "$ACCEL"     "$CPU_MODEL"     "$DISPLAY_MODE"     "$SERIAL_MODE"     "$([[ -n "$OVMF_CODE" ]] && echo true || echo false)"     "$OUTPUT_DIR"     "$IMAGE_PATH"
+  "$PYTHON_BIN" -     "$STATUS"     "$QEMU_AVAILABLE"     "$IMAGE_FOUND"     "$ACCEL"     "$CPU_MODEL"     "$DISPLAY_MODE"     "$SERIAL_MODE"     "$OVMF_CODE_FOUND"     "$OUTPUT_DIR"     "$IMAGE_PATH" <<'PY'
+import json
+import sys
+
+
+def as_bool(value: str) -> bool:
+    return value == "true"
+
+
+payload = {
+    "status": sys.argv[1],
+    "qemu_available": as_bool(sys.argv[2]),
+    "image_found": as_bool(sys.argv[3]),
+    "default_accel": sys.argv[4],
+    "cpu_model": sys.argv[5],
+    "display": sys.argv[6],
+    "serial": sys.argv[7],
+    "ovmf_code_found": as_bool(sys.argv[8]),
+    "output_dir": sys.argv[9],
+    "image_path": sys.argv[10],
+}
+print(json.dumps(payload, ensure_ascii=False))
+PY
   exit 0
 fi
 

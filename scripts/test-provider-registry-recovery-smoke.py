@@ -13,7 +13,7 @@ import textwrap
 import time
 from pathlib import Path
 
-from aios_cargo_bins import default_aios_bin_dir
+from aios_cargo_bins import default_aios_bin_dir, resolve_binary_path
 
 
 def parse_args() -> argparse.Namespace:
@@ -66,10 +66,10 @@ def repo_root() -> Path:
 
 def resolve_binary(name: str, explicit: Path | None, bin_dir: Path | None) -> Path:
     if explicit is not None:
-        return explicit
+        return resolve_binary_path(explicit.parent, explicit.name)
     if bin_dir is not None:
-        return bin_dir / name
-    return default_aios_bin_dir(repo_root()) / name
+        return resolve_binary_path(bin_dir, name)
+    return resolve_binary_path(default_aios_bin_dir(repo_root()), name)
 
 
 def ensure_binaries(paths: dict[str, Path]) -> None:
@@ -107,7 +107,7 @@ def rpc_call(socket_path: Path, method: str, params: dict, timeout: float) -> di
 
 
 def portal_issue(
-    sessiond_socket: Path,
+    agentd_socket: Path,
     *,
     user_id: str,
     session_id: str,
@@ -116,8 +116,8 @@ def portal_issue(
     timeout: float,
 ) -> dict:
     return rpc_call(
-        sessiond_socket,
-        "portal.handle.issue",
+        agentd_socket,
+        "agent.portal.handle.issue",
         {
             "kind": kind,
             "user_id": user_id,
@@ -133,7 +133,7 @@ def portal_issue(
 
 
 def issue_token(
-    policyd_socket: Path,
+    agentd_socket: Path,
     *,
     user_id: str,
     session_id: str,
@@ -143,8 +143,8 @@ def issue_token(
     timeout: float,
 ) -> dict:
     return rpc_call(
-        policyd_socket,
-        "policy.token.issue",
+        agentd_socket,
+        "agent.policy.token.issue",
         {
             "user_id": user_id,
             "session_id": session_id,
@@ -156,6 +156,10 @@ def issue_token(
         },
         timeout=timeout,
     )
+
+
+def unix_rpc_supported() -> bool:
+    return hasattr(socket, "AF_UNIX") and os.name != "nt"
 
 
 def wait_for_socket(path: Path, timeout: float) -> None:
@@ -209,7 +213,7 @@ def wait_for_provider_health(
     while time.time() < deadline:
         result = rpc_call(
             socket_path,
-            "provider.health.get",
+            "agent.provider.health.get",
             {"provider_id": provider_id},
             timeout=min(timeout, 1.5),
         )
@@ -238,7 +242,7 @@ def wait_for_resolution(
     while time.time() < deadline:
         result = rpc_call(
             socket_path,
-            "provider.resolve_capability",
+            "agent.provider.resolve_capability",
             {
                 "capability_id": capability_id,
                 "require_healthy": True,
@@ -696,8 +700,8 @@ def run_system_intent_registry_recovery(
     try:
         provider_socket = Path(env["AIOS_SYSTEM_INTENT_PROVIDER_SOCKET_PATH"])
         for socket_path in [
-            Path(env["AIOS_SESSIOND_SOCKET_PATH"]),
-            Path(env["AIOS_POLICYD_SOCKET_PATH"]),
+            agentd_socket,
+            agentd_socket,
             provider_socket,
         ]:
             wait_for_socket(socket_path, timeout)
@@ -785,8 +789,8 @@ def run_system_files_registry_recovery(
     try:
         provider_socket = Path(env["AIOS_SYSTEM_FILES_PROVIDER_SOCKET_PATH"])
         for socket_path in [
-            Path(env["AIOS_SESSIOND_SOCKET_PATH"]),
-            Path(env["AIOS_POLICYD_SOCKET_PATH"]),
+            agentd_socket,
+            agentd_socket,
             provider_socket,
         ]:
             wait_for_socket(socket_path, timeout)
@@ -846,8 +850,8 @@ def run_system_files_registry_recovery(
         )
 
         session_result = rpc_call(
-            Path(env["AIOS_SESSIOND_SOCKET_PATH"]),
-            "session.create",
+            agentd_socket,
+            "agent.session.create",
             {
                 "user_id": "registry-recovery-fs-user",
                 "metadata": {"source": "registry-recovery"},
@@ -857,7 +861,7 @@ def run_system_files_registry_recovery(
         session_id = session_result["session"]["session_id"]
         task_id = session_result["task"]["task_id"]
         file_handle = portal_issue(
-            Path(env["AIOS_SESSIOND_SOCKET_PATH"]),
+            agentd_socket,
             user_id="registry-recovery-fs-user",
             session_id=session_id,
             kind="file_handle",
@@ -865,7 +869,7 @@ def run_system_files_registry_recovery(
             timeout=timeout,
         )
         token = issue_token(
-            Path(env["AIOS_POLICYD_SOCKET_PATH"]),
+            agentd_socket,
             user_id="registry-recovery-fs-user",
             session_id=session_id,
             task_id=task_id,
@@ -1027,7 +1031,7 @@ def run_runtime_local_inference_registry_recovery(
     try:
         provider_socket = Path(env["AIOS_RUNTIME_LOCAL_INFERENCE_PROVIDER_SOCKET_PATH"])
         for socket_path in [
-            Path(env["AIOS_POLICYD_SOCKET_PATH"]),
+            agentd_socket,
             Path(env["AIOS_RUNTIMED_SOCKET_PATH"]),
             provider_socket,
         ]:
@@ -1105,6 +1109,9 @@ def run_runtime_local_inference_registry_recovery(
 
 def main() -> int:
     args = parse_args()
+    if not unix_rpc_supported():
+        print("provider registry recovery smoke skipped: unix rpc transport unsupported on this platform")
+        return 0
     binaries = {
         "agentd": resolve_binary("agentd", args.agentd, args.bin_dir),
         "sessiond": resolve_binary("sessiond", args.sessiond, args.bin_dir),

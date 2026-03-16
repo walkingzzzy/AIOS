@@ -4,10 +4,31 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-import tempfile
+import uuid
 from pathlib import Path
 
+import yaml
+from jsonschema import Draft202012Validator
+
 ROOT = Path(__file__).resolve().parent.parent
+TEMP_ROOT_DIR = ROOT / "out" / "tmp"
+
+
+def build_validator(path: Path) -> Draft202012Validator:
+    schema = json.loads(path.read_text())
+    Draft202012Validator.check_schema(schema)
+    return Draft202012Validator(schema, format_checker=Draft202012Validator.FORMAT_CHECKER)
+
+
+def load_yaml(path: Path) -> dict:
+    return yaml.safe_load(path.read_text()) or {}
+
+
+def make_temp_dir(prefix: str) -> Path:
+    TEMP_ROOT_DIR.mkdir(parents=True, exist_ok=True)
+    path = TEMP_ROOT_DIR / f"{prefix}{uuid.uuid4().hex}"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def require(condition: bool, message: str) -> None:
@@ -30,7 +51,14 @@ def load_env(path: Path) -> dict[str, str]:
 
 
 def main() -> int:
-    temp_root = Path(tempfile.mkdtemp(prefix="aios-platform-media-smoke-"))
+    image_profile_validator = build_validator(ROOT / "aios" / "image" / "schemas" / "platform-media-profile.schema.json")
+    hardware_profile_validator = build_validator(ROOT / "aios" / "hardware" / "schemas" / "hardware-profile.schema.json")
+    for path in sorted((ROOT / "aios" / "image" / "platforms").glob("*/profile.yaml")):
+        image_profile_validator.validate(load_yaml(path))
+    for path in sorted((ROOT / "aios" / "hardware" / "profiles").glob("*.yaml")):
+        hardware_profile_validator.validate(load_yaml(path))
+
+    temp_root = make_temp_dir("aios-platform-media-smoke-")
     system_image = temp_root / "system.raw"
     installer_image = temp_root / "installer.raw"
     recovery_image = temp_root / "recovery.raw"
@@ -84,8 +112,10 @@ def main() -> int:
     require((output_dir / "bringup" / "scripts" / "pull-boot-evidence.sh").exists(), "missing bringup pull script")
     require((output_dir / "bringup" / "scripts" / "evaluate-boot-evidence.sh").exists(), "missing bringup evaluate wrapper")
     require((output_dir / "bringup" / "scripts" / "render-hardware-validation.sh").exists(), "missing bringup report render wrapper")
+    require((output_dir / "bringup" / "scripts" / "collect-device-validation.sh").exists(), "missing bringup device validation wrapper")
     require((output_dir / "bringup" / "scripts" / "collect-and-render-hardware-validation.sh").exists(), "missing bringup collect/render wrapper")
     require((output_dir / "bringup" / "scripts" / "render-aios-hardware-validation-report.py").exists(), "missing bringup report renderer")
+    require((output_dir / "bringup" / "scripts" / "collect-aios-device-validation.py").exists(), "missing bringup device validation collector")
     require((output_dir / "bringup" / "scripts" / "install-boot-evidence-assets.sh").exists(), "missing bringup install script")
     require((output_dir / "bringup" / "checklists" / "install-rollback-checklist.md").exists(), "missing bringup checklist")
     require((output_dir / "bringup" / "reports" / "hardware-validation-template.md").exists(), "missing hardware validation template")
@@ -110,6 +140,10 @@ def main() -> int:
     require("write-installer-media.sh" in readme_text, "bringup README missing flash command guidance")
     require("install-rollback-checklist.md" in readme_text, "bringup README missing checklist guidance")
     require("support/support-matrix.md" in readme_text, "bringup README missing support matrix guidance")
+    require("collect-device-validation.sh" in readme_text, "bringup README missing device validation collection guidance")
+    require("reports/device-validation/" in readme_text, "bringup README missing device validation report directory guidance")
+    require("AIOS_BRINGUP_VENDOR_RUNTIME_EVIDENCE_DIR" in readme_text, "bringup README missing vendor runtime evidence guidance")
+    require("AIOS_BRINGUP_VENDOR_RUNTIME_EVIDENCE_DIR" in readme_text, "bringup README missing vendor runtime evidence guidance")
     require("profiles/framework-laptop-13-amd-7040.yaml" in readme_text, "bringup README missing nominated framework profile")
     support_matrix_text = (output_dir / "bringup" / "support" / "support-matrix.md").read_text()
     require("Hardware profile ID: generic-x86_64-uefi" in support_matrix_text, "support matrix missing hardware profile id")
@@ -121,19 +155,41 @@ def main() -> int:
     require("--profile" in evaluate_wrapper_text, "bringup evaluate wrapper missing tier1 profile wiring")
     render_wrapper_text = (output_dir / "bringup" / "scripts" / "render-hardware-validation.sh").read_text()
     require("--evaluator-json" in render_wrapper_text, "bringup render wrapper missing evaluator wiring")
+    require("renderer-args.txt" in render_wrapper_text, "bringup render wrapper missing device validation auto args wiring")
+    device_validation_wrapper_text = (output_dir / "bringup" / "scripts" / "collect-device-validation.sh").read_text()
+    require("collect-aios-device-validation.py" in device_validation_wrapper_text, "bringup device validation wrapper missing collector wiring")
+    require("--vendor-runtime-evidence-dir" in device_validation_wrapper_text, "bringup device validation wrapper missing vendor runtime evidence wiring")
+    require("vendor-runtime-evidence-dir" in device_validation_wrapper_text, "bringup device validation wrapper missing vendor runtime evidence wiring")
+    require("AIOS_BRINGUP_VENDOR_RUNTIME_EVIDENCE_DIR" in device_validation_wrapper_text, "bringup device validation wrapper missing vendor runtime env wiring")
     collect_wrapper_text = (output_dir / "bringup" / "scripts" / "collect-and-render-hardware-validation.sh").read_text()
     require("AIOS_BRINGUP_PULL_HOST" in collect_wrapper_text, "bringup collect/render wrapper missing pull host wiring")
+    require("collect-device-validation.sh" in collect_wrapper_text, "bringup collect/render wrapper missing device validation chaining")
+    require("device_validation_mode" in collect_wrapper_text, "bringup collect/render wrapper missing device validation mode wiring")
     require("--report-md" in collect_wrapper_text, "bringup collect/render wrapper missing evaluator markdown wiring")
     require("render-hardware-validation.sh" in collect_wrapper_text, "bringup collect/render wrapper missing render chaining")
     require(manifest["bringup"]["boot_evidence_dir"] == "/var/lib/aios/hardware-evidence/boots", "manifest missing bringup evidence dir")
     require(manifest["bringup"]["hardware_profile_id"] == "generic-x86_64-uefi", "manifest missing hardware profile id")
+    require(manifest["bringup"]["scripts"]["collect_device_validation"].endswith("collect-device-validation.sh"), "manifest missing device validation wrapper asset")
+    require(manifest["bringup"]["scripts"]["device_validation_collector"].endswith("collect-aios-device-validation.py"), "manifest missing device validation collector asset")
     require(manifest["bringup"]["canonical_hardware_profile"].endswith("generic-x86_64-uefi.yaml"), "manifest missing canonical hardware profile asset")
     require(any(path.endswith("framework-laptop-13-amd-7040.yaml") for path in manifest["bringup"]["nominated_profiles"]), "manifest missing nominated framework profile asset")
     checklist_text = (output_dir / "bringup" / "checklists" / "install-rollback-checklist.md").read_text()
     require("Guided installer summary verified" in checklist_text, "bringup checklist missing guided installer checkpoint")
     require("support/support-matrix.md" in checklist_text, "bringup checklist missing support review checkpoint")
+    require(
+        "release-grade backend IDs are present" in checklist_text,
+        "bringup checklist missing release-grade backend checkpoint",
+    )
     report_template_text = (output_dir / "bringup" / "reports" / "hardware-validation-template.md").read_text()
+    require("## Device And Multimodal Validation" in report_template_text, "hardware validation template missing device validation section")
+    require("- release-grade backend ids:" in report_template_text, "hardware validation template missing release-grade backend ids field")
+    require("- release-grade contract kinds:" in report_template_text, "hardware validation template missing release-grade contract kinds field")
+    require("- vendor runtime sign-off status:" in report_template_text, "hardware validation template missing vendor runtime signoff field")
+    require("- vendor runtime evidence attached:" in report_template_text, "hardware validation template missing vendor runtime evidence field")
     require("## Rollback Outcome" in report_template_text, "hardware validation template missing rollback section")
+    evidence_index_template = json.loads((output_dir / "bringup" / "reports" / "evidence-index-template.json").read_text())
+    require("device_backend_state_artifact" in evidence_index_template["artifacts"], "evidence index template missing backend-state artifact field")
+    require("vendor_runtime_evidence" in evidence_index_template["artifacts"], "evidence index template missing vendor runtime evidence field")
     installer_env = load_env(installer_env_path)
     require(installer_env.get("AIOS_INSTALLER_PLATFORM_ID") == "generic-x86_64-uefi", "installer env platform_id mismatch")
     require(
@@ -215,8 +271,10 @@ def main() -> int:
     require(jetson_recovery_runtime_profile_path.exists(), "missing jetson recovery runtime profile asset")
     jetson_worker_bridge_path = jetson_output_dir / "config" / "installer-overlay" / "usr" / "share" / "aios" / "installer" / "target-overlay" / "usr" / "share" / "aios" / "runtime" / "platforms" / "nvidia-jetson-orin-agx" / "bin" / "launch-managed-worker.sh"
     jetson_reference_worker_path = jetson_output_dir / "config" / "installer-overlay" / "usr" / "share" / "aios" / "installer" / "target-overlay" / "usr" / "share" / "aios" / "runtime" / "platforms" / "nvidia-jetson-orin-agx" / "bin" / "reference_accel_worker.py"
+    jetson_vendor_helper_path = jetson_output_dir / "config" / "installer-overlay" / "usr" / "share" / "aios" / "installer" / "target-overlay" / "usr" / "share" / "aios" / "runtime" / "platforms" / "nvidia-jetson-orin-agx" / "bin" / "vendor_accel_worker.py"
     require(jetson_worker_bridge_path.exists(), "missing jetson worker bridge asset")
     require(jetson_reference_worker_path.exists(), "missing jetson reference worker asset")
+    require(jetson_vendor_helper_path.exists(), "missing jetson vendor helper asset")
     jetson_runtime_profile_text = jetson_runtime_profile_path.read_text()
     require(
         "default_backend: local-gpu" in jetson_runtime_profile_text,

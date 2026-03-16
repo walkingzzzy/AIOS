@@ -13,7 +13,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from aios_cargo_bins import default_aios_bin_dir
+from aios_cargo_bins import default_aios_bin_dir, resolve_binary_path
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -40,11 +40,14 @@ def require(condition: bool, message: str) -> None:
 
 def resolve_binary(name: str, explicit: Path | None, bin_dir: Path | None) -> Path:
     if explicit is not None:
-        return explicit
+        return resolve_binary_path(explicit.parent, explicit.name)
     if bin_dir is not None:
-        return bin_dir / name
-    return default_aios_bin_dir(ROOT) / name
+        return resolve_binary_path(bin_dir, name)
+    return resolve_binary_path(default_aios_bin_dir(ROOT), name)
 
+
+def unix_rpc_supported() -> bool:
+    return hasattr(socket, "AF_UNIX") and os.name != "nt"
 
 def resolve_provider(explicit: Path | None) -> Path:
     if explicit is not None:
@@ -247,6 +250,9 @@ def make_runtime_env(temp_root: Path) -> tuple[dict[str, str], dict[str, str], d
 
 def main() -> int:
     args = parse_args()
+    if not unix_rpc_supported():
+        print("portal capture chain smoke skipped: unix rpc transport unsupported on this platform")
+        return 0
     paths = {
         "deviced": resolve_binary("deviced", args.deviced, args.bin_dir),
         "policyd": resolve_binary("policyd", args.policyd, args.bin_dir),

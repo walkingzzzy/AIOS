@@ -114,12 +114,27 @@ pub fn refresh_probe(
     Ok(Some(snapshot))
 }
 
+fn spawn_shell(command: &str) -> Command {
+    if cfg!(windows) {
+        let mut shell = Command::new("powershell.exe");
+        shell
+            .arg("-NoProfile")
+            .arg("-NonInteractive")
+            .arg("-Command")
+            .arg(command);
+        shell
+    } else {
+        let mut shell = Command::new("/bin/sh");
+        shell.arg("-lc").arg(command);
+        shell
+    }
+}
+
 fn run_probe_command(
     command: &str,
     environment: &[(String, String)],
 ) -> std::io::Result<std::process::Output> {
-    let mut shell = Command::new("/bin/sh");
-    shell.arg("-lc").arg(command);
+    let mut shell = spawn_shell(command);
     for (key, value) in environment {
         shell.env(key, value);
     }
@@ -330,6 +345,14 @@ mod tests {
         .expect("create store")
     }
 
+    fn healthy_probe_command() -> &'static str {
+        if cfg!(windows) {
+            r#"Write-Output '{"overall_status":"healthy","summary":"probe ok"}'"#
+        } else {
+            r#"printf '%s' '{"overall_status":"healthy","summary":"probe ok"}'"#
+        }
+    }
+
     #[test]
     fn deployment_and_probe_status_mapping_matches_expected_levels() {
         assert_eq!(deployment_status_overall("ready-to-stage"), "ready");
@@ -468,13 +491,9 @@ mod tests {
         let store = store(&root);
         let probe_path = root.join("state").join("health-probe.json");
 
-        let probe = refresh_probe(
-            &store,
-            Some("printf '%s' '{\"overall_status\":\"healthy\",\"summary\":\"probe ok\"}'"),
-            &probe_path,
-        )
-        .expect("refresh probe")
-        .expect("probe snapshot");
+        let probe = refresh_probe(&store, Some(healthy_probe_command()), &probe_path)
+            .expect("refresh probe")
+            .expect("probe snapshot");
 
         assert_eq!(probe.overall_status, "healthy");
         assert!(probe_path.exists());

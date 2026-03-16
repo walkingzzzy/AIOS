@@ -14,7 +14,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from aios_cargo_bins import default_aios_bin_dir
+from aios_cargo_bins import default_aios_bin_dir, resolve_binary_path
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -33,10 +33,10 @@ def parse_args() -> argparse.Namespace:
 
 def resolve_binary(name: str, explicit: Path | None, bin_dir: Path | None) -> Path:
     if explicit is not None:
-        return explicit
+        return resolve_binary_path(explicit.parent, explicit.name)
     if bin_dir is not None:
-        return bin_dir / name
-    return default_aios_bin_dir(ROOT) / name
+        return resolve_binary_path(bin_dir, name)
+    return resolve_binary_path(default_aios_bin_dir(ROOT), name)
 
 
 def ensure_binary(path: Path, package: str) -> None:
@@ -45,6 +45,9 @@ def ensure_binary(path: Path, package: str) -> None:
     print(f"Missing binary: {path}")
     print(f"Build it first, for example: cargo build -p {package}")
     raise SystemExit(2)
+
+def unix_rpc_supported() -> bool:
+    return hasattr(socket, "AF_UNIX") and os.name != "nt"
 
 
 def rpc_call(socket_path: Path, method: str, params: dict, timeout: float) -> dict:
@@ -301,6 +304,9 @@ def setup_deviced_env(base: Path) -> tuple[dict[str, str], dict[str, Path]]:
 
 def main() -> int:
     args = parse_args()
+    if not unix_rpc_supported():
+        print("shell live smoke skipped: unix rpc transport unsupported on this platform")
+        return 0
     updated = resolve_binary("updated", args.updated, args.bin_dir)
     deviced = resolve_binary("deviced", args.deviced, args.bin_dir)
     ensure_binary(updated, "aios-updated")
@@ -666,7 +672,9 @@ def main() -> int:
         )
         backend_panel = json.loads(output)
         require(backend_panel["panel_id"] == "device-backend-status-panel", "shell live backend panel id mismatch")
+        require(backend_panel["meta"]["summary_source"] == "backend_summary", "shell live backend panel should prefer backend summary")
         require(backend_panel["meta"]["status_count"] >= 1, "shell live backend panel status count mismatch")
+        require(backend_panel["meta"]["available_status_count"] >= 1, "shell live backend panel available count mismatch")
         require(backend_panel["meta"]["ui_tree_available"] is True, "shell live backend panel missing ui_tree snapshot")
         require(
             backend_panel["meta"]["ui_tree_capture_mode"] == "native-state-bridge",
@@ -714,3 +722,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
