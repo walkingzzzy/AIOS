@@ -57,16 +57,30 @@ def load_payload(
     method = "agent.portal.handle.list" if agent_socket_path is not None else "portal.handle.list"
     try:
         result = rpc_call(effective_socket, method, {"session_id": session_id})
-    except Exception as error:
-        message = str(error)
-        return {
-            "handles": [],
-            "request": {
-                "status": "failed",
-                "error_message": message,
-                "source_error": message,
-            },
-        }
+    except Exception as primary_error:
+        if effective_socket != socket_path:
+            try:
+                result = rpc_call(socket_path, "portal.handle.list", {"session_id": session_id})
+            except Exception as fallback_error:
+                message = str(fallback_error)
+                return {
+                    "handles": [],
+                    "request": {
+                        "status": "failed",
+                        "error_message": message,
+                        "source_error": message,
+                    },
+                }
+        else:
+            message = str(primary_error)
+            return {
+                "handles": [],
+                "request": {
+                    "status": "failed",
+                    "error_message": message,
+                    "source_error": message,
+                },
+            }
     return {
         "handles": result.get("handles", []),
         "request": result.get("request") or {},
