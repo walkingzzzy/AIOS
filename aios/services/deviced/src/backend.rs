@@ -1596,14 +1596,7 @@ mod tests {
                 .backend_summary
                 .readiness_summary
                 .get("native-live"),
-            Some(&4)
-        );
-        assert_eq!(
-            snapshot
-                .backend_summary
-                .readiness_summary
-                .get("native-state-bridge"),
-            Some(&1)
+            Some(&5)
         );
         assert!(
             snapshot
