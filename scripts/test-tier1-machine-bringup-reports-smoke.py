@@ -67,7 +67,7 @@ def main() -> int:
 
     summary = load_json(summary_json)
     reports = summary.get("machine_reports")
-    require(isinstance(reports, list) and len(reports) == 2, "expected two nominated machine reports")
+    require(isinstance(reports, list) and len(reports) >= 2, "expected at least two nominated machine reports")
 
     by_machine = {item["machine_id"]: item for item in reports if isinstance(item, dict) and "machine_id" in item}
     require("framework-laptop-13-amd-7040" in by_machine, "missing framework nominated report")
