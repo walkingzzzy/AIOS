@@ -198,13 +198,15 @@ def make_env(root: Path) -> dict[str, str]:
     return env
 
 
-def launch(binary: Path, env: dict[str, str]) -> subprocess.Popen:
+def launch(binary: Path, env: dict[str, str], log_dir: Path, name: str) -> subprocess.Popen:
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / f"{name}.log"
+    fh = open(log_file, "w")
     return subprocess.Popen(
         [str(binary)],
         env=env,
-        stdout=subprocess.PIPE,
+        stdout=fh,
         stderr=subprocess.STDOUT,
-        text=True,
     )
 
 
@@ -224,14 +226,14 @@ def terminate(processes: list[subprocess.Popen]) -> None:
             process.wait(timeout=2)
 
 
-def print_logs(processes: dict[str, subprocess.Popen]) -> None:
-    for name, process in processes.items():
-        output = ""
-        if process.stdout and process.poll() is not None:
-            output = process.stdout.read()
-        if output.strip():
-            print(f"\n--- {name} log ---")
-            print(output.rstrip())
+def print_logs(log_dir: Path, names: list[str]) -> None:
+    for name in names:
+        log_file = log_dir / f"{name}.log"
+        if log_file.exists():
+            output = log_file.read_text()
+            if output.strip():
+                print(f"\n--- {name} log ---")
+                print(output.rstrip())
 
 
 def require_fields(name: str, payload: dict, fields: list[str]) -> None:
@@ -269,13 +271,14 @@ def main() -> int:
     ensure_binaries(binaries)
 
     temp_root = Path(tempfile.mkdtemp(prefix="aios-smoke-", dir="/tmp"))
+    log_dir = temp_root / "logs"
     env = make_env(temp_root)
     processes: dict[str, subprocess.Popen] = {}
     failed = False
 
     try:
         for name in ["sessiond", "policyd", "runtimed", "agentd", "provider"]:
-            processes[name] = launch(binaries[name], env)
+            processes[name] = launch(binaries[name], env, log_dir, name)
 
         sockets = {
             "sessiond": Path(env["AIOS_SESSIOND_SOCKET_PATH"]),
@@ -902,7 +905,8 @@ def main() -> int:
     finally:
         terminate(list(processes.values()))
         if failed:
-            print_logs(processes)
+            service_names = list(processes.keys())
+            print_logs(log_dir, service_names)
         if args.keep_state:
             print(f"Preserved smoke state at: {temp_root}")
         else:
