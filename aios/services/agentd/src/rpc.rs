@@ -659,6 +659,29 @@ pub fn build_router(state: AppState) -> Arc<RpcRouter> {
                         );
                         next_index += 1;
                     }
+                    "compat.office.export_pdf" => {
+                        provider_resolution = crate::providers::resolve_primary_provider(
+                            &submit_state,
+                            "compat.office.export_pdf",
+                        )
+                        .map_err(|error| RpcError::Internal(error.to_string()))?;
+                        let export_handle = crate::portal::maybe_issue_handle(
+                            &submit_state,
+                            &request,
+                            &session.session_id,
+                            "compat.office.export_pdf",
+                            provider_resolution
+                                .selected
+                                .as_ref()
+                                .map(|candidate| candidate.provider_id.as_str()),
+                        )
+                        .map_err(|error| RpcError::Internal(error.to_string()))?;
+                        if export_handle.is_some() {
+                            portal_handle = export_handle;
+                        }
+                        mark_step_status_at(&mut plan, next_index, "approved");
+                        next_index += 1;
+                    }
                     methods::SYSTEM_FILE_BULK_DELETE => {
                         provider_resolution = crate::providers::resolve_primary_provider(
                             &submit_state,
