@@ -10,6 +10,7 @@ from pathlib import Path
 from prototype import (
     notification_context,
     default_browser_remote_registry,
+    default_mcp_remote_registry,
     default_office_remote_registry,
     default_provider_registry_state_dir,
     default_compat_observability_log,
@@ -103,6 +104,17 @@ def derive_managed_windows(window_payload: dict, runtime_session: dict) -> list[
     return managed_windows
 
 
+def derive_release_grade_output_status(outputs: list[dict], renderable_output_count: int) -> str:
+    if not outputs:
+        return "uninitialized"
+    output_count = len(outputs)
+    if output_count == 1:
+        return f"single-output(renderable={renderable_output_count}/{output_count})"
+    if renderable_output_count >= output_count:
+        return f"multi-output(renderable={renderable_output_count}/{output_count})"
+    return f"multi-output(partial-renderable={renderable_output_count}/{output_count})"
+
+
 def load_compositor_summary(
     runtime_state_path: Path | None,
     window_state_path: Path | None,
@@ -113,24 +125,39 @@ def load_compositor_summary(
     if not isinstance(runtime_session, dict):
         runtime_session = runtime_payload if isinstance(runtime_payload, dict) else {}
 
-    managed_windows = [
+    runtime_managed_windows = [
         item
         for item in runtime_session.get("managed_windows", [])
         if isinstance(item, dict)
     ]
-    if not managed_windows:
-        managed_windows = derive_managed_windows(window_payload, runtime_session)
+    window_managed_windows = derive_managed_windows(window_payload, runtime_session)
+    managed_windows = window_managed_windows or runtime_managed_windows
 
-    workspace_window_counts = runtime_session.get("workspace_window_counts")
-    if not isinstance(workspace_window_counts, dict):
-        workspace_window_counts = {}
-    if not workspace_window_counts:
-        derived_workspace_counts: dict[str, int] = {}
-        for window in managed_windows:
-            workspace_id = str(window.get("workspace_id") or "workspace-1")
-            derived_workspace_counts[workspace_id] = derived_workspace_counts.get(workspace_id, 0) + 1
-        workspace_window_counts = derived_workspace_counts
+    derived_workspace_counts: dict[str, int] = {}
+    for window in managed_windows:
+        workspace_id = str(window.get("workspace_id") or "workspace-1")
+        derived_workspace_counts[workspace_id] = derived_workspace_counts.get(workspace_id, 0) + 1
+    workspace_window_counts = dict(sorted(derived_workspace_counts.items()))
 
+    active_workspace_index = parse_int(
+        window_payload.get("active_workspace_index"),
+        parse_int(runtime_session.get("active_workspace_index"), 0),
+    )
+    active_workspace_id = f"workspace-{active_workspace_index + 1}"
+    outputs = [
+        item
+        for item in runtime_session.get("outputs", [])
+        if isinstance(item, dict)
+    ]
+    output_count = parse_int(runtime_session.get("output_count"), len(outputs))
+    renderable_output_count = parse_int(
+        runtime_session.get("renderable_output_count"),
+        sum(1 for item in outputs if item.get("renderable")),
+    )
+    non_renderable_output_count = parse_int(
+        runtime_session.get("non_renderable_output_count"),
+        max(output_count - renderable_output_count, 0),
+    )
     errors = [error for error in (runtime_error, window_error) if error]
     data_status = "ready" if runtime_payload or window_payload else "unavailable"
     if errors and data_status == "ready":
@@ -148,30 +175,27 @@ def load_compositor_summary(
             runtime_session.get("workspace_count"),
             max(len(workspace_window_counts), 1),
         ),
-        "active_workspace_index": parse_int(runtime_session.get("active_workspace_index"), 0),
-        "active_workspace_id": runtime_session.get("active_workspace_id") or "workspace-1",
-        "active_output_id": runtime_session.get("active_output_id") or window_payload.get("active_output_id"),
-        "managed_window_count": parse_int(runtime_session.get("managed_window_count"), len(managed_windows)),
-        "visible_window_count": parse_int(
-            runtime_session.get("visible_window_count"),
-            sum(1 for item in managed_windows if item.get("visible")),
-        ),
-        "floating_window_count": parse_int(
-            runtime_session.get("floating_window_count"),
-            sum(1 for item in managed_windows if item.get("window_policy") and "floating" in str(item.get("window_policy"))),
-        ),
-        "minimized_window_count": parse_int(
-            runtime_session.get("minimized_window_count"),
-            sum(1 for item in managed_windows if item.get("minimized")),
-        ),
+        "active_workspace_index": active_workspace_index,
+        "active_workspace_id": active_workspace_id,
+        "active_output_id": window_payload.get("active_output_id") or runtime_session.get("active_output_id"),
+        "output_count": output_count,
+        "renderable_output_count": renderable_output_count,
+        "non_renderable_output_count": non_renderable_output_count,
+        "release_grade_output_status": runtime_session.get("release_grade_output_status")
+        or derive_release_grade_output_status(outputs, renderable_output_count),
+        "managed_window_count": len(managed_windows),
+        "visible_window_count": sum(1 for item in managed_windows if item.get("visible")),
+        "floating_window_count": sum(1 for item in managed_windows if item.get("window_policy") and "floating" in str(item.get("window_policy"))),
+        "minimized_window_count": sum(1 for item in managed_windows if item.get("minimized")),
         "window_move_count": parse_int(runtime_session.get("window_move_count"), 0),
         "window_resize_count": parse_int(runtime_session.get("window_resize_count"), 0),
         "window_minimize_count": parse_int(runtime_session.get("window_minimize_count"), 0),
         "window_restore_count": parse_int(runtime_session.get("window_restore_count"), 0),
         "last_minimized_window_key": runtime_session.get("last_minimized_window_key"),
         "last_restored_window_key": runtime_session.get("last_restored_window_key"),
-        "workspace_window_counts": dict(sorted(workspace_window_counts.items())),
+        "workspace_window_counts": workspace_window_counts,
         "managed_windows": managed_windows,
+        "outputs": outputs,
     }
 
 
@@ -259,6 +283,7 @@ def load_notifications(args: argparse.Namespace) -> tuple[list[dict], dict, dict
     remote_governance_summary = load_remote_governance_summary(
         args.browser_remote_registry,
         args.office_remote_registry,
+        args.mcp_remote_registry,
         args.provider_registry_state_dir,
     )
     context = notification_context(
@@ -534,6 +559,8 @@ def build_model(
                     {"label": "Runtime Phase", "value": compositor_summary.get("runtime_phase") or "unknown", "tone": "neutral"},
                     {"label": "Workspace", "value": compositor_summary.get("active_workspace_id") or "workspace-1", "tone": "positive"},
                     {"label": "Output", "value": compositor_summary.get("active_output_id") or "-", "tone": "neutral"},
+                    {"label": "Renderable Outputs", "value": compositor_summary.get("renderable_output_count", 0), "tone": "positive" if compositor_summary.get("renderable_output_count", 0) else "neutral"},
+                    {"label": "Output Status", "value": compositor_summary.get("release_grade_output_status") or "uninitialized", "tone": "neutral"},
                     {"label": "Managed", "value": compositor_summary.get("managed_window_count", 0), "tone": "neutral"},
                     {"label": "Minimized", "value": compositor_summary.get("minimized_window_count", 0), "tone": "warning" if compositor_summary.get("minimized_window_count", 0) else "neutral"},
                     {"label": "Workspace Count", "value": compositor_summary.get("workspace_count", 1), "tone": "neutral"},
@@ -580,6 +607,10 @@ def build_model(
             "compositor_workspace_count": compositor_summary.get("workspace_count", 1),
             "compositor_active_workspace_id": compositor_summary.get("active_workspace_id"),
             "compositor_active_output_id": compositor_summary.get("active_output_id"),
+            "compositor_output_count": compositor_summary.get("output_count", 0),
+            "compositor_renderable_output_count": compositor_summary.get("renderable_output_count", 0),
+            "compositor_non_renderable_output_count": compositor_summary.get("non_renderable_output_count", 0),
+            "compositor_release_grade_output_status": compositor_summary.get("release_grade_output_status"),
             "compositor_managed_window_count": compositor_summary.get("managed_window_count", 0),
             "compositor_visible_window_count": compositor_summary.get("visible_window_count", 0),
             "compositor_floating_window_count": compositor_summary.get("floating_window_count", 0),
@@ -636,6 +667,7 @@ def main() -> int:
     parser.add_argument("--compat-observability-log", type=Path, default=default_compat_observability_log())
     parser.add_argument("--browser-remote-registry", type=Path, default=default_browser_remote_registry())
     parser.add_argument("--office-remote-registry", type=Path, default=default_office_remote_registry())
+    parser.add_argument("--mcp-remote-registry", type=Path, default=default_mcp_remote_registry())
     parser.add_argument("--provider-registry-state-dir", type=Path, default=default_provider_registry_state_dir())
     parser.add_argument("--approval-fixture", type=Path)
     parser.add_argument("--compositor-runtime-state", type=Path, default=default_compositor_runtime_state())

@@ -164,6 +164,70 @@ fn append_panel_action_event(path: &Path, event: &PanelActionEvent) -> Result<()
     writeln!(file, "{line}").map_err(|error| error.to_string())
 }
 
+pub struct MultiOutputState {
+    pub outputs: Vec<OutputDescriptor>,
+    pub primary_output_index: usize,
+    pub layout_mode: OutputLayoutMode,
+}
+
+pub struct OutputDescriptor {
+    pub output_id: String,
+    pub connector_name: String,
+    pub width: u32,
+    pub height: u32,
+    pub refresh_rate_mhz: u32,
+    pub renderable: bool,
+    pub position_x: i32,
+    pub position_y: i32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum OutputLayoutMode {
+    Horizontal,
+    Vertical,
+    Mirrored,
+    Custom,
+}
+
+impl MultiOutputState {
+    pub fn single(output_id: String, width: u32, height: u32) -> Self {
+        Self {
+            outputs: vec![OutputDescriptor {
+                output_id,
+                connector_name: "primary".to_string(),
+                width,
+                height,
+                refresh_rate_mhz: 60_000,
+                renderable: true,
+                position_x: 0,
+                position_y: 0,
+            }],
+            primary_output_index: 0,
+            layout_mode: OutputLayoutMode::Horizontal,
+        }
+    }
+
+    pub fn total_render_area(&self) -> (u32, u32) {
+        match self.layout_mode {
+            OutputLayoutMode::Horizontal => {
+                let w: u32 = self.outputs.iter().filter(|o| o.renderable).map(|o| o.width).sum();
+                let h = self.outputs.iter().filter(|o| o.renderable).map(|o| o.height).max().unwrap_or(0);
+                (w, h)
+            }
+            OutputLayoutMode::Vertical => {
+                let w = self.outputs.iter().filter(|o| o.renderable).map(|o| o.width).max().unwrap_or(0);
+                let h: u32 = self.outputs.iter().filter(|o| o.renderable).map(|o| o.height).sum();
+                (w, h)
+            }
+            OutputLayoutMode::Mirrored | OutputLayoutMode::Custom => {
+                let w = self.outputs.iter().filter(|o| o.renderable).map(|o| o.width).max().unwrap_or(0);
+                let h = self.outputs.iter().filter(|o| o.renderable).map(|o| o.height).max().unwrap_or(0);
+                (w, h)
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct RuntimeArtifactPaths {
     lock_path: PathBuf,

@@ -64,6 +64,23 @@ pub fn describe(config: &Config) -> Vec<CaptureAdapterPlan> {
 }
 
 pub fn extend_capability_notes(config: &Config, capability: &mut DeviceCapabilityDescriptor) {
+    if capability.modality == "ui_tree" {
+        if let Some(plan) = state_ui_tree_adapter(config) {
+            capability
+                .notes
+                .push(format!("adapter_id={}", plan.adapter_id));
+            capability
+                .notes
+                .push(format!("adapter_execution_path={}", plan.execution_path));
+            capability.notes.extend(plan.notes);
+        } else if config.ui_tree_supported {
+            capability
+                .notes
+                .push("ui_tree supported but no adapter source resolved".to_string());
+        }
+        return;
+    }
+
     if let Ok(plan) = resolve_capture_plan_for_modality(config, &capability.modality) {
         capability
             .notes

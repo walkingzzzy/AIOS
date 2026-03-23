@@ -12,6 +12,7 @@ pub struct Config {
     pub agentd_socket: PathBuf,
     pub descriptor_path: PathBuf,
     pub observability_log_path: PathBuf,
+    pub hardware_profile_path: Option<PathBuf>,
 }
 
 impl Config {
@@ -34,6 +35,7 @@ impl Config {
             env_path_or("AIOS_DEVICE_METADATA_PROVIDER_OBSERVABILITY_LOG", || {
                 paths.state_dir.join("observability.jsonl")
             });
+        let hardware_profile_path = resolve_hardware_profile_path();
 
         Ok(Self {
             service_id: "aios-device-metadata-provider".to_string(),
@@ -45,6 +47,7 @@ impl Config {
             agentd_socket,
             descriptor_path,
             observability_log_path,
+            hardware_profile_path,
         })
     }
 }
@@ -56,4 +59,38 @@ fn default_descriptor_path() -> PathBuf {
     }
 
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../sdk/providers/device.metadata.local.json")
+}
+
+fn resolve_hardware_profile_path() -> Option<PathBuf> {
+    for key in [
+        "AIOS_DEVICE_METADATA_PROVIDER_HARDWARE_PROFILE",
+        "AIOS_HARDWARE_PROFILE",
+    ] {
+        if let Some(value) = std::env::var_os(key) {
+            let path = PathBuf::from(value);
+            if !path.as_os_str().is_empty() {
+                return Some(path);
+            }
+        }
+    }
+
+    let profile_id = [
+        "AIOS_DEVICE_METADATA_PROVIDER_HARDWARE_PROFILE_ID",
+        "AIOS_HARDWARE_PROFILE_ID",
+    ]
+    .into_iter()
+    .find_map(|key| std::env::var(key).ok())
+    .map(|value| value.trim().to_string())
+    .filter(|value| !value.is_empty())?;
+
+    Some(default_hardware_profiles_dir().join(format!("{profile_id}.yaml")))
+}
+
+fn default_hardware_profiles_dir() -> PathBuf {
+    let installed = PathBuf::from("/usr/share/aios/hardware/profiles");
+    if installed.exists() {
+        return installed;
+    }
+
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../hardware/profiles")
 }

@@ -44,6 +44,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device-metadata-status", default="")
     parser.add_argument("--device-metadata-backend-status", default="")
     parser.add_argument("--device-available-modalities", default="")
+    parser.add_argument("--device-metadata-artifact", default="")
     parser.add_argument("--device-backend-state-artifact", default="")
     parser.add_argument("--device-release-grade-backend-ids", default="")
     parser.add_argument("--device-release-grade-backend-origins", default="")
@@ -118,6 +119,22 @@ def sorted_join(values: set[str]) -> str:
     if not values:
         return ""
     return ",".join(sorted(values))
+
+
+def note_map(notes: list[object]) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for note in notes:
+        if not isinstance(note, str) or "=" not in note:
+            continue
+        key, value = note.split("=", 1)
+        values[key] = value
+    return values
+
+
+def split_csv(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return [item for item in (part.strip() for part in value.split(",")) if item]
 
 
 def note_value(notes: list[object], prefix: str) -> str | None:
@@ -229,6 +246,100 @@ def collect_vendor_runtime_evidence_paths(args: argparse.Namespace) -> list[Path
                     append_unique_path(paths, seen, str(evidence_path))
 
     return paths
+
+
+def normalize_text(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text or None
+
+
+def profile_alignment_status(profile: dict[str, Any], device_profile: dict[str, Any]) -> str:
+    report_ids = {
+        value
+        for value in [
+            normalize_text(profile.get("id")),
+            normalize_text(profile.get("canonical_hardware_profile_id")),
+            normalize_text(profile.get("platform_media_id")),
+        ]
+        if value
+    }
+    runtime_ids = {
+        value
+        for value in [
+            normalize_text(device_profile.get("hardware_profile_id")),
+            normalize_text(device_profile.get("canonical_hardware_profile_id")),
+            normalize_text(device_profile.get("platform_media_id")),
+        ]
+        if value
+    }
+    if not report_ids or not runtime_ids:
+        return "unknown"
+    return "aligned" if report_ids & runtime_ids else "mismatch"
+
+
+def derive_device_profile_summary(profile: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
+    summary = {
+        "metadata_artifact": normalize_text(args.device_metadata_artifact),
+        "hardware_profile_id": None,
+        "hardware_profile_path": None,
+        "canonical_hardware_profile_id": None,
+        "platform_media_id": None,
+        "platform_tier": None,
+        "bringup_status": None,
+        "runtime_profile": None,
+        "hardware_evidence_required": None,
+        "validation_status": None,
+        "required_modalities": [],
+        "conditional_modalities": [],
+        "available_expected_modalities": [],
+        "missing_required_modalities": [],
+        "missing_conditional_modalities": [],
+        "release_track_intent": [],
+        "profile_alignment_status": "unknown",
+    }
+    artifact_path = summary["metadata_artifact"]
+    if artifact_path is None:
+        return summary
+    path = Path(artifact_path)
+    if not path.exists():
+        summary["metadata_artifact"] = str(path)
+        return summary
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        summary["metadata_artifact"] = str(path)
+        return summary
+    if not isinstance(payload, dict):
+        summary["metadata_artifact"] = str(path)
+        return summary
+
+    notes = note_map(payload.get("notes") or [])
+    summary.update(
+        {
+            "metadata_artifact": str(path),
+            "hardware_profile_id": normalize_text(notes.get("hardware_profile_id")),
+            "hardware_profile_path": normalize_text(notes.get("hardware_profile_path")),
+            "canonical_hardware_profile_id": normalize_text(notes.get("hardware_profile_canonical_id")),
+            "platform_media_id": normalize_text(notes.get("hardware_profile_platform_media_id")),
+            "platform_tier": normalize_text(notes.get("hardware_profile_platform_tier")),
+            "bringup_status": normalize_text(notes.get("hardware_profile_bringup_status")),
+            "runtime_profile": normalize_text(notes.get("hardware_profile_runtime_profile")),
+            "validation_status": normalize_text(notes.get("hardware_profile_validation_status")),
+            "required_modalities": split_csv(notes.get("hardware_profile_required_modalities")),
+            "conditional_modalities": split_csv(notes.get("hardware_profile_conditional_modalities")),
+            "available_expected_modalities": split_csv(notes.get("hardware_profile_available_expected_modalities")),
+            "missing_required_modalities": split_csv(notes.get("hardware_profile_missing_required_modalities")),
+            "missing_conditional_modalities": split_csv(notes.get("hardware_profile_missing_conditional_modalities")),
+            "release_track_intent": split_csv(notes.get("hardware_profile_release_track_intent")),
+        }
+    )
+    hardware_evidence_required = normalize_text(notes.get("hardware_profile_hardware_evidence_required"))
+    if hardware_evidence_required is not None:
+        summary["hardware_evidence_required"] = hardware_evidence_required == "true"
+    summary["profile_alignment_status"] = profile_alignment_status(profile, summary)
+    return summary
 
 
 def derive_release_grade_summary(args: argparse.Namespace) -> dict[str, str]:
@@ -350,6 +461,7 @@ def render_report(
     final = final_record(evaluator)
     release_grade_summary = derive_release_grade_summary(args)
     vendor_runtime = summarize_vendor_runtime_evidence(args)
+    device_profile = derive_device_profile_summary(profile, args)
     platform_id = profile.get("platform_media_id") or profile.get("id") or "unknown-platform"
     boot_ids = ", ".join(evaluator.get("unique_boot_ids", [])) or "-"
     issues = open_issues(evaluator, args.note) + vendor_runtime["issues"]
@@ -399,6 +511,7 @@ def render_report(
         f"- device.metadata.get readiness status: {args.device_metadata_status or '-'}",
         f"- device.metadata.get backend overall status: {args.device_metadata_backend_status or '-'}",
         f"- device.metadata.get available modalities: {args.device_available_modalities or '-'}",
+        f"- device.metadata artifact attached: {args.device_metadata_artifact or '-'}",
         f"- release-grade backend ids: {release_grade_summary['backend_ids'] or '-'}",
         f"- release-grade backend origins: {release_grade_summary['origins'] or '-'}",
         f"- release-grade backend stacks: {release_grade_summary['stacks'] or '-'}",
@@ -412,6 +525,26 @@ def render_report(
         f"- vendor runtime backend ids: {','.join(vendor_runtime['backend_ids']) or '-'}",
         f"- vendor runtime evidence count: {vendor_runtime['evidence_count']}",
         f"- vendor runtime evidence attached: {','.join(vendor_runtime['evidence_paths']) or '-'}",
+        "",
+        "## Device Profile Alignment",
+        "",
+        f"- Report profile id: {profile.get('id', '-')}",
+        f"- Report platform media id: {profile.get('platform_media_id', '-')}",
+        f"- Runtime hardware profile id: {device_profile['hardware_profile_id'] or '-'}",
+        f"- Runtime hardware profile path: {device_profile['hardware_profile_path'] or '-'}",
+        f"- Runtime canonical hardware profile id: {device_profile['canonical_hardware_profile_id'] or '-'}",
+        f"- Runtime platform media id: {device_profile['platform_media_id'] or '-'}",
+        f"- Runtime platform tier: {device_profile['platform_tier'] or '-'}",
+        f"- Runtime bring-up status: {device_profile['bringup_status'] or '-'}",
+        f"- Runtime profile alignment: {device_profile['profile_alignment_status']}",
+        f"- Runtime validation status: {device_profile['validation_status'] or '-'}",
+        f"- Runtime hardware evidence required: {'yes' if device_profile['hardware_evidence_required'] is True else 'no' if device_profile['hardware_evidence_required'] is False else '-'}",
+        f"- Runtime required modalities: {','.join(device_profile['required_modalities']) or '-'}",
+        f"- Runtime conditional modalities: {','.join(device_profile['conditional_modalities']) or '-'}",
+        f"- Runtime available expected modalities: {','.join(device_profile['available_expected_modalities']) or '-'}",
+        f"- Runtime missing required modalities: {','.join(device_profile['missing_required_modalities']) or '-'}",
+        f"- Runtime missing conditional modalities: {','.join(device_profile['missing_conditional_modalities']) or '-'}",
+        f"- Runtime release track intent: {','.join(device_profile['release_track_intent']) or '-'}",
         "",
         "## Rollback Outcome",
         "",
@@ -452,6 +585,7 @@ def build_evidence_index(
     final = final_record(evaluator)
     release_grade_summary = derive_release_grade_summary(args)
     vendor_runtime = summarize_vendor_runtime_evidence(args)
+    device_profile = derive_device_profile_summary(profile, args)
     notes = open_issues(evaluator, args.note) + vendor_runtime["issues"]
     return {
         "platform_id": profile.get("platform_media_id") or profile.get("id") or "unknown-platform",
@@ -478,12 +612,14 @@ def build_evidence_index(
             "known_limitations": args.known_limitations,
             "installer_log": args.installer_log,
             "recovery_log": args.recovery_log,
+            "device_metadata_artifact": args.device_metadata_artifact,
             "device_backend_state_artifact": args.device_backend_state_artifact,
             "vendor_runtime_evidence": vendor_runtime["evidence_paths"],
             "photos": args.photo,
         },
         "device_runtime": {
             "backend_state_artifact": args.device_backend_state_artifact or None,
+            "device_profile": device_profile,
             "release_grade_backends": {
                 "backend_ids": release_grade_summary["backend_ids"],
                 "origins": release_grade_summary["origins"],

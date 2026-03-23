@@ -10,9 +10,18 @@ import socket
 import subprocess
 import tempfile
 import time
+from dataclasses import dataclass
 from pathlib import Path
+from typing import TextIO
 
 from aios_cargo_bins import default_aios_bin_dir, resolve_binary_path
+
+
+@dataclass
+class ServiceProcess:
+    process: subprocess.Popen
+    log_path: Path
+    log_handle: TextIO
 
 
 def parse_args() -> argparse.Namespace:
@@ -24,6 +33,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sessiond", type=Path, help="Path to sessiond binary")
     parser.add_argument("--policyd", type=Path, help="Path to policyd binary")
     parser.add_argument("--runtimed", type=Path, help="Path to runtimed binary")
+    parser.add_argument("--system-files-provider", type=Path, help="Path to system-files-provider binary")
+    parser.add_argument("--system-intent-provider", type=Path, help="Path to system-intent-provider binary")
     parser.add_argument("--timeout", type=float, default=20.0, help="Seconds to wait for sockets and RPC calls")
     parser.add_argument("--keep-state", action="store_true", help="Keep temp runtime/state directory on success")
     return parser.parse_args()
@@ -73,7 +84,7 @@ def rpc_call(socket_path: Path, method: str, params: dict, timeout: float) -> di
 
 
 def unix_rpc_supported() -> bool:
-    return hasattr(socket, "AF_UNIX") and os.name != "nt"
+    return hasattr(socket, "AF_UNIX")
 
 
 def wait_for_socket(path: Path, timeout: float) -> None:
@@ -97,37 +108,41 @@ def wait_for_health(socket_path: Path, timeout: float) -> dict:
     raise TimeoutError(f"Timed out waiting for health on {socket_path}: {last_error}")
 
 
-def launch(binary: Path, env: dict[str, str]) -> subprocess.Popen:
-    return subprocess.Popen(
+def launch(name: str, binary: Path, env: dict[str, str], log_dir: Path) -> ServiceProcess:
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f"{name}.log"
+    log_handle = log_path.open("w", encoding="utf-8")
+    process = subprocess.Popen(
         [str(binary)],
         env=env,
-        stdout=subprocess.PIPE,
+        stdout=log_handle,
         stderr=subprocess.STDOUT,
         text=True,
     )
+    return ServiceProcess(process=process, log_path=log_path, log_handle=log_handle)
 
 
-def terminate(processes: list[subprocess.Popen]) -> None:
-    for process in processes:
-        if process.poll() is None:
-            process.send_signal(signal.SIGINT)
+def terminate(processes: list[ServiceProcess]) -> None:
+    for service in processes:
+        if service.process.poll() is None:
+            service.process.send_signal(signal.SIGINT)
     deadline = time.time() + 5
-    for process in processes:
-        if process.poll() is not None:
+    for service in processes:
+        if service.process.poll() is not None:
             continue
         remaining = max(0.1, deadline - time.time())
         try:
-            process.wait(timeout=remaining)
+            service.process.wait(timeout=remaining)
         except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait(timeout=2)
+            service.process.kill()
+            service.process.wait(timeout=2)
 
 
-def print_logs(processes: dict[str, subprocess.Popen]) -> None:
-    for name, process in processes.items():
+def print_logs(processes: dict[str, ServiceProcess]) -> None:
+    for name, service in processes.items():
         output = ""
-        if process.stdout and process.poll() is not None:
-            output = process.stdout.read()
+        if service.log_path.exists():
+            output = service.log_path.read_text(encoding="utf-8")
         if output.strip():
             print(f"\n--- {name} log ---")
             print(output.rstrip())
@@ -136,6 +151,23 @@ def print_logs(processes: dict[str, subprocess.Popen]) -> None:
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise RuntimeError(message)
+
+
+def plan_step(plan: dict, capability_id: str) -> dict | None:
+    for step in plan.get("steps", []):
+        if isinstance(step, dict) and step.get("capability_id") == capability_id:
+            return step
+    return None
+
+
+def smoke_temp_root() -> Path:
+    base = repo_root() / ".tmp" / "team-b-smoke"
+    base.mkdir(parents=True, exist_ok=True)
+    return Path(tempfile.mkdtemp(prefix="tb-", dir=base))
+
+
+def step(message: str) -> None:
+    print(f"[team-b-smoke] {message}", flush=True)
 
 
 def require_trace_context(response: dict, service_name: str) -> None:
@@ -184,6 +216,8 @@ def make_env(root: Path) -> dict[str, str]:
             "AIOS_AGENTD_RUNTIMED_SOCKET": str(run_root / "runtimed" / "runtimed.sock"),
             "AIOS_AGENTD_PROVIDER_REGISTRY_STATE_DIR": str(state_root / "registry"),
             "AIOS_AGENTD_PROVIDER_DESCRIPTOR_DIRS": os.pathsep.join(str(path) for path in provider_dirs),
+            "AIOS_AGENTD_SYSTEM_FILES_PROVIDER_SOCKET": str(run_root / "system-files-provider" / "system-files-provider.sock"),
+            "AIOS_AGENTD_SYSTEM_INTENT_PROVIDER_SOCKET": str(run_root / "system-intent-provider" / "system-intent-provider.sock"),
             "AIOS_SESSIOND_RUNTIME_DIR": str(run_root / "sessiond"),
             "AIOS_SESSIOND_STATE_DIR": str(state_root / "sessiond"),
             "AIOS_SESSIOND_SOCKET_PATH": str(run_root / "sessiond" / "sessiond.sock"),
@@ -206,6 +240,23 @@ def make_env(root: Path) -> dict[str, str]:
             "AIOS_RUNTIMED_POLICYD_SOCKET": str(run_root / "policyd" / "policyd.sock"),
             "AIOS_RUNTIMED_REMOTE_AUDIT_LOG": str(state_root / "runtimed" / "remote-audit.jsonl"),
             "AIOS_RUNTIMED_OBSERVABILITY_LOG": str(shared_observability_log),
+            "AIOS_SYSTEM_FILES_PROVIDER_RUNTIME_DIR": str(run_root / "system-files-provider"),
+            "AIOS_SYSTEM_FILES_PROVIDER_STATE_DIR": str(state_root / "system-files-provider"),
+            "AIOS_SYSTEM_FILES_PROVIDER_SOCKET_PATH": str(run_root / "system-files-provider" / "system-files-provider.sock"),
+            "AIOS_SYSTEM_FILES_PROVIDER_AGENTD_SOCKET": str(run_root / "agentd" / "agentd.sock"),
+            "AIOS_SYSTEM_FILES_PROVIDER_SESSIOND_SOCKET": str(run_root / "sessiond" / "sessiond.sock"),
+            "AIOS_SYSTEM_FILES_PROVIDER_POLICYD_SOCKET": str(run_root / "policyd" / "policyd.sock"),
+            "AIOS_SYSTEM_FILES_PROVIDER_DESCRIPTOR_PATH": str(repo / "aios" / "sdk" / "providers" / "system-files.local.json"),
+            "AIOS_SYSTEM_FILES_PROVIDER_AUDIT_LOG": str(state_root / "system-files-provider" / "audit.jsonl"),
+            "AIOS_SYSTEM_FILES_PROVIDER_OBSERVABILITY_LOG": str(shared_observability_log),
+            "AIOS_SYSTEM_INTENT_PROVIDER_RUNTIME_DIR": str(run_root / "system-intent-provider"),
+            "AIOS_SYSTEM_INTENT_PROVIDER_STATE_DIR": str(state_root / "system-intent-provider"),
+            "AIOS_SYSTEM_INTENT_PROVIDER_SOCKET_PATH": str(run_root / "system-intent-provider" / "system-intent-provider.sock"),
+            "AIOS_SYSTEM_INTENT_PROVIDER_AGENTD_SOCKET": str(run_root / "agentd" / "agentd.sock"),
+            "AIOS_SYSTEM_INTENT_PROVIDER_SESSIOND_SOCKET": str(run_root / "sessiond" / "sessiond.sock"),
+            "AIOS_SYSTEM_INTENT_PROVIDER_POLICYD_SOCKET": str(run_root / "policyd" / "policyd.sock"),
+            "AIOS_SYSTEM_INTENT_PROVIDER_DESCRIPTOR_PATH": str(repo / "aios" / "sdk" / "providers" / "system-intent.local.json"),
+            "AIOS_SYSTEM_INTENT_PROVIDER_OBSERVABILITY_LOG": str(shared_observability_log),
         }
     )
     return env
@@ -221,21 +272,28 @@ def main() -> int:
         "policyd": resolve_binary("policyd", args.policyd, args.bin_dir),
         "runtimed": resolve_binary("runtimed", args.runtimed, args.bin_dir),
         "agentd": resolve_binary("agentd", args.agentd, args.bin_dir),
+        "system-files-provider": resolve_binary("system-files-provider", args.system_files_provider, args.bin_dir),
+        "system-intent-provider": resolve_binary("system-intent-provider", args.system_intent_provider, args.bin_dir),
     }
     ensure_binary(binaries["sessiond"], "aios-sessiond")
     ensure_binary(binaries["policyd"], "aios-policyd")
     ensure_binary(binaries["runtimed"], "aios-runtimed")
     ensure_binary(binaries["agentd"], "aios-agentd")
+    ensure_binary(binaries["system-files-provider"], "aios-system-files-provider")
+    ensure_binary(binaries["system-intent-provider"], "aios-system-intent-provider")
 
-    temp_root = Path(tempfile.mkdtemp(prefix="aios-team-b-", dir="/tmp"))
+    temp_root = smoke_temp_root()
     env = make_env(temp_root)
     failed = False
+    log_dir = temp_root / "logs"
 
     processes = {
-        "sessiond": launch(binaries["sessiond"], env),
-        "policyd": launch(binaries["policyd"], env),
-        "runtimed": launch(binaries["runtimed"], env),
-        "agentd": launch(binaries["agentd"], env),
+        "sessiond": launch("sessiond", binaries["sessiond"], env, log_dir),
+        "policyd": launch("policyd", binaries["policyd"], env, log_dir),
+        "runtimed": launch("runtimed", binaries["runtimed"], env, log_dir),
+        "system-files-provider": launch("system-files-provider", binaries["system-files-provider"], env, log_dir),
+        "system-intent-provider": launch("system-intent-provider", binaries["system-intent-provider"], env, log_dir),
+        "agentd": launch("agentd", binaries["agentd"], env, log_dir),
     }
 
     try:
@@ -243,11 +301,15 @@ def main() -> int:
         policyd_socket = Path(env["AIOS_POLICYD_SOCKET_PATH"])
         runtimed_socket = Path(env["AIOS_RUNTIMED_SOCKET_PATH"])
         agentd_socket = Path(env["AIOS_AGENTD_SOCKET_PATH"])
+        system_files_provider_socket = Path(env["AIOS_SYSTEM_FILES_PROVIDER_SOCKET_PATH"])
+        system_intent_provider_socket = Path(env["AIOS_SYSTEM_INTENT_PROVIDER_SOCKET_PATH"])
 
         for service_name, socket_path in [
             ("sessiond", sessiond_socket),
             ("policyd", policyd_socket),
             ("runtimed", runtimed_socket),
+            ("system-files-provider", system_files_provider_socket),
+            ("system-intent-provider", system_intent_provider_socket),
             ("agentd", agentd_socket),
         ]:
             wait_for_socket(socket_path, args.timeout)
@@ -258,6 +320,7 @@ def main() -> int:
                 service_name,
             )
 
+        step("all services healthy")
         contract_response = rpc_exchange(agentd_socket, "system.contract.get", {}, timeout=args.timeout)
         require_trace_context(contract_response, "agentd")
         contract = contract_response["result"]
@@ -279,6 +342,7 @@ def main() -> int:
             "empty intent should return structured error code",
         )
 
+        step("submit low-risk intent")
         allowed = rpc_call(
             agentd_socket,
             "agent.intent.submit",
@@ -294,6 +358,10 @@ def main() -> int:
         require(allowed["policy"]["decision"]["decision"] == "allowed", "summarize intent should be allowed")
         require(allowed["task"]["state"] == "approved", "allowed task should move to approved")
         require(allowed["runtime_preview"]["backend_id"] == "local-cpu", "runtime preview should use local cpu")
+        require(plan_step(allowed["plan"], "runtime.infer.submit") is not None, "allowed plan should expose runtime step")
+        require(plan_step(allowed["plan"], "runtime.infer.submit")["status"] == "completed", "allowed runtime step should be completed")
+        require(allowed.get("approval_summary") is None, "low-risk summarize intent should not expose approval summary")
+        require((allowed.get("recovery") or {}).get("session_id") == session_id, "allowed response should include recovery summary")
 
         task_events = rpc_call(
             agentd_socket,
@@ -348,9 +416,11 @@ def main() -> int:
         )["entries"]
         require(any(event["kind"] == "runtime.infer.completed" for event in runtime_events), "runtime events missing completion entry")
 
+        step("low-risk intent completed")
         danger_path = temp_root / "team-b-danger.txt"
         danger_path.write_text("team-b control-plane approval target\n")
 
+        step("submit approval-gated delete intent")
         needs_approval = rpc_call(
             agentd_socket,
             "agent.intent.submit",
@@ -370,6 +440,13 @@ def main() -> int:
         require(bool(approval_ref), "approval_ref should be present for high-risk intent")
         approval_target_hash = ((needs_approval.get("portal_handle") or {}).get("scope") or {}).get("target_hash")
         require(bool(approval_target_hash), "high-risk approval flow should bind portal target_hash")
+        delete_step = plan_step(needs_approval["plan"], "system.file.bulk_delete")
+        require(delete_step is not None, "delete intent should expose destructive step in plan")
+        require(delete_step["requires_approval"] is True, "delete step should be marked approval-gated")
+        require((needs_approval.get("approval_summary") or {}).get("approval_ref") == approval_ref, "submit response should expose approval summary ref")
+        require((needs_approval.get("approval_summary") or {}).get("approval_status") == "pending", "submit response should expose pending approval status")
+        require((needs_approval.get("chooser_request") or {}).get("approval_ref") == approval_ref, "submit response should expose chooser approval ref")
+        require((needs_approval.get("chooser_request") or {}).get("portal_handle_id") == needs_approval["portal_handle"]["handle_id"], "submit response should bind chooser to portal handle")
 
         approvals = rpc_call(
             agentd_socket,
@@ -383,6 +460,7 @@ def main() -> int:
         )["approvals"]
         require(any(item["approval_ref"] == approval_ref for item in approvals), "pending approval not found")
 
+        step("resolve approval")
         approved = rpc_call(
             agentd_socket,
             "agent.approval.resolve",
@@ -396,6 +474,7 @@ def main() -> int:
         )
         require(approved["status"] == "approved", "approval should resolve to approved")
 
+        step("resume approved task")
         resumed = rpc_call(
             agentd_socket,
             "agent.task.resume",
@@ -418,8 +497,11 @@ def main() -> int:
             resumed["provider_execution"]["result"].get("status") == "deleted",
             "agent.task.resume should delete the approved target",
         )
+        require((resumed.get("approval_summary") or {}).get("approval_status") == "approved", "agent.task.resume should expose approved summary")
+        require((resumed.get("recovery") or {}).get("session_id") == session_id, "agent.task.resume should expose recovery summary")
         require(not danger_path.exists(), "agent.task.resume should remove the approved target")
 
+        step("resume completed")
         agent_task_detail = rpc_call(
             agentd_socket,
             "agent.task.get",
@@ -439,6 +521,9 @@ def main() -> int:
             (agent_task_detail.get("provider_execution") or {}).get("status") == "completed",
             "agent.task.get should expose provider execution outcome",
         )
+        require((agent_task_detail.get("approval_summary") or {}).get("approval_ref") == approval_ref, "agent.task.get should expose approval summary")
+        require((agent_task_detail.get("chooser_request") or {}).get("portal_handle_id") == needs_approval["portal_handle"]["handle_id"], "agent.task.get should expose chooser portal binding")
+        require((agent_task_detail.get("recovery") or {}).get("session_id") == session_id, "agent.task.get should expose recovery summary")
 
         agent_task_list = rpc_call(
             agentd_socket,
@@ -498,6 +583,9 @@ def main() -> int:
             any(item["task_id"] == approval_task_id for item in session_export_payload["evidence"].get("tasks", [])),
             "agent.session.evidence.export should retain the resumed task",
         )
+        require(agent_session_export.get("recovery_status"), "agent.session.evidence.export should expose recovery status summary")
+        require(agent_session_export.get("resumable_task_count", 0) >= 1, "agent.session.evidence.export should expose resumable task count")
+        require(session_export_payload["counts"].get("resumable_task_count", 0) >= 1, "session export payload should retain resumable task count")
 
 
         agent_approval = rpc_call(
@@ -561,6 +649,8 @@ def main() -> int:
             audit_export_payload["audit_store"]["active_segment_path"] == env["AIOS_POLICYD_AUDIT_LOG"],
             "agent.audit.export should retain policyd active segment path",
         )
+        require(agent_audit_export.get("approval_ref_count", 0) >= 1, "agent.audit.export should expose approval ref count")
+        require(agent_audit_export.get("decision_count", 0) >= 1, "agent.audit.export should expose decision count")
 
 
         token = rpc_call(
@@ -653,6 +743,29 @@ def main() -> int:
             "mirrored policy audit should retain audit artifact path",
         )
 
+        runtime_export = rpc_call(
+            runtimed_socket,
+            "runtime.observability.export",
+            {
+                "session_id": session_id,
+                "limit": 50,
+                "reverse": False,
+                "reason": "team-b-control-plane-smoke",
+            },
+            timeout=args.timeout,
+        )
+        runtime_export_path = Path(runtime_export["export_path"])
+        require(runtime_export_path.exists(), "runtime.observability.export should write an export bundle")
+        runtime_export_payload = json.loads(runtime_export_path.read_text())
+        require(
+            runtime_export_payload["counts"].get("runtime_event_count", 0) >= 1,
+            "runtime.observability.export should retain runtime events",
+        )
+        require(
+            allowed_task_id in runtime_export_payload["correlation"].get("task_ids", []),
+            "runtime.observability.export should correlate the runtime task",
+        )
+
         print("team-b control plane smoke passed")
         return 0
     except Exception as exc:  # noqa: BLE001
@@ -661,6 +774,8 @@ def main() -> int:
         return 1
     finally:
         terminate(list(processes.values()))
+        for service in processes.values():
+            service.log_handle.close()
         print_logs(processes)
         if failed or args.keep_state:
             print(f"state retained at {temp_root}")
@@ -670,3 +785,10 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+
+
+
+
+

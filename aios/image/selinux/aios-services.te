@@ -1,0 +1,87 @@
+policy_module(aios_services, 1.0.0)
+
+########################################
+# AIOS Service Types
+########################################
+
+type aios_agentd_t;
+type aios_agentd_exec_t;
+type aios_sessiond_t;
+type aios_sessiond_exec_t;
+type aios_policyd_t;
+type aios_policyd_exec_t;
+type aios_runtimed_t;
+type aios_runtimed_exec_t;
+type aios_deviced_t;
+type aios_deviced_exec_t;
+type aios_updated_t;
+type aios_updated_exec_t;
+
+type aios_var_lib_t;
+type aios_runtime_t;
+type aios_log_t;
+type aios_socket_t;
+
+########################################
+# Service Domain Transitions
+########################################
+
+init_daemon_domain(aios_agentd_t, aios_agentd_exec_t)
+init_daemon_domain(aios_sessiond_t, aios_sessiond_exec_t)
+init_daemon_domain(aios_policyd_t, aios_policyd_exec_t)
+init_daemon_domain(aios_runtimed_t, aios_runtimed_exec_t)
+init_daemon_domain(aios_deviced_t, aios_deviced_exec_t)
+init_daemon_domain(aios_updated_t, aios_updated_exec_t)
+
+########################################
+# Common Service Permissions
+########################################
+
+# All services can read their own config and shared data
+allow aios_agentd_t aios_var_lib_t:dir { search read getattr open };
+allow aios_agentd_t aios_var_lib_t:file { read getattr open };
+allow aios_sessiond_t aios_var_lib_t:dir { search read getattr open write add_name create };
+allow aios_sessiond_t aios_var_lib_t:file { read write getattr open create };
+allow aios_policyd_t aios_var_lib_t:dir { search read getattr open write add_name };
+allow aios_policyd_t aios_var_lib_t:file { read write getattr open create };
+allow aios_runtimed_t aios_var_lib_t:dir { search read getattr open write add_name };
+allow aios_runtimed_t aios_var_lib_t:file { read write getattr open create };
+allow aios_deviced_t aios_var_lib_t:dir { search read getattr open write add_name };
+allow aios_deviced_t aios_var_lib_t:file { read write getattr open create };
+allow aios_updated_t aios_var_lib_t:dir { search read getattr open write add_name remove_name };
+allow aios_updated_t aios_var_lib_t:file { read write getattr open create unlink };
+
+# Unix domain socket IPC between services
+allow aios_agentd_t aios_socket_t:unix_stream_socket { connectto };
+allow aios_agentd_t aios_runtimed_t:unix_stream_socket { connectto };
+allow aios_agentd_t aios_policyd_t:unix_stream_socket { connectto };
+allow aios_agentd_t aios_sessiond_t:unix_stream_socket { connectto };
+allow aios_runtimed_t aios_policyd_t:unix_stream_socket { connectto };
+
+# Logging
+allow aios_agentd_t aios_log_t:file { write append create getattr open };
+allow aios_sessiond_t aios_log_t:file { write append create getattr open };
+allow aios_policyd_t aios_log_t:file { write append create getattr open };
+allow aios_runtimed_t aios_log_t:file { write append create getattr open };
+allow aios_deviced_t aios_log_t:file { write append create getattr open };
+allow aios_updated_t aios_log_t:file { write append create getattr open };
+
+########################################
+# Service-Specific Permissions
+########################################
+
+# sessiond: SQLite database access
+allow aios_sessiond_t aios_var_lib_t:file { lock };
+
+# policyd: key material access (restricted)
+allow aios_policyd_t aios_var_lib_t:file { lock };
+
+# runtimed: spawn worker processes
+allow aios_runtimed_t self:process { fork signal_perms };
+allow aios_runtimed_t aios_runtime_t:file { execute execute_no_trans };
+
+# deviced: device access (restricted)
+allow aios_deviced_t self:netlink_kobject_uevent_socket { create read getattr };
+
+# updated: system update operations (privileged)
+allow aios_updated_t self:capability { sys_admin };

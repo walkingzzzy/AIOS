@@ -7,6 +7,8 @@ use std::{
 
 use aios_contracts::{TraceEventRecord, TraceQueryRequest};
 
+use crate::trace_query::matches_request;
+
 #[derive(Debug, Clone)]
 pub struct EventLog {
     path: PathBuf,
@@ -108,28 +110,9 @@ impl EventLog {
     }
 }
 
-fn matches_request(entry: &TraceEventRecord, request: &TraceQueryRequest) -> bool {
-    if let Some(session_id) = &request.session_id {
-        if entry.session_id.as_deref() != Some(session_id.as_str()) {
-            return false;
-        }
-    }
-    if let Some(task_id) = &request.task_id {
-        if entry.task_id.as_deref() != Some(task_id.as_str()) {
-            return false;
-        }
-    }
-    if let Some(kind) = &request.kind {
-        if &entry.kind != kind {
-            return false;
-        }
-    }
-
-    true
-}
-
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::fs;
 
     use serde_json::json;
@@ -197,6 +180,63 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].event_id, "runtimed-evt-3");
         assert_eq!(entries[1].event_id, "runtimed-evt-2");
+
+        let _ = fs::remove_dir_all(root);
+        Ok(())
+    }
+
+    #[test]
+    fn query_filters_by_payload_fields_and_substring() -> anyhow::Result<()> {
+        let root = std::env::temp_dir().join("aios-runtimed-event-log-payload-filter");
+        fs::create_dir_all(&root)?;
+        let path = root.join("runtime-events.jsonl");
+        let log = EventLog::new(path.clone());
+
+        log.append(&TraceEventRecord {
+            event_id: "runtimed-evt-gpu".to_string(),
+            timestamp: "2026-03-16T00:00:01Z".to_string(),
+            source: "aios-runtimed".to_string(),
+            kind: "runtime.backend.health".to_string(),
+            task_id: None,
+            session_id: None,
+            payload: json!({
+                "backend_id": "local-gpu",
+                "detail": {
+                    "route_state": "backend-fallback-local-cpu"
+                }
+            }),
+        })?;
+        log.append(&TraceEventRecord {
+            event_id: "runtimed-evt-npu".to_string(),
+            timestamp: "2026-03-16T00:00:02Z".to_string(),
+            source: "aios-runtimed".to_string(),
+            kind: "runtime.backend.health".to_string(),
+            task_id: None,
+            session_id: None,
+            payload: json!({
+                "backend_id": "local-npu",
+                "detail": {
+                    "route_state": "local-npu-worker-v1"
+                }
+            }),
+        })?;
+
+        let entries = log.query(&TraceQueryRequest {
+            source: Some("aios-runtimed".to_string()),
+            payload_equals: BTreeMap::from([
+                ("backend_id".to_string(), json!("local-gpu")),
+                (
+                    "detail.route_state".to_string(),
+                    json!("backend-fallback-local-cpu"),
+                ),
+            ]),
+            payload_contains: Some("FALLBACK-LOCAL-CPU".to_string()),
+            limit: 10,
+            ..TraceQueryRequest::default()
+        })?;
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].event_id, "runtimed-evt-gpu");
 
         let _ = fs::remove_dir_all(root);
         Ok(())

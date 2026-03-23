@@ -6,10 +6,10 @@ import json
 import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 from shell_evidence_manifest import write_shell_evidence_manifest
+from shell_test_temp import make_temp_dir, restore_session_temp_root, set_session_temp_root
 from mock_device_capture_rpc import managed_mock_deviced
 
 
@@ -386,7 +386,8 @@ def export_for_iteration(assets: dict[str, Path], output_prefix: Path) -> dict:
 
 def main() -> int:
     args = parse_args()
-    temp_root = Path(tempfile.mkdtemp(prefix="aios-shell-stability-"))
+    previous_temp_root = set_session_temp_root()
+    temp_root = make_temp_dir("aios-shell-stability-")
     failed = False
 
     try:
@@ -693,6 +694,7 @@ def main() -> int:
         print(f"shell stability smoke failed: {error}")
         return 1
     finally:
+        restore_session_temp_root(previous_temp_root)
         if failed or args.keep_state:
             print(f"state kept at: {temp_root}")
         else:

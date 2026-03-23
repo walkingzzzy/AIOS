@@ -23,6 +23,17 @@ STATE_TONES = {
     "created": "neutral",
 }
 
+WINDOW_ACTION_IDS = {
+    "activate-next-workspace",
+    "activate-previous-workspace",
+    "focus-window",
+    "minimize-window",
+    "move-window-next-workspace",
+    "restore-recent-window",
+    "restore-window",
+    "send-window-active-output",
+}
+
 
 def tone_for(state: str | None) -> str:
     if not state:
@@ -96,6 +107,30 @@ def derive_managed_windows(window_payload: dict, runtime_session: dict) -> list[
     return managed_windows
 
 
+def workspace_id_from_index(index: int) -> str:
+    return f"workspace-{max(index, 0) + 1}"
+
+
+def workspace_index_from_id(value: str | None, default: int = 0) -> int:
+    if not value:
+        return default
+    normalized = str(value).strip().lower()
+    if normalized.startswith("workspace-"):
+        return max(parse_int(normalized.split("-")[-1], default + 1) - 1, 0)
+    return max(parse_int(normalized, default), 0)
+
+
+def derive_release_grade_output_status(outputs: list[dict], renderable_output_count: int) -> str:
+    if not outputs:
+        return "uninitialized"
+    output_count = len(outputs)
+    if output_count == 1:
+        return f"single-output(renderable={renderable_output_count}/{output_count})"
+    if renderable_output_count >= output_count:
+        return f"multi-output(renderable={renderable_output_count}/{output_count})"
+    return f"multi-output(partial-renderable={renderable_output_count}/{output_count})"
+
+
 def load_compositor_summary(
     runtime_state_path: Path | None,
     window_state_path: Path | None,
@@ -106,29 +141,25 @@ def load_compositor_summary(
     if not isinstance(runtime_session, dict):
         runtime_session = runtime_payload if isinstance(runtime_payload, dict) else {}
 
-    managed_windows = [
+    runtime_managed_windows = [
         item
         for item in runtime_session.get("managed_windows", [])
         if isinstance(item, dict)
     ]
-    if not managed_windows:
-        managed_windows = derive_managed_windows(window_payload, runtime_session)
+    window_managed_windows = derive_managed_windows(window_payload, runtime_session)
+    managed_windows = window_managed_windows or runtime_managed_windows
 
-    workspace_window_counts = runtime_session.get("workspace_window_counts")
-    if not isinstance(workspace_window_counts, dict):
-        workspace_window_counts = {}
-    if not workspace_window_counts:
-        derived_workspace_counts: dict[str, int] = {}
-        for window in managed_windows:
-            workspace_id = str(window.get("workspace_id") or "workspace-1")
-            derived_workspace_counts[workspace_id] = derived_workspace_counts.get(workspace_id, 0) + 1
-        workspace_window_counts = derived_workspace_counts
+    derived_workspace_counts: dict[str, int] = {}
+    for window in managed_windows:
+        workspace_id = str(window.get("workspace_id") or "workspace-1")
+        derived_workspace_counts[workspace_id] = derived_workspace_counts.get(workspace_id, 0) + 1
+    workspace_window_counts = dict(sorted(derived_workspace_counts.items()))
 
     active_workspace_index = parse_int(
-        runtime_session.get("active_workspace_index"),
-        parse_int(window_payload.get("active_workspace_index"), 0),
+        window_payload.get("active_workspace_index"),
+        parse_int(runtime_session.get("active_workspace_index"), 0),
     )
-    active_workspace_id = runtime_session.get("active_workspace_id") or f"workspace-{active_workspace_index + 1}"
+    active_workspace_id = workspace_id_from_index(active_workspace_index)
     workspace_count = max(
         1,
         parse_int(
@@ -141,6 +172,15 @@ def load_compositor_summary(
         for item in runtime_session.get("outputs", [])
         if isinstance(item, dict)
     ]
+    output_count = parse_int(runtime_session.get("output_count"), len(outputs))
+    renderable_output_count = parse_int(
+        runtime_session.get("renderable_output_count"),
+        sum(1 for item in outputs if item.get("renderable")),
+    )
+    non_renderable_output_count = parse_int(
+        runtime_session.get("non_renderable_output_count"),
+        max(output_count - renderable_output_count, 0),
+    )
     errors = [error for error in (runtime_error, window_error) if error]
     data_status = "ready" if runtime_payload or window_payload else "unavailable"
     if errors and data_status == "ready":
@@ -157,31 +197,231 @@ def load_compositor_summary(
         "workspace_count": workspace_count,
         "active_workspace_index": active_workspace_index,
         "active_workspace_id": active_workspace_id,
-        "active_output_id": runtime_session.get("active_output_id") or window_payload.get("active_output_id"),
-        "output_count": parse_int(runtime_session.get("output_count"), len(outputs)),
+        "active_output_id": window_payload.get("active_output_id") or runtime_session.get("active_output_id"),
+        "output_count": output_count,
+        "renderable_output_count": renderable_output_count,
+        "non_renderable_output_count": non_renderable_output_count,
+        "release_grade_output_status": runtime_session.get("release_grade_output_status")
+        or derive_release_grade_output_status(outputs, renderable_output_count),
         "outputs": outputs,
-        "managed_window_count": parse_int(runtime_session.get("managed_window_count"), len(managed_windows)),
-        "visible_window_count": parse_int(
-            runtime_session.get("visible_window_count"),
-            sum(1 for item in managed_windows if item.get("visible")),
-        ),
-        "floating_window_count": parse_int(
-            runtime_session.get("floating_window_count"),
-            sum(1 for item in managed_windows if item.get("floating")),
-        ),
-        "minimized_window_count": parse_int(
-            runtime_session.get("minimized_window_count"),
-            sum(1 for item in managed_windows if item.get("minimized")),
-        ),
+        "managed_window_count": len(managed_windows),
+        "visible_window_count": sum(1 for item in managed_windows if item.get("visible")),
+        "floating_window_count": sum(1 for item in managed_windows if item.get("floating")),
+        "minimized_window_count": sum(1 for item in managed_windows if item.get("minimized")),
         "window_move_count": parse_int(runtime_session.get("window_move_count"), 0),
         "window_resize_count": parse_int(runtime_session.get("window_resize_count"), 0),
         "window_minimize_count": parse_int(runtime_session.get("window_minimize_count"), 0),
         "window_restore_count": parse_int(runtime_session.get("window_restore_count"), 0),
         "last_minimized_window_key": runtime_session.get("last_minimized_window_key"),
         "last_restored_window_key": runtime_session.get("last_restored_window_key"),
-        "workspace_window_counts": dict(sorted(workspace_window_counts.items())),
+        "workspace_window_counts": workspace_window_counts,
         "managed_windows": managed_windows,
     }
+
+
+def window_state_entry_from_window(window: dict) -> dict:
+    return {
+        "window_key": window.get("window_key"),
+        "app_id": window.get("app_id"),
+        "title": window.get("title"),
+        "slot_id": window.get("slot_id"),
+        "output_id": window.get("output_id"),
+        "workspace_index": workspace_index_from_id(window.get("workspace_id"), 0),
+        "window_policy": window.get("window_policy") or "workspace-window",
+        "rect": {
+            "x": parse_int(window.get("layout_x"), 0),
+            "y": parse_int(window.get("layout_y"), 0),
+            "width": parse_int(window.get("layout_width"), 1280),
+            "height": parse_int(window.get("layout_height"), 720),
+        },
+        "minimized": bool(window.get("minimized")),
+        "last_seen_at_ms": parse_int(window.get("last_seen_at_ms"), int(time.time() * 1000)),
+    }
+
+
+def build_window_state_payload_from_summary(summary: dict) -> dict:
+    return {
+        "schema": "aios.shell.compositor.window-state/v1",
+        "active_workspace_index": parse_int(summary.get("active_workspace_index"), 0),
+        "active_output_id": summary.get("active_output_id"),
+        "windows": [
+            window_state_entry_from_window(item)
+            for item in summary.get("managed_windows", [])
+            if isinstance(item, dict)
+        ],
+    }
+
+
+def load_window_state_payload(window_state_path: Path, summary: dict) -> dict:
+    payload, _error = load_json_payload(window_state_path)
+    if isinstance(payload, dict) and isinstance(payload.get("windows"), list):
+        payload.setdefault("schema", "aios.shell.compositor.window-state/v1")
+        payload.setdefault(
+            "active_workspace_index",
+            parse_int(summary.get("active_workspace_index"), 0),
+        )
+        if payload.get("active_output_id") in (None, ""):
+            payload["active_output_id"] = summary.get("active_output_id")
+        payload["windows"] = [item for item in payload.get("windows", []) if isinstance(item, dict)]
+        return payload
+    return build_window_state_payload_from_summary(summary)
+
+
+def persist_window_state_payload(window_state_path: Path, payload: dict) -> None:
+    window_state_path.parent.mkdir(parents=True, exist_ok=True)
+    payload["schema"] = "aios.shell.compositor.window-state/v1"
+    window_state_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+
+
+def summarize_window_action_result(
+    action_id: str,
+    summary: dict,
+    *,
+    window_key: str | None = None,
+    workspace_index: int | None = None,
+    output_id: str | None = None,
+    restored_window_key: str | None = None,
+) -> dict:
+    result = {
+        "target_component": "task-surface",
+        "window_action": action_id,
+        "status": action_id,
+        "active_workspace_id": summary.get("active_workspace_id"),
+        "active_output_id": summary.get("active_output_id"),
+        "workspace_id": workspace_id_from_index(workspace_index)
+        if workspace_index is not None
+        else summary.get("active_workspace_id"),
+        "output_id": output_id or summary.get("active_output_id"),
+        "managed_window_count": summary.get("managed_window_count", 0),
+        "minimized_window_count": summary.get("minimized_window_count", 0),
+        "window_manager_status": summary.get("window_manager_status"),
+        "window_state_path": summary.get("window_state_path"),
+        "release_grade_output_status": summary.get("release_grade_output_status"),
+        "renderable_output_count": summary.get("renderable_output_count", 0),
+    }
+    if window_key:
+        result["window_key"] = window_key
+    if restored_window_key:
+        result["restored_window_key"] = restored_window_key
+    return result
+
+
+def apply_window_action(
+    action_id: str,
+    runtime_state_path: Path | None,
+    window_state_path: Path | None,
+    window_key: str | None,
+    workspace_id: str | None,
+    output_id: str | None,
+) -> dict:
+    if window_state_path is None:
+        raise SystemExit("--compositor-window-state is required for window actions")
+
+    summary = load_compositor_summary(runtime_state_path, window_state_path)
+    payload = load_window_state_payload(window_state_path, summary)
+    windows = [item for item in payload.get("windows", []) if isinstance(item, dict)]
+    payload["windows"] = windows
+    workspace_count = max(
+        parse_int(summary.get("workspace_count"), 1),
+        max((parse_int(item.get("workspace_index"), 0) + 1 for item in windows), default=1),
+        1,
+    )
+    payload["active_workspace_index"] = min(
+        parse_int(payload.get("active_workspace_index"), parse_int(summary.get("active_workspace_index"), 0)),
+        workspace_count - 1,
+    )
+    if payload.get("active_output_id") in (None, ""):
+        payload["active_output_id"] = summary.get("active_output_id")
+
+    now_ms = int(time.time() * 1000)
+    target_entry = None
+    if window_key:
+        target_entry = next((item for item in windows if item.get("window_key") == window_key), None)
+        if target_entry is None:
+            raise SystemExit(f"window not found: {window_key}")
+    target_workspace_index = workspace_index_from_id(
+        workspace_id,
+        parse_int(payload.get("active_workspace_index"), 0),
+    )
+    target_workspace_index = min(target_workspace_index, workspace_count - 1)
+    restored_window_key = None
+
+    if action_id == "activate-next-workspace":
+        payload["active_workspace_index"] = (parse_int(payload.get("active_workspace_index"), 0) + 1) % workspace_count
+    elif action_id == "activate-previous-workspace":
+        payload["active_workspace_index"] = (parse_int(payload.get("active_workspace_index"), 0) - 1) % workspace_count
+    elif action_id == "restore-recent-window":
+        active_workspace_index = parse_int(payload.get("active_workspace_index"), 0)
+        target_entry = next(
+            (
+                item for item in reversed(windows)
+                if bool(item.get("minimized"))
+                and parse_int(item.get("workspace_index"), active_workspace_index) == active_workspace_index
+            ),
+            None,
+        ) or next((item for item in reversed(windows) if bool(item.get("minimized"))), None)
+        if target_entry is None:
+            raise SystemExit("no minimized window available")
+        target_entry["minimized"] = False
+        target_entry["workspace_index"] = target_workspace_index
+        target_entry["output_id"] = output_id or payload.get("active_output_id") or target_entry.get("output_id")
+        target_entry["last_seen_at_ms"] = now_ms
+        payload["active_workspace_index"] = parse_int(target_entry.get("workspace_index"), target_workspace_index)
+        if target_entry.get("output_id") not in (None, ""):
+            payload["active_output_id"] = target_entry.get("output_id")
+        window_key = target_entry.get("window_key")
+        restored_window_key = window_key
+    elif action_id == "restore-window":
+        target_entry["minimized"] = False
+        target_entry["workspace_index"] = target_workspace_index
+        target_entry["output_id"] = output_id or payload.get("active_output_id") or target_entry.get("output_id")
+        target_entry["last_seen_at_ms"] = now_ms
+        payload["active_workspace_index"] = parse_int(target_entry.get("workspace_index"), target_workspace_index)
+        if target_entry.get("output_id") not in (None, ""):
+            payload["active_output_id"] = target_entry.get("output_id")
+    elif action_id == "focus-window":
+        target_entry["minimized"] = False
+        target_entry["workspace_index"] = min(
+            workspace_index_from_id(workspace_id, parse_int(target_entry.get("workspace_index"), target_workspace_index)),
+            workspace_count - 1,
+        )
+        if output_id not in (None, ""):
+            target_entry["output_id"] = output_id
+        target_entry["last_seen_at_ms"] = now_ms
+        payload["active_workspace_index"] = parse_int(target_entry.get("workspace_index"), target_workspace_index)
+        if target_entry.get("output_id") not in (None, ""):
+            payload["active_output_id"] = target_entry.get("output_id")
+    elif action_id == "minimize-window":
+        target_entry["minimized"] = True
+        target_entry["last_seen_at_ms"] = now_ms
+    elif action_id == "move-window-next-workspace":
+        target_entry["workspace_index"] = (parse_int(target_entry.get("workspace_index"), 0) + 1) % workspace_count
+        target_entry["last_seen_at_ms"] = now_ms
+        payload["active_workspace_index"] = parse_int(target_entry.get("workspace_index"), 0)
+    elif action_id == "send-window-active-output":
+        next_output_id = output_id or payload.get("active_output_id") or summary.get("active_output_id")
+        if next_output_id in (None, ""):
+            raise SystemExit("no active output available")
+        target_entry["output_id"] = next_output_id
+        target_entry["last_seen_at_ms"] = now_ms
+        payload["active_output_id"] = next_output_id
+    else:
+        raise SystemExit(f"unsupported window action: {action_id}")
+
+    persist_window_state_payload(window_state_path, payload)
+    updated_summary = load_compositor_summary(runtime_state_path, window_state_path)
+    target_workspace_index = parse_int(
+        (target_entry or {}).get("workspace_index"),
+        parse_int(updated_summary.get("active_workspace_index"), 0),
+    )
+    return summarize_window_action_result(
+        action_id,
+        updated_summary,
+        window_key=window_key,
+        workspace_index=target_workspace_index,
+        output_id=(target_entry or {}).get("output_id"),
+        restored_window_key=restored_window_key,
+    )
 
 
 def list_tasks(
@@ -295,11 +535,15 @@ def primary_capability(plan_result: dict | None) -> str | None:
     if not plan_result:
         return None
     plan = plan_result.get("plan", {})
+    steps = plan.get("steps") or []
+    if steps:
+        capability_id = (steps[0] or {}).get("capability_id")
+        if capability_id:
+            return capability_id
     capabilities = plan.get("candidate_capabilities") or []
     if not capabilities:
         return None
     return capabilities[0]
-
 
 def resolve_provider(
     agent_socket: Path,
@@ -656,9 +900,38 @@ def build_model(
         for item in provider_candidates
     ]
 
-    actions = build_focus_actions(focus_task)
     active_workspace_id = compositor_summary.get("active_workspace_id")
     active_output_id = compositor_summary.get("active_output_id")
+    actions = build_focus_actions(focus_task)
+    if compositor_summary.get("window_state_path"):
+        actions.extend(
+            [
+                {
+                    "action_id": "activate-previous-workspace",
+                    "label": "Prev Workspace",
+                    "enabled": compositor_summary.get("workspace_count", 1) > 1,
+                    "tone": "neutral",
+                    "workspace_id": active_workspace_id,
+                    "output_id": active_output_id,
+                },
+                {
+                    "action_id": "activate-next-workspace",
+                    "label": "Next Workspace",
+                    "enabled": compositor_summary.get("workspace_count", 1) > 1,
+                    "tone": "neutral",
+                    "workspace_id": active_workspace_id,
+                    "output_id": active_output_id,
+                },
+                {
+                    "action_id": "restore-recent-window",
+                    "label": "Restore Window",
+                    "enabled": compositor_summary.get("minimized_window_count", 0) > 0,
+                    "tone": "positive",
+                    "workspace_id": active_workspace_id,
+                    "output_id": active_output_id,
+                },
+            ]
+        )
     workspace_window_counts = compositor_summary.get("workspace_window_counts") or {}
     current_workspace_windows = [
         item
@@ -692,6 +965,16 @@ def build_model(
         {
             "label": "workspace_count",
             "value": compositor_summary.get("workspace_count", 1),
+            "tone": "neutral",
+        },
+        {
+            "label": "renderable_outputs",
+            "value": compositor_summary.get("renderable_output_count", 0),
+            "tone": "positive" if compositor_summary.get("renderable_output_count", 0) else "neutral",
+        },
+        {
+            "label": "output_status",
+            "value": compositor_summary.get("release_grade_output_status") or "uninitialized",
             "tone": "neutral",
         },
         {
@@ -735,6 +1018,14 @@ def build_model(
                 if part
             ),
             "tone": "warning" if item.get("minimized") else "neutral",
+            "action": {
+                "action_id": "minimize-window",
+                "label": "Minimize",
+                "enabled": not bool(item.get("minimized")) and bool(item.get("window_key")) and bool(compositor_summary.get("window_state_path")),
+                "window_key": item.get("window_key"),
+                "workspace_id": item.get("workspace_id"),
+                "output_id": item.get("output_id"),
+            },
         }
         for item in current_workspace_windows
     ]
@@ -751,11 +1042,20 @@ def build_model(
                 if part
             ),
             "tone": "warning",
+            "action": {
+                "action_id": "restore-window",
+                "label": "Restore",
+                "enabled": bool(item.get("window_key")) and bool(compositor_summary.get("window_state_path")),
+                "window_key": item.get("window_key"),
+                "workspace_id": item.get("workspace_id") or active_workspace_id,
+                "output_id": active_output_id or item.get("output_id"),
+            },
         }
         for item in minimized_windows
     ]
 
     return {
+
         "component_id": "task-surface",
         "panel_id": "task-panel",
         "panel_kind": "shell-panel",
@@ -886,6 +1186,9 @@ def build_model(
             "active_workspace_id": active_workspace_id,
             "active_output_id": active_output_id,
             "output_count": compositor_summary.get("output_count", 0),
+            "renderable_output_count": compositor_summary.get("renderable_output_count", 0),
+            "non_renderable_output_count": compositor_summary.get("non_renderable_output_count", 0),
+            "release_grade_output_status": compositor_summary.get("release_grade_output_status"),
             "managed_window_count": compositor_summary.get("managed_window_count", 0),
             "visible_window_count": compositor_summary.get("visible_window_count", 0),
             "floating_window_count": compositor_summary.get("floating_window_count", 0),
@@ -942,10 +1245,13 @@ def render_text(panel: dict) -> str:
                     lines.append(
                         f"- {label}: {item.get('value')} reason={item.get('detail')} at={item.get('created_at')}"
                     )
-                elif suffix:
-                    lines.append(f"- {label}: {suffix}")
                 else:
-                    lines.append(f"- {label}: {item.get('value')}")
+                    action = item.get("action") if isinstance(item.get("action"), dict) else None
+                    action_suffix = f" -> {action.get('label')}" if action else ""
+                    if suffix:
+                        lines.append(f"- {label}: {suffix}{action_suffix}")
+                    else:
+                        lines.append(f"- {label}: {item.get('value')}{action_suffix}")
         else:
             lines.append(f"- {section['empty_state']}")
     return "\n".join(lines)
@@ -970,6 +1276,9 @@ def main() -> int:
     parser.add_argument("--new-state")
     parser.add_argument("--reason")
     parser.add_argument("--action")
+    parser.add_argument("--window-key")
+    parser.add_argument("--workspace-id")
+    parser.add_argument("--output-id")
     parser.add_argument("--compositor-runtime-state", type=Path, default=default_compositor_runtime_state())
     parser.add_argument("--compositor-window-state", type=Path, default=default_compositor_window_state())
     parser.add_argument("--json", action="store_true")
@@ -978,6 +1287,17 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.command == "action":
+        if args.action in WINDOW_ACTION_IDS:
+            result = apply_window_action(
+                args.action,
+                args.compositor_runtime_state,
+                args.compositor_window_state,
+                args.window_key,
+                args.workspace_id,
+                args.output_id,
+            )
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+            return 0
         if not args.task_id:
             raise SystemExit("--task-id is required for action")
         target_state = args.new_state
@@ -1126,4 +1446,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
 

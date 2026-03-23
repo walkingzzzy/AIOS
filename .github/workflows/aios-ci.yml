@@ -41,6 +41,7 @@ jobs:
             scripts/test-gpu-backend-support-matrix-smoke.py \
             scripts/test-tier1-machine-nominations-smoke.py \
             scripts/build-default-hardware-evidence-index.py \
+            scripts/test-tier1-machine-bringup-reports-smoke.py \
             scripts/test-release-gate-smoke.py \
             scripts/collect-aios-device-validation.py \
             scripts/render-aios-hardware-validation-report.py \
@@ -135,6 +136,9 @@ jobs:
 
       - name: Build default Tier1 hardware evidence
         run: python3 scripts/build-default-hardware-evidence-index.py
+
+      - name: Tier1 machine bring-up reports smoke
+        run: python3 scripts/test-tier1-machine-bringup-reports-smoke.py
 
       - name: Release gate vendor runtime smoke
         run: python3 scripts/test-release-gate-smoke.py
@@ -337,6 +341,9 @@ jobs:
             out/validation/tier1-hardware-known-limitations.md
             out/validation/tier1-hardware-validation-report.md
             out/validation/tier1-hardware-evidence-index.json
+            out/validation/tier1-machine-bringup-summary.json
+            out/validation/tier1-machine-bringup-summary.md
+            out/validation/tier1-machine-bringup
             out/validation/release-gate-vendor-runtime-smoke-report.json
             out/validation/release-gate-vendor-runtime-smoke-report.md
             out/validation/image-build-strategy-report.json

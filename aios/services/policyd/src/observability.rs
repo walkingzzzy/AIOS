@@ -43,7 +43,9 @@ impl ObservabilitySink {
             .create(true)
             .append(true)
             .open(&self.path)?;
-        writeln!(file, "{}", serde_json::to_string(payload)?)?;
+        let mut line = serde_json::to_vec(payload)?;
+        line.push(b'\n');
+        file.write_all(&line)?;
         Ok(())
     }
 }
@@ -98,3 +100,4 @@ mod tests {
         Ok(())
     }
 }
+

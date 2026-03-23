@@ -1,7 +1,7 @@
 # Tier 1 正式机器冻结清单
 
-**状态**: `Baseline Delivered / Hardware Evidence Pending`  
-**更新日期**: 2026-03-14  
+**状态**: `Baseline Delivered / Bring-up Reports Recorded / Hardware Evidence Pending`  
+**更新日期**: 2026-03-23  
 **关联任务**: `P5-HW-001`、`P5-HW-003`、`P5-HW-004`
 
 ---
@@ -112,6 +112,11 @@ machine-readable 对应资产为：
 - 它覆盖主 x86_64 交付链
 - 它直接决定 installer / firstboot / rollback / recovery 的主线是否成立
 
+当前已对应落地：
+
+- [40-Framework-Laptop-13-AMD-7040-Bring-up报告.md](40-Framework-Laptop-13-AMD-7040-Bring-up报告.md)
+- `out/validation/tier1-machine-bringup/framework-laptop-13-amd-7040/*`
+
 ### 6.2 `P5-HW-004`
 
 第二台实机 bring-up 报告应优先使用：
@@ -123,6 +128,11 @@ machine-readable 对应资产为：
 - 它覆盖 accelerator / local-gpu / managed worker 平台路径
 - 能把 GPU 条件能力与硬件 bring-up 报告接起来
 
+当前已对应落地：
+
+- [41-NVIDIA-Jetson-Orin-AGX-Bring-up报告.md](41-NVIDIA-Jetson-Orin-AGX-Bring-up报告.md)
+- `out/validation/tier1-machine-bringup/nvidia-jetson-orin-agx/*`
+
 ---
 
 ## 7. 当前声明边界
@@ -132,6 +142,7 @@ machine-readable 对应资产为：
 - AIOS 已指定正式 Tier 1 机器清单
 - 后续硬件验证不再停留在抽象“generic x86_64”口径
 - `P5-HW-003` / `P5-HW-004` 已有明确优先目标
+- 两台正式机器均已有独立 bring-up 报告入口与 evidence index 路径
 
 ### 7.2 不能宣称的内容
 
@@ -143,11 +154,17 @@ machine-readable 对应资产为：
 
 ## 8. 当前结论
 
-截至 2026-03-14，`P5-HW-001` 的完成依据已经成立：
+截至 2026-03-23，`P5-HW-001` 的完成依据已经成立，且 `P5-HW-003` / `P5-HW-004` 的“记录 bring-up 报告”交付物也已经入库：
 
 - 已有正式冻结清单
 - 已有 machine-readable nomination asset
 - 已有 x86_64 正式机器 profile
 - 已明确后续两份 bring-up 报告的优先对象
+- 已有两份正式机器报告文档与默认 validation 产物路径
 
-因此 `P5-HW-001` 可以进入 `Done`。
+因此：
+
+- `P5-HW-001` 保持 `Done`
+- `P5-HW-003` / `P5-HW-004` 也可以进入 `Done`
+
+但真实机器 install / update / rollback / recovery 签收仍应继续作为后续实机验证主线推进。

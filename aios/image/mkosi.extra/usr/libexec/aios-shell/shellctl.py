@@ -186,12 +186,17 @@ def component_base_args(profile: dict, component: str) -> list[str]:
     paths = profile.get("paths", {})
     compositor = profile.get("compositor", {}) or {}
     if component == "launcher":
-        return [
+        command = [
             "--socket",
             paths.get("sessiond_socket", "/run/aios/sessiond/sessiond.sock"),
             "--agent-socket",
             paths.get("agentd_socket", str(agentd_socket(profile))),
         ]
+        if compositor.get("runtime_state_path"):
+            command.extend(["--compositor-runtime-state", compositor["runtime_state_path"]])
+        if compositor.get("window_state_path"):
+            command.extend(["--compositor-window-state", compositor["window_state_path"]])
+        return command
     if component == "task-surface":
         command = [
             "--socket",
@@ -247,6 +252,7 @@ def component_base_args(profile: dict, component: str) -> list[str]:
             ("--compat-observability-log", "compat_observability_log"),
             ("--browser-remote-registry", "browser_remote_registry"),
             ("--office-remote-registry", "office_remote_registry"),
+            ("--mcp-remote-registry", "mcp_remote_registry"),
             ("--provider-registry-state-dir", "provider_registry_state_dir"),
         ):
             value = paths.get(key)
@@ -266,6 +272,7 @@ def component_base_args(profile: dict, component: str) -> list[str]:
             ("--compat-observability-log", "compat_observability_log"),
             ("--browser-remote-registry", "browser_remote_registry"),
             ("--office-remote-registry", "office_remote_registry"),
+            ("--mcp-remote-registry", "mcp_remote_registry"),
             ("--provider-registry-state-dir", "provider_registry_state_dir"),
         ):
             value = paths.get(key)
@@ -277,6 +284,7 @@ def component_base_args(profile: dict, component: str) -> list[str]:
         for flag, key in (
             ("--browser-remote-registry", "browser_remote_registry"),
             ("--office-remote-registry", "office_remote_registry"),
+            ("--mcp-remote-registry", "mcp_remote_registry"),
             ("--provider-registry-state-dir", "provider_registry_state_dir"),
         ):
             value = paths.get(key)

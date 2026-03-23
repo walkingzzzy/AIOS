@@ -255,7 +255,7 @@ def main() -> int:
         document_path = temp_root / "sample.md"
         pdf_path = temp_root / "sample.pdf"
         remote_pdf_path = temp_root / "sample-remote.pdf"
-        unsupported_path = temp_root / "sample.docx"
+        unsupported_path = temp_root / "sample.bin"
         missing_path = temp_root / "missing.md"
         document_path.write_text(
             "# AIOS Office Smoke\n\nThis is a markdown document for PDF export.\n\n- item one\n- item two\n",

@@ -77,6 +77,15 @@ def wait_for_socket(path: Path, timeout: float) -> None:
     raise TimeoutError(f"Timed out waiting for socket: {path}")
 
 
+def wait_for_file(path: Path, timeout: float) -> None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if path.exists():
+            return
+        time.sleep(0.1)
+    raise TimeoutError(f"Timed out waiting for file: {path}")
+
+
 def wait_for_health(socket_path: Path, timeout: float) -> dict:
     deadline = time.time() + timeout
     last_error: Exception | None = None
@@ -465,12 +474,39 @@ def main() -> int:
         fallback_events = rpc_call(
             runtimed_socket,
             "runtime.events.get",
-            {"task_id": "task-remote-fallback", "limit": 10},
+            {
+                "task_id": "task-remote-fallback",
+                "kind": "runtime.infer.fallback",
+                "source": "aios-runtimed",
+                "payload_equals": {
+                    "backend_id": "local-cpu",
+                    "resolved_backend": "attested-remote",
+                },
+                "payload_contains": "LOCAL-CPU",
+                "limit": 10,
+                "reverse": False,
+            },
             timeout=args.timeout,
         )
         fallback_kinds = [entry.get("kind") for entry in fallback_events.get("entries", [])]
         require("runtime.infer.fallback" in fallback_kinds, "fallback event missing")
-        require("runtime.infer.degraded" in fallback_kinds, "degraded event missing")
+
+        degraded_events = rpc_call(
+            runtimed_socket,
+            "runtime.events.get",
+            {
+                "task_id": "task-remote-fallback",
+                "kind": "runtime.infer.degraded",
+                "payload_equals": {"backend_id": "local-cpu"},
+                "limit": 10,
+                "reverse": False,
+            },
+            timeout=args.timeout,
+        )
+        require(
+            len(degraded_events.get("entries", [])) >= 1,
+            "degraded event missing",
+        )
 
         history_task_ids: list[str] = []
         for index in range(70):
@@ -533,6 +569,49 @@ def main() -> int:
             fallback_observability_entry.get("route_state") == "backend-fallback-local-cpu",
             "observability fallback route_state mismatch",
         )
+
+        export_response = rpc_call(
+            runtimed_socket,
+            "runtime.observability.export",
+            {
+                "session_id": "session-events",
+                "task_id": "task-remote-fallback",
+                "kind": "runtime.infer.fallback",
+                "payload_equals": {
+                    "backend_id": "local-cpu",
+                    "resolved_backend": "attested-remote",
+                },
+                "limit": 10,
+                "reverse": False,
+                "reason": "events-smoke-export",
+            },
+            timeout=args.timeout,
+        )
+        export_path = Path(export_response["export_path"])
+        wait_for_file(export_path, args.timeout)
+        export_payload = json.loads(export_path.read_text())
+        require(export_payload["counts"]["runtime_event_count"] >= 1, "runtime export missing runtime events")
+        require(export_payload["counts"]["observability_count"] >= 1, "runtime export missing observability entries")
+        require(
+            "task-remote-fallback" in export_payload["correlation"]["task_ids"],
+            "runtime export missing fallback task correlation",
+        )
+        require(
+            "fallback" in export_payload["correlation"]["remote_audit_statuses"],
+            "runtime export missing remote audit fallback correlation",
+        )
+        exported_runtime_events_path = Path(export_payload["exported_artifacts"]["runtime_events_path"])
+        wait_for_file(exported_runtime_events_path, args.timeout)
+        exported_runtime_events = [
+            json.loads(line)
+            for line in exported_runtime_events_path.read_text().splitlines()
+            if line.strip()
+        ]
+        require(
+            any(item.get("kind") == "runtime.infer.fallback" for item in exported_runtime_events),
+            "runtime export JSONL missing fallback event",
+        )
+
         first_runtimed_log = terminate(runtimed_process)
         runtimed_process = None
 
@@ -574,6 +653,8 @@ def main() -> int:
                     "fallback_backend": fallback_response.get("backend_id"),
                     "fallback_route": fallback_response.get("route_state"),
                     "remote_audit_statuses": sorted(status for status in statuses if status),
+                    "export_path": str(export_path),
+                    "export_counts": export_payload.get("counts", {}),
                     "history_oldest_task": history_task_ids[0],
                     "history_reject_count": len(history_task_ids),
                     "persisted_completed_tasks": sorted(task_id for task_id in persisted_task_ids if task_id),
@@ -610,3 +691,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+

@@ -5,18 +5,20 @@ use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
 
 use aios_contracts::{
-    methods, AgentIntentSubmissionResponse, AgentIntentSubmitRequest, AgentPlan, AgentPlanRequest,
+    methods, AgentApprovalSummary, AgentChooserRequest, AgentIntentSubmissionResponse,
+    AgentIntentSubmitRequest, AgentPlan, AgentPlanRequest, AgentPlanStep,
     AgentProviderExecutionResult, AgentTaskGetRequest, AgentTaskGetResponse,
     AgentTaskResumeRequest, AgentTaskResumeResponse, ApprovalCreateRequest, ApprovalGetRequest,
-    ApprovalListRequest, ApprovalResolveRequest, AuditExportRequest, AuditQueryRequest,
-    PortalIssueHandleRequest, PortalListHandlesRequest, PortalRevokeHandleRequest,
-    ProviderDisableRequest, ProviderDiscoverRequest, ProviderEnableRequest,
-    ProviderGetDescriptorRequest, ProviderHealthGetRequest, ProviderHealthReportRequest,
-    ProviderRegisterRequest, ProviderResolveCapabilityRequest, ProviderUnregisterRequest,
-    ServiceContractResponse, SessionCreateRequest, SessionEvidenceExportRequest,
-    SessionEvidenceRequest, SessionListRequest, SessionResumeRequest, SessionResumeResponse,
-    TaskCreateRequest, TaskEventListRequest, TaskListRequest, TaskPlanGetRequest,
-    TaskPlanPutRequest, TaskRecord, TaskStateUpdateRequest, TokenIssueRequest, TokenVerifyRequest,
+    ApprovalListRequest, ApprovalRecord, ApprovalResolveRequest, AuditExportRequest,
+    AuditQueryRequest, PortalHandleRecord, PortalIssueHandleRequest, PortalListHandlesRequest,
+    PortalRevokeHandleRequest, ProviderDisableRequest, ProviderDiscoverRequest,
+    ProviderEnableRequest, ProviderGetDescriptorRequest, ProviderHealthGetRequest,
+    ProviderHealthReportRequest, ProviderRegisterRequest, ProviderResolveCapabilityRequest,
+    ProviderUnregisterRequest, RecoveryRef, ServiceContractResponse, SessionCreateRequest,
+    SessionEvidenceExportRequest, SessionEvidenceRequest, SessionListRequest, SessionResumeRequest,
+    SessionResumeResponse, TaskCreateRequest, TaskEventListRequest, TaskListRequest,
+    TaskPlanGetRequest, TaskPlanPutRequest, TaskRecord, TaskStateUpdateRequest, TokenIssueRequest,
+    TokenVerifyRequest,
 };
 use aios_rpc::{RpcError, RpcResult, RpcRouter};
 
@@ -440,7 +442,7 @@ pub fn build_router(state: AppState) -> Arc<RpcRouter> {
 
         let (session, mut task) = crate::clients::create_or_resume_session(&submit_state, &request)
             .map_err(|error| RpcError::Internal(error.to_string()))?;
-        let plan = crate::planner::plan_for_task(
+        let mut plan = crate::planner::plan_for_task(
             session.session_id.clone(),
             task.task_id.clone(),
             request.intent.clone(),
@@ -448,19 +450,17 @@ pub fn build_router(state: AppState) -> Arc<RpcRouter> {
         crate::clients::persist_task_plan(&submit_state, &task.task_id, &plan)
             .map_err(|error| RpcError::Internal(error.to_string()))?;
 
-        let primary_capability = plan
-            .candidate_capabilities
-            .first()
-            .cloned()
-            .unwrap_or_else(|| "system.intent.execute".to_string());
-        let provider_resolution =
+        let primary_capability = first_step_capability(&plan)
+            .unwrap_or(methods::SYSTEM_INTENT_EXECUTE)
+            .to_string();
+        let mut provider_resolution =
             crate::providers::resolve_primary_provider(&submit_state, &primary_capability)
                 .map_err(|error| RpcError::Internal(error.to_string()))?;
         let selected_provider_id = provider_resolution
             .selected
             .as_ref()
             .map(|candidate| candidate.provider_id.as_str());
-        let portal_handle = crate::portal::maybe_issue_handle(
+        let mut portal_handle = crate::portal::maybe_issue_handle(
             &submit_state,
             &request,
             &session.session_id,
@@ -468,12 +468,12 @@ pub fn build_router(state: AppState) -> Arc<RpcRouter> {
             selected_provider_id,
         )
         .map_err(|error| RpcError::Internal(error.to_string()))?;
-        let execution_location = provider_resolution
+        let mut execution_location = provider_resolution
             .selected
             .as_ref()
             .map(|candidate| candidate.execution_location.clone())
             .unwrap_or_else(|| "local".to_string());
-        let policy = crate::clients::evaluate_primary_capability(
+        let mut policy = crate::clients::evaluate_primary_capability(
             &submit_state,
             &request.user_id,
             &session.session_id,
@@ -487,6 +487,7 @@ pub fn build_router(state: AppState) -> Arc<RpcRouter> {
         .map_err(|error| RpcError::Internal(error.to_string()))?;
 
         if policy.decision.decision == "denied" {
+            mark_step_status(&mut plan, &primary_capability, "failed");
             task = crate::clients::update_task_state(
                 &submit_state,
                 &task.task_id,
@@ -495,6 +496,7 @@ pub fn build_router(state: AppState) -> Arc<RpcRouter> {
             )
             .map_err(|error| RpcError::Internal(error.to_string()))?;
         } else if policy.decision.decision == "allowed" && provider_resolution.selected.is_some() {
+            mark_step_status(&mut plan, &primary_capability, "approved");
             task = crate::clients::update_task_state(
                 &submit_state,
                 &task.task_id,
@@ -504,7 +506,7 @@ pub fn build_router(state: AppState) -> Arc<RpcRouter> {
             .map_err(|error| RpcError::Internal(error.to_string()))?;
         }
 
-        let execution_token =
+        let mut execution_token =
             if policy.decision.decision == "allowed" && provider_resolution.selected.is_some() {
                 crate::clients::issue_execution_token(
                     &submit_state,
@@ -522,25 +524,207 @@ pub fn build_router(state: AppState) -> Arc<RpcRouter> {
             };
         let route = crate::clients::resolve_route(&submit_state, Some("local-cpu".to_string()))
             .map_err(|error| RpcError::Internal(error.to_string()))?;
-        let runtime_preview = if plan
-            .candidate_capabilities
-            .iter()
-            .any(|item| item == "runtime.infer.submit")
+        let mut runtime_preview = if primary_capability == methods::RUNTIME_INFER_SUBMIT
             && policy.decision.decision == "allowed"
             && provider_resolution.selected.is_some()
         {
+            mark_step_status(&mut plan, &primary_capability, "completed");
             Some(
                 crate::clients::preview_runtime(
                     &submit_state,
                     &session.session_id,
                     &task.task_id,
-                    &request.intent,
+                    &compose_runtime_prompt(&request.intent, None),
                 )
                 .map_err(|error| RpcError::Internal(error.to_string()))?,
             )
         } else {
             None
         };
+        let provider_execution =
+            if policy.decision.decision == "allowed" && provider_resolution.selected.is_some() {
+                crate::execution::maybe_execute_first_party_provider(
+                    &submit_state,
+                    &request.intent,
+                    &provider_resolution,
+                    execution_token.as_ref(),
+                    portal_handle.as_ref(),
+                )
+            } else {
+                None
+            };
+
+        if let Some(outcome) = provider_execution.as_ref() {
+            match outcome.status.as_str() {
+                "completed" => {
+                    mark_step_status(&mut plan, &primary_capability, "completed");
+                    if plan.steps.len() <= 1 {
+                        task = crate::clients::update_task_state(
+                            &submit_state,
+                            &task.task_id,
+                            "executing",
+                            Some("agent.provider-execution-started"),
+                        )
+                        .map_err(|error| RpcError::Internal(error.to_string()))?;
+                        task = crate::clients::update_task_state(
+                            &submit_state,
+                            &task.task_id,
+                            "completed",
+                            Some("agent.provider-execution-completed"),
+                        )
+                        .map_err(|error| RpcError::Internal(error.to_string()))?;
+                    }
+                }
+                "failed" => {
+                    mark_step_status(&mut plan, &primary_capability, "failed");
+                    task = crate::clients::update_task_state(
+                        &submit_state,
+                        &task.task_id,
+                        "failed",
+                        Some("agent.provider-execution-failed"),
+                    )
+                    .map_err(|error| RpcError::Internal(error.to_string()))?;
+                }
+                _ => {
+                    mark_step_status(&mut plan, &primary_capability, "approved");
+                }
+            }
+        }
+
+        if task.state != "failed" && task.state != "rejected" {
+            let mut next_index = next_actionable_step(&plan)
+                .map(|(index, _)| index)
+                .unwrap_or(plan.steps.len());
+            while next_index < plan.steps.len() {
+                let step = plan.steps[next_index].clone();
+                if step.capability_id == primary_capability {
+                    next_index += 1;
+                    continue;
+                }
+
+                match step.capability_id.as_str() {
+                    methods::RUNTIME_INFER_SUBMIT => {
+                        provider_resolution = crate::providers::resolve_primary_provider(
+                            &submit_state,
+                            methods::RUNTIME_INFER_SUBMIT,
+                        )
+                        .map_err(|error| RpcError::Internal(error.to_string()))?;
+                        execution_location = provider_resolution
+                            .selected
+                            .as_ref()
+                            .map(|candidate| candidate.execution_location.clone())
+                            .unwrap_or_else(|| "local".to_string());
+                        policy = crate::clients::evaluate_primary_capability(
+                            &submit_state,
+                            &request.user_id,
+                            &session.session_id,
+                            &task.task_id,
+                            &request.intent,
+                            methods::RUNTIME_INFER_SUBMIT,
+                            &execution_location,
+                            None,
+                            BTreeMap::new(),
+                        )
+                        .map_err(|error| RpcError::Internal(error.to_string()))?;
+                        execution_token = None;
+                        if policy.decision.decision == "denied" {
+                            mark_step_status_at(&mut plan, next_index, "failed");
+                            task = crate::clients::update_task_state(
+                                &submit_state,
+                                &task.task_id,
+                                "failed",
+                                Some("agent.runtime-followup-denied"),
+                            )
+                            .map_err(|error| RpcError::Internal(error.to_string()))?;
+                            break;
+                        }
+                        if policy.decision.decision != "allowed"
+                            || provider_resolution.selected.is_none()
+                        {
+                            break;
+                        }
+
+                        mark_step_status_at(&mut plan, next_index, "completed");
+                        runtime_preview = Some(
+                            crate::clients::preview_runtime(
+                                &submit_state,
+                                &session.session_id,
+                                &task.task_id,
+                                &compose_runtime_prompt(
+                                    &request.intent,
+                                    provider_execution.as_ref(),
+                                ),
+                            )
+                            .map_err(|error| RpcError::Internal(error.to_string()))?,
+                        );
+                        next_index += 1;
+                    }
+                    methods::SYSTEM_FILE_BULK_DELETE => {
+                        provider_resolution = crate::providers::resolve_primary_provider(
+                            &submit_state,
+                            methods::SYSTEM_FILE_BULK_DELETE,
+                        )
+                        .map_err(|error| RpcError::Internal(error.to_string()))?;
+                        if portal_handle.is_none() {
+                            portal_handle = crate::portal::maybe_issue_handle(
+                                &submit_state,
+                                &request,
+                                &session.session_id,
+                                methods::SYSTEM_FILE_BULK_DELETE,
+                                provider_resolution
+                                    .selected
+                                    .as_ref()
+                                    .map(|candidate| candidate.provider_id.as_str()),
+                            )
+                            .map_err(|error| RpcError::Internal(error.to_string()))?;
+                        }
+                        execution_location = provider_resolution
+                            .selected
+                            .as_ref()
+                            .map(|candidate| candidate.execution_location.clone())
+                            .unwrap_or_else(|| "local".to_string());
+                        policy = crate::clients::evaluate_primary_capability(
+                            &submit_state,
+                            &request.user_id,
+                            &session.session_id,
+                            &task.task_id,
+                            &request.intent,
+                            methods::SYSTEM_FILE_BULK_DELETE,
+                            &execution_location,
+                            portal_handle.as_ref().and_then(crate::portal::target_hash),
+                            BTreeMap::new(),
+                        )
+                        .map_err(|error| RpcError::Internal(error.to_string()))?;
+                        execution_token = None;
+                        if policy.decision.decision == "denied" {
+                            mark_step_status_at(&mut plan, next_index, "failed");
+                            task = crate::clients::update_task_state(
+                                &submit_state,
+                                &task.task_id,
+                                "failed",
+                                Some("agent.delete-followup-denied"),
+                            )
+                            .map_err(|error| RpcError::Internal(error.to_string()))?;
+                        }
+                        break;
+                    }
+                    _ => break,
+                }
+            }
+        }
+
+        if let Some(outcome) = provider_execution.as_ref() {
+            crate::clients::persist_provider_execution_outcome(
+                &submit_state,
+                &session.session_id,
+                &task.task_id,
+                outcome,
+            )
+            .map_err(|error| RpcError::Internal(error.to_string()))?;
+        }
+
+        crate::clients::persist_task_plan(&submit_state, &task.task_id, &plan)
+            .map_err(|error| RpcError::Internal(error.to_string()))?;
         crate::clients::persist_working_memory(
             &submit_state,
             &session.session_id,
@@ -581,56 +765,47 @@ pub fn build_router(state: AppState) -> Arc<RpcRouter> {
         )
         .map_err(|error| RpcError::Internal(error.to_string()))?;
 
-        let provider_execution =
-            if policy.decision.decision == "allowed" && provider_resolution.selected.is_some() {
-                crate::execution::maybe_execute_first_party_provider(
-                    &submit_state,
-                    &request.intent,
-                    &provider_resolution,
-                    execution_token.as_ref(),
-                    portal_handle.as_ref(),
-                )
-            } else {
-                None
-            };
-
-        if let Some(outcome) = provider_execution.as_ref() {
-            match outcome.status.as_str() {
-                "completed" => {
-                    task = crate::clients::update_task_state(
-                        &submit_state,
-                        &task.task_id,
-                        "executing",
-                        Some("agent.provider-execution-started"),
-                    )
-                    .map_err(|error| RpcError::Internal(error.to_string()))?;
-                    task = crate::clients::update_task_state(
-                        &submit_state,
-                        &task.task_id,
-                        "completed",
-                        Some("agent.provider-execution-completed"),
-                    )
-                    .map_err(|error| RpcError::Internal(error.to_string()))?;
-                }
-                "failed" => {
-                    task = crate::clients::update_task_state(
-                        &submit_state,
-                        &task.task_id,
-                        "failed",
-                        Some("agent.provider-execution-failed"),
-                    )
-                    .map_err(|error| RpcError::Internal(error.to_string()))?;
-                }
-                _ => {}
-            }
-            crate::clients::persist_provider_execution_outcome(
+        if provider_execution
+            .as_ref()
+            .is_some_and(|outcome| outcome.status == "completed")
+            && plan.steps.iter().all(|step| step.status == "completed")
+            && task.state == "approved"
+        {
+            task = crate::clients::update_task_state(
                 &submit_state,
-                &session.session_id,
                 &task.task_id,
-                outcome,
+                "executing",
+                Some("agent.multi-step-execution-started"),
+            )
+            .map_err(|error| RpcError::Internal(error.to_string()))?;
+            task = crate::clients::update_task_state(
+                &submit_state,
+                &task.task_id,
+                "completed",
+                Some("agent.multi-step-execution-completed"),
             )
             .map_err(|error| RpcError::Internal(error.to_string()))?;
         }
+
+        let approval = load_policy_approval(&submit_state, &policy)?;
+        let current_step = next_actionable_step(&plan).map(|(_, step)| step);
+        let approval_summary = build_approval_summary(
+            Some(&policy),
+            approval.as_ref(),
+            current_step
+                .map(|step| step.capability_id.as_str())
+                .or_else(|| Some(primary_capability.as_str())),
+            current_step
+                .and_then(|step| step.execution_location.as_deref())
+                .or_else(|| Some(execution_location.as_str())),
+        );
+        let chooser_request = build_chooser_request(
+            &task,
+            current_step,
+            approval_summary.as_ref(),
+            portal_handle.as_ref(),
+        );
+        let recovery = fetch_recovery_summary(&submit_state, &session.session_id)?;
 
         json(AgentIntentSubmissionResponse {
             session,
@@ -643,6 +818,9 @@ pub fn build_router(state: AppState) -> Arc<RpcRouter> {
             execution_token,
             runtime_preview,
             provider_execution,
+            approval_summary,
+            chooser_request,
+            recovery: Some(recovery),
         })
     });
 
@@ -664,11 +842,9 @@ pub fn build_router(state: AppState) -> Arc<RpcRouter> {
             crate::planner::plan_for_task(session_id.clone(), task.task_id.clone(), intent.clone());
         crate::clients::persist_task_plan(&plan_state, &plan.task_id, &plan)
             .map_err(|error| RpcError::Internal(error.to_string()))?;
-        let primary_capability = plan
-            .candidate_capabilities
-            .first()
-            .cloned()
-            .unwrap_or_else(|| "system.intent.execute".to_string());
+        let primary_capability = first_step_capability(&plan)
+            .unwrap_or(methods::SYSTEM_INTENT_EXECUTE)
+            .to_string();
         let provider_resolution =
             crate::providers::resolve_primary_provider(&plan_state, &primary_capability)
                 .map_err(|error| RpcError::Internal(error.to_string()))?;
@@ -750,11 +926,9 @@ pub fn build_router(state: AppState) -> Arc<RpcRouter> {
             crate::planner::plan_for_task(session_id.clone(), task.task_id.clone(), intent.clone());
         crate::clients::persist_task_plan(&replan_state, &plan.task_id, &plan)
             .map_err(|error| RpcError::Internal(error.to_string()))?;
-        let primary_capability = plan
-            .candidate_capabilities
-            .first()
-            .cloned()
-            .unwrap_or_else(|| "system.intent.execute".to_string());
+        let primary_capability = first_step_capability(&plan)
+            .unwrap_or(methods::SYSTEM_INTENT_EXECUTE)
+            .to_string();
         let provider_resolution =
             crate::providers::resolve_primary_provider(&replan_state, &primary_capability)
                 .map_err(|error| RpcError::Internal(error.to_string()))?;
@@ -819,13 +993,17 @@ pub fn build_router(state: AppState) -> Arc<RpcRouter> {
             ));
         }
 
-        let plan = crate::clients::get_task_plan(&resume_state, &request.task_id)
+        let mut plan = crate::clients::get_task_plan(&resume_state, &request.task_id)
             .map_err(|error| RpcError::Internal(error.to_string()))?;
-        let primary_capability = plan
-            .candidate_capabilities
-            .first()
-            .cloned()
-            .unwrap_or_else(|| "system.intent.execute".to_string());
+        let (step_index, resumable_step) = next_actionable_step(&plan)
+            .map(|(index, step)| (index, step.clone()))
+            .ok_or_else(|| {
+                RpcError::precondition_failed(
+                    "resume_step_missing",
+                    format!("task {} has no resumable plan step", task.task_id),
+                )
+            })?;
+        let primary_capability = resumable_step.capability_id.clone();
         if primary_capability != methods::SYSTEM_FILE_BULK_DELETE {
             return Err(RpcError::precondition_failed(
                 "resume_unsupported_capability",
@@ -926,22 +1104,26 @@ pub fn build_router(state: AppState) -> Arc<RpcRouter> {
 
         match provider_execution.status.as_str() {
             "completed" => {
-                task = crate::clients::update_task_state(
-                    &resume_state,
-                    &task.task_id,
-                    "executing",
-                    Some("agent.resume-provider-execution-started"),
-                )
-                .map_err(|error| RpcError::Internal(error.to_string()))?;
-                task = crate::clients::update_task_state(
-                    &resume_state,
-                    &task.task_id,
-                    "completed",
-                    Some("agent.resume-provider-execution-completed"),
-                )
-                .map_err(|error| RpcError::Internal(error.to_string()))?;
+                mark_step_status_at(&mut plan, step_index, "completed");
+                if plan.steps.iter().all(|step| step.status == "completed") {
+                    task = crate::clients::update_task_state(
+                        &resume_state,
+                        &task.task_id,
+                        "executing",
+                        Some("agent.resume-provider-execution-started"),
+                    )
+                    .map_err(|error| RpcError::Internal(error.to_string()))?;
+                    task = crate::clients::update_task_state(
+                        &resume_state,
+                        &task.task_id,
+                        "completed",
+                        Some("agent.resume-provider-execution-completed"),
+                    )
+                    .map_err(|error| RpcError::Internal(error.to_string()))?;
+                }
             }
             "failed" => {
+                mark_step_status_at(&mut plan, step_index, "failed");
                 task = crate::clients::update_task_state(
                     &resume_state,
                     &task.task_id,
@@ -950,7 +1132,9 @@ pub fn build_router(state: AppState) -> Arc<RpcRouter> {
                 )
                 .map_err(|error| RpcError::Internal(error.to_string()))?;
             }
-            _ => {}
+            _ => {
+                mark_step_status_at(&mut plan, step_index, "approved");
+            }
         }
 
         crate::clients::persist_provider_execution_outcome(
@@ -960,6 +1144,22 @@ pub fn build_router(state: AppState) -> Arc<RpcRouter> {
             &provider_execution,
         )
         .map_err(|error| RpcError::Internal(error.to_string()))?;
+        crate::clients::persist_task_plan(&resume_state, &task.task_id, &plan)
+            .map_err(|error| RpcError::Internal(error.to_string()))?;
+
+        let approval_summary = build_approval_summary(
+            None,
+            Some(&approval),
+            Some(primary_capability.as_str()),
+            Some(approval.execution_location.as_str()),
+        );
+        let chooser_request = build_chooser_request(
+            &task,
+            next_actionable_step(&plan).map(|(_, step)| step),
+            approval_summary.as_ref(),
+            Some(&portal_handle),
+        );
+        let recovery = fetch_recovery_summary(&resume_state, &task.session_id)?;
 
         json(AgentTaskResumeResponse {
             task,
@@ -969,12 +1169,206 @@ pub fn build_router(state: AppState) -> Arc<RpcRouter> {
             portal_handle,
             execution_token,
             provider_execution: Some(provider_execution),
+            approval_summary,
+            chooser_request,
+            recovery: Some(recovery),
         })
     });
 
     Arc::new(router)
 }
 
+fn first_step_capability(plan: &AgentPlan) -> Option<&str> {
+    plan.steps
+        .first()
+        .map(|step| step.capability_id.as_str())
+        .or_else(|| plan.candidate_capabilities.first().map(String::as_str))
+}
+
+fn next_actionable_step(plan: &AgentPlan) -> Option<(usize, &AgentPlanStep)> {
+    plan.steps
+        .iter()
+        .enumerate()
+        .find(|(_, step)| step.status != "completed")
+}
+
+fn mark_step_status(plan: &mut AgentPlan, capability_id: &str, status: &str) -> bool {
+    if let Some((index, _)) = plan
+        .steps
+        .iter()
+        .enumerate()
+        .find(|(_, step)| step.capability_id == capability_id)
+    {
+        mark_step_status_at(plan, index, status);
+        return true;
+    }
+
+    false
+}
+
+fn mark_step_status_at(plan: &mut AgentPlan, index: usize, status: &str) {
+    if let Some(step) = plan.steps.get_mut(index) {
+        step.status = status.to_string();
+    }
+}
+
+fn load_policy_approval(
+    state: &AppState,
+    policy: &aios_contracts::PolicyEvaluateEnvelope,
+) -> Result<Option<ApprovalRecord>, RpcError> {
+    let Some(approval_ref) = policy.approval_ref.as_deref() else {
+        return Ok(None);
+    };
+
+    crate::clients::get_approval(state, approval_ref)
+        .map(Some)
+        .map_err(|error| RpcError::Internal(error.to_string()))
+}
+
+fn build_approval_summary(
+    policy: Option<&aios_contracts::PolicyEvaluateEnvelope>,
+    approval: Option<&ApprovalRecord>,
+    capability_id: Option<&str>,
+    execution_location: Option<&str>,
+) -> Option<AgentApprovalSummary> {
+    let required = policy.is_some_and(|item| item.decision.requires_approval) || approval.is_some();
+    if !required {
+        return None;
+    }
+
+    Some(AgentApprovalSummary {
+        required,
+        approval_status: approval
+            .map(|item| item.status.clone())
+            .unwrap_or_else(|| "required".to_string()),
+        approval_ref: approval
+            .map(|item| item.approval_ref.clone())
+            .or_else(|| policy.and_then(|item| item.approval_ref.clone())),
+        approval_lane: approval
+            .map(|item| item.approval_lane.clone())
+            .or_else(|| policy.map(|item| item.approval_lane.clone())),
+        capability_id: approval
+            .map(|item| item.capability_id.clone())
+            .or_else(|| capability_id.map(str::to_string)),
+        execution_location: approval
+            .map(|item| item.execution_location.clone())
+            .or_else(|| execution_location.map(str::to_string)),
+        expires_at: approval.and_then(|item| item.expires_at.clone()),
+    })
+}
+
+fn build_chooser_request(
+    task: &TaskRecord,
+    step: Option<&AgentPlanStep>,
+    approval_summary: Option<&AgentApprovalSummary>,
+    portal_handle: Option<&PortalHandleRecord>,
+) -> Option<AgentChooserRequest> {
+    let requested_kind = step
+        .and_then(|item| item.portal_kind.clone())
+        .or_else(|| portal_handle.map(|item| item.kind.clone()));
+    let requested_kinds = requested_kind.into_iter().collect::<Vec<_>>();
+    let needs_surface = !requested_kinds.is_empty()
+        || approval_summary
+            .is_some_and(|item| matches!(item.approval_status.as_str(), "pending" | "required"));
+    if !needs_surface {
+        return None;
+    }
+
+    let status = if task.state == "failed" {
+        "failed".to_string()
+    } else if approval_summary.is_some_and(|item| item.approval_status == "pending") {
+        "pending".to_string()
+    } else if portal_handle.is_some() {
+        "ready".to_string()
+    } else {
+        "planned".to_string()
+    };
+    let approval_status = approval_summary
+        .map(|item| item.approval_status.clone())
+        .unwrap_or_else(|| "not-required".to_string());
+    let capability_id = step.map(|item| item.capability_id.clone());
+    let title = step.map(|item| format!("Choose target for {}", item.step.replace('-', " ")));
+    let subtitle = step.map(|item| format!("session {} · {}", task.session_id, item.capability_id));
+    let mut audit_tags = vec!["agentd".to_string(), format!("task:{}", task.task_id)];
+    if let Some(item) = capability_id.as_deref() {
+        audit_tags.push(item.to_string());
+    }
+    if let Some(handle) = portal_handle {
+        audit_tags.push(handle.kind.clone());
+    }
+    audit_tags.sort();
+    audit_tags.dedup();
+
+    Some(AgentChooserRequest {
+        chooser_id: format!("chooser-{}", task.task_id),
+        title,
+        subtitle,
+        status,
+        requested_kinds,
+        selection_mode: "single".to_string(),
+        approval_status,
+        attempt_count: 0,
+        max_attempts: 1,
+        approval_ref: approval_summary.and_then(|item| item.approval_ref.clone()),
+        capability_id,
+        portal_handle_id: portal_handle.map(|item| item.handle_id.clone()),
+        expires_at: approval_summary
+            .and_then(|item| item.expires_at.clone())
+            .or_else(|| portal_handle.map(|item| item.expiry.clone())),
+        audit_tags,
+    })
+}
+
+fn fetch_recovery_summary(state: &AppState, session_id: &str) -> Result<RecoveryRef, RpcError> {
+    let response = crate::clients::get_session_evidence(
+        state,
+        &SessionEvidenceRequest {
+            session_id: session_id.to_string(),
+            limit: 5,
+        },
+    )
+    .map_err(|error| RpcError::Internal(error.to_string()))?;
+    Ok(response.recovery)
+}
+
+fn compose_runtime_prompt(
+    intent: &str,
+    provider_execution: Option<&AgentProviderExecutionResult>,
+) -> String {
+    let Some(execution) = provider_execution else {
+        return intent.to_string();
+    };
+
+    if execution.capability_id == methods::PROVIDER_FS_OPEN {
+        if let Some(preview) = execution
+            .result
+            .get("content_preview")
+            .and_then(Value::as_str)
+        {
+            return format!(
+                "Original intent:\n{}\n\nOpened target preview:\n{}",
+                intent, preview
+            );
+        }
+
+        if let Some(entries) = execution.result.get("entries").and_then(Value::as_array) {
+            let listing = entries
+                .iter()
+                .filter_map(|entry| entry.get("path").and_then(Value::as_str))
+                .take(16)
+                .collect::<Vec<_>>()
+                .join("\n");
+            if !listing.is_empty() {
+                return format!(
+                    "Original intent:\n{}\n\nDirectory listing:\n{}",
+                    intent, listing
+                );
+            }
+        }
+    }
+
+    intent.to_string()
+}
 fn select_replan_basis(tasks: &[TaskRecord]) -> Option<TaskRecord> {
     tasks.first().cloned()
 }
@@ -1147,6 +1541,48 @@ fn build_agent_task_get_response(
         }
     };
 
+    let current_step = plan
+        .as_ref()
+        .and_then(|item| next_actionable_step(item).map(|(_, step)| step));
+    let active_approval = approvals
+        .iter()
+        .find(|item| item.status == "pending")
+        .or_else(|| approvals.iter().find(|item| item.status == "approved"))
+        .or_else(|| approvals.first());
+    let approval_summary = if let Some(approval) = active_approval {
+        build_approval_summary(
+            None,
+            Some(approval),
+            current_step.map(|step| step.capability_id.as_str()),
+            current_step.and_then(|step| step.execution_location.as_deref()),
+        )
+    } else if current_step.is_some_and(|step| step.requires_approval) {
+        Some(AgentApprovalSummary {
+            required: true,
+            approval_status: "required".to_string(),
+            approval_ref: None,
+            approval_lane: None,
+            capability_id: current_step.map(|step| step.capability_id.clone()),
+            execution_location: current_step.and_then(|step| step.execution_location.clone()),
+            expires_at: None,
+        })
+    } else {
+        None
+    };
+    let chooser_request = build_chooser_request(
+        &task,
+        current_step,
+        approval_summary.as_ref(),
+        portal_handle.as_ref(),
+    );
+    let recovery = match fetch_recovery_summary(state, &task.session_id) {
+        Ok(recovery) => Some(recovery),
+        Err(error) => {
+            notes.push(format!("recovery_unavailable={error}"));
+            None
+        }
+    };
+
     Ok(AgentTaskGetResponse {
         task,
         plan,
@@ -1165,14 +1601,20 @@ fn build_agent_task_get_response(
             .as_ref()
             .and_then(|record| working_memory_value(&record.payload, "execution_token")),
         provider_execution,
+        approval_summary,
+        chooser_request,
+        recovery,
         notes,
     })
 }
 
 fn primary_capability(plan: Option<&AgentPlan>) -> Option<&str> {
-    plan.and_then(|item| item.candidate_capabilities.first().map(String::as_str))
+    plan.and_then(|item| {
+        next_actionable_step(item)
+            .map(|(_, step)| step.capability_id.as_str())
+            .or_else(|| first_step_capability(item))
+    })
 }
-
 fn working_memory_value(payload: &Value, key: &str) -> Option<Value> {
     payload.get(key).filter(|value| !value.is_null()).cloned()
 }

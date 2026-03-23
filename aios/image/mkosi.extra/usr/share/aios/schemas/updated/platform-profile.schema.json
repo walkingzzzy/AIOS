@@ -61,7 +61,9 @@
       "type": "string",
       "enum": ["a", "b"]
     },
-    "target_version_hint": { "type": "string", "minLength": 1 }
+    "target_version_hint": { "type": "string", "minLength": 1 },
+    "failure_injection_stage": { "type": "string", "minLength": 1 },
+    "failure_injection_reason": { "type": "string", "minLength": 1 }
   },
   "additionalProperties": false
 }

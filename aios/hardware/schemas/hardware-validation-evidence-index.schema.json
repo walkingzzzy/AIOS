@@ -16,13 +16,28 @@
     "date"
   ],
   "properties": {
-    "platform_id": { "type": "string", "minLength": 1 },
-    "profile": { "type": ["string", "null"] },
+    "platform_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "profile": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "validation_status": {
       "type": "string",
-      "enum": ["pending", "passed", "failed"]
+      "enum": [
+        "pending",
+        "passed",
+        "failed"
+      ]
     },
-    "generated_at": { "type": "string", "format": "date-time" },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
     "summary": {
       "type": "object",
       "required": [
@@ -33,14 +48,38 @@
         "final_last_good_slot"
       ],
       "properties": {
-        "passed": { "type": ["boolean", "null"] },
-        "record_count": { "type": ["integer", "null"], "minimum": 0 },
+        "passed": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "record_count": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
         "unique_boot_ids": {
           "type": "array",
-          "items": { "type": "string", "minLength": 1 }
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
         },
-        "final_current_slot": { "type": ["string", "null"] },
-        "final_last_good_slot": { "type": ["string", "null"] }
+        "final_current_slot": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "final_last_good_slot": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
       },
       "additionalProperties": false
     },
@@ -64,45 +103,154 @@
         "photos"
       ],
       "properties": {
-        "platform_media_manifest": { "type": ["string", "null"] },
-        "installer_image": { "type": ["string", "null"] },
-        "recovery_image": { "type": ["string", "null"] },
-        "system_image": { "type": ["string", "null"] },
-        "installer_report": { "type": ["string", "null"] },
-        "vendor_firmware_hook_report": { "type": ["string", "null"] },
-        "evaluator_json": { "type": "string", "minLength": 1 },
-        "evaluator_markdown": { "type": ["string", "null"] },
-        "support_matrix": { "type": ["string", "null"] },
-        "known_limitations": { "type": ["string", "null"] },
-        "installer_log": { "type": ["string", "null"] },
-        "recovery_log": { "type": ["string", "null"] },
-        "device_backend_state_artifact": { "type": ["string", "null"] },
+        "platform_media_manifest": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "installer_image": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recovery_image": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "system_image": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "installer_report": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vendor_firmware_hook_report": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "evaluator_json": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evaluator_markdown": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "support_matrix": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "known_limitations": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "installer_log": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recovery_log": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "device_backend_state_artifact": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "vendor_runtime_evidence": {
           "type": "array",
-          "items": { "type": "string", "minLength": 1 }
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
         },
         "photos": {
           "type": "array",
-          "items": { "type": ["string", "null"] }
+          "items": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
         },
-        "boot_evidence_report": { "type": ["string", "null"] },
-        "boot_evidence_markdown": { "type": ["string", "null"] }
+        "boot_evidence_report": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "boot_evidence_markdown": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "device_metadata_artifact": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
       },
       "additionalProperties": false
     },
     "device_runtime": {
       "type": "object",
-      "required": ["backend_state_artifact", "release_grade_backends", "vendor_runtime"],
+      "required": [
+        "backend_state_artifact",
+        "release_grade_backends",
+        "vendor_runtime"
+      ],
       "properties": {
-        "backend_state_artifact": { "type": ["string", "null"] },
+        "backend_state_artifact": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "release_grade_backends": {
           "type": "object",
-          "required": ["backend_ids", "origins", "stacks", "contract_kinds"],
+          "required": [
+            "backend_ids",
+            "origins",
+            "stacks",
+            "contract_kinds"
+          ],
           "properties": {
-            "backend_ids": { "type": "string" },
-            "origins": { "type": "string" },
-            "stacks": { "type": "string" },
-            "contract_kinds": { "type": "string" }
+            "backend_ids": {
+              "type": "string"
+            },
+            "origins": {
+              "type": "string"
+            },
+            "stacks": {
+              "type": "string"
+            },
+            "contract_kinds": {
+              "type": "string"
+            }
           },
           "additionalProperties": false
         },
@@ -123,47 +271,214 @@
             "issues"
           ],
           "properties": {
-            "vendor_runtime_signoff_status": { "type": "string", "minLength": 1 },
-            "evidence_count": { "type": "integer", "minimum": 0 },
+            "vendor_runtime_signoff_status": {
+              "type": "string",
+              "minLength": 1
+            },
+            "evidence_count": {
+              "type": "integer",
+              "minimum": 0
+            },
             "evidence_paths": {
               "type": "array",
-              "items": { "type": "string", "minLength": 1 }
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
             },
             "provider_ids": {
               "type": "array",
-              "items": { "type": "string", "minLength": 1 }
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
             },
             "runtime_service_ids": {
               "type": "array",
-              "items": { "type": "string", "minLength": 1 }
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
             },
             "provider_statuses": {
               "type": "array",
-              "items": { "type": "string", "minLength": 1 }
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
             },
             "provider_kinds": {
               "type": "array",
-              "items": { "type": "string", "minLength": 1 }
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
             },
             "backend_ids": {
               "type": "array",
-              "items": { "type": "string", "minLength": 1 }
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
             },
             "runtime_binaries": {
               "type": "array",
-              "items": { "type": "string", "minLength": 1 }
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
             },
             "engine_paths": {
               "type": "array",
-              "items": { "type": "string", "minLength": 1 }
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
             },
             "contract_kinds": {
               "type": "array",
-              "items": { "type": "string", "minLength": 1 }
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
             },
             "issues": {
               "type": "array",
-              "items": { "type": "string", "minLength": 1 }
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "device_profile": {
+          "type": "object",
+          "required": [
+            "metadata_artifact",
+            "hardware_profile_id",
+            "hardware_profile_path",
+            "canonical_hardware_profile_id",
+            "platform_media_id",
+            "platform_tier",
+            "bringup_status",
+            "runtime_profile",
+            "hardware_evidence_required",
+            "validation_status",
+            "required_modalities",
+            "conditional_modalities",
+            "available_expected_modalities",
+            "missing_required_modalities",
+            "missing_conditional_modalities",
+            "release_track_intent",
+            "profile_alignment_status"
+          ],
+          "properties": {
+            "metadata_artifact": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "hardware_profile_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "hardware_profile_path": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "canonical_hardware_profile_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "platform_media_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "platform_tier": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "bringup_status": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "runtime_profile": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "hardware_evidence_required": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "validation_status": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "required_modalities": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "conditional_modalities": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "available_expected_modalities": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "missing_required_modalities": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "missing_conditional_modalities": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "release_track_intent": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "profile_alignment_status": {
+              "type": "string",
+              "minLength": 1
             }
           },
           "additionalProperties": false
@@ -175,30 +490,85 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["name", "passed", "detail"],
+        "required": [
+          "name",
+          "passed",
+          "detail"
+        ],
         "properties": {
-          "name": { "type": "string", "minLength": 1 },
-          "passed": { "type": "boolean" },
-          "detail": { "type": ["string", "null"] }
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "passed": {
+            "type": "boolean"
+          },
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
         },
         "additionalProperties": false
       }
     },
     "notes": {
       "type": "array",
-      "items": { "type": ["string", "null"] }
+      "items": {
+        "type": [
+          "string",
+          "null"
+        ]
+      }
     },
-    "operator": { "type": ["string", "null"] },
-    "date": { "type": ["string", "null"] },
-    "baseline_kind": { "type": ["string", "null"] },
-    "validation_scope": { "type": ["string", "null"] },
-    "real_machine_signoff_status": { "type": ["string", "null"] },
-    "nominated_machines_manifest": { "type": ["string", "null"] },
+    "operator": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "date": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "baseline_kind": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "validation_scope": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "real_machine_signoff_status": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "nominated_machines_manifest": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "nominated_machine_ids": {
       "type": "array",
-      "items": { "type": "string", "minLength": 1 }
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
     },
-    "nominated_machine_count": { "type": "integer", "minimum": 0 }
+    "nominated_machine_count": {
+      "type": "integer",
+      "minimum": 0
+    }
   },
   "additionalProperties": false
 }

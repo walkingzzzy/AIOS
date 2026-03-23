@@ -5,8 +5,8 @@ use serde_json::{json as json_value, Value};
 
 use aios_contracts::{
     methods, ExecutionToken, RuntimeBackendEventPayload, RuntimeInferRequest, RuntimeInferResponse,
-    RuntimeQueueResponse, RuntimeRouteResolveRequest, RuntimeRouteResolveResponse,
-    ServiceContractResponse, TraceQueryRequest,
+    RuntimeObservabilityExportRequest, RuntimeQueueResponse, RuntimeRouteResolveRequest,
+    RuntimeRouteResolveResponse, ServiceContractResponse, TraceQueryRequest,
 };
 use aios_rpc::{RpcError, RpcResult, RpcRouter};
 
@@ -62,6 +62,14 @@ pub fn build_router(state: AppState) -> Arc<RpcRouter> {
         json(events_state.events.query(&request))
     });
 
+    let export_state = state.clone();
+    router.register_method(methods::RUNTIME_OBSERVABILITY_EXPORT, move |params| {
+        let request: RuntimeObservabilityExportRequest = parse_params_or_default(params)?;
+        let response = crate::export::export_bundle(&export_state, &request).map_err(|error| {
+            RpcError::internal_code("runtime_observability_export_failed", error.to_string())
+        })?;
+        json(response)
+    });
     let infer_state = state.clone();
     router.register_method(methods::RUNTIME_INFER_SUBMIT, move |params| {
         let request: RuntimeInferRequest = parse_params(params)?;

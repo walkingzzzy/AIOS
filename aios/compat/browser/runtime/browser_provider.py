@@ -81,6 +81,7 @@ DEFAULT_REMOTE_FLEET_ID_ENV = "AIOS_BROWSER_REMOTE_FLEET_ID"
 DEFAULT_REMOTE_GOVERNANCE_GROUP_ENV = "AIOS_BROWSER_REMOTE_GOVERNANCE_GROUP"
 DEFAULT_REMOTE_POLICY_GROUP_ENV = "AIOS_BROWSER_REMOTE_POLICY_GROUP"
 DEFAULT_REMOTE_APPROVAL_REF_ENV = "AIOS_BROWSER_REMOTE_APPROVAL_REF"
+DEFAULT_SESSION_STORE_ENV = "AIOS_BROWSER_SESSION_STORE"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 TEXT_PREVIEW_CHARS = 240
 DEFAULT_TIMEOUT_SECONDS = 10.0
@@ -129,6 +130,9 @@ class BrowserContext:
     max_links: int | None
     max_text_chars: int | None
     max_chars: int | None
+    session_id: str | None
+    window_id: str | None
+    tab_id: str | None
     started_at: str
 
 
@@ -268,6 +272,555 @@ def collapse_whitespace(value: str) -> str:
     return WHITESPACE_RE.sub(" ", value).strip()
 
 
+def resolve_browser_session_store_path(*, explicit: Path | None) -> Path:
+    if explicit is not None:
+        return explicit
+    raw = os.environ.get(DEFAULT_SESSION_STORE_ENV)
+    if raw:
+        return Path(raw)
+    return Path.home() / ".local" / "state" / "aios" / "compat-browser" / "session-store.json"
+
+
+def load_browser_session_store(
+    args: argparse.Namespace | None = None,
+) -> tuple[Path, list[dict[str, object]]]:
+    path = resolve_browser_session_store_path(
+        explicit=getattr(args, "session_store", None) if args is not None else None,
+    )
+    if not path.exists():
+        return path, []
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    entries = payload.get("sessions", [])
+    if not isinstance(entries, list):
+        raise RuntimeError(f"browser session store sessions must be a list: {path}")
+    sessions = [item for item in entries if isinstance(item, dict)]
+    return path, sessions
+
+
+def write_browser_session_store(path: Path, sessions: list[dict[str, object]]) -> None:
+    if path.parent:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema_version": "1.0.0",
+        "generated_at": utc_now(),
+        "sessions": sessions,
+    }
+    path.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+
+def make_browser_state_id(prefix: str) -> str:
+    return f"{prefix}-{time.time_ns()}"
+
+
+def new_browser_tab_state() -> dict[str, object]:
+    now = utc_now()
+    return {
+        "tab_id": make_browser_state_id("tab"),
+        "created_at": now,
+        "updated_at": now,
+        "status": "active",
+        "url": None,
+        "title": None,
+        "history": [],
+        "last_navigation_at": None,
+        "last_extract_at": None,
+        "last_selector": None,
+        "text_preview": None,
+        "text_length": None,
+        "matched_count": None,
+        "link_count": None,
+        "links": [],
+        "fetch": None,
+        "body_text": None,
+    }
+
+
+def new_browser_window_state() -> dict[str, object]:
+    now = utc_now()
+    tab = new_browser_tab_state()
+    return {
+        "window_id": make_browser_state_id("window"),
+        "created_at": now,
+        "updated_at": now,
+        "status": "active",
+        "active_tab_id": tab["tab_id"],
+        "tabs": [tab],
+    }
+
+
+def new_browser_session_state() -> dict[str, object]:
+    now = utc_now()
+    window = new_browser_window_state()
+    return {
+        "session_id": make_browser_state_id("session"),
+        "created_at": now,
+        "updated_at": now,
+        "status": "active",
+        "active_window_id": window["window_id"],
+        "windows": [window],
+    }
+
+
+def sanitize_browser_tab_state(tab: dict[str, object]) -> dict[str, object]:
+    return {key: value for key, value in tab.items() if key != "body_text"}
+
+
+def sanitize_browser_window_state(window: dict[str, object]) -> dict[str, object]:
+    sanitized = {key: value for key, value in window.items() if key != "tabs"}
+    sanitized["tabs"] = [
+        sanitize_browser_tab_state(tab)
+        for tab in window.get("tabs", [])
+        if isinstance(tab, dict)
+    ]
+    return sanitized
+
+
+def sanitize_browser_session_state(session: dict[str, object]) -> dict[str, object]:
+    sanitized = {key: value for key, value in session.items() if key != "windows"}
+    sanitized["windows"] = [
+        sanitize_browser_window_state(window)
+        for window in session.get("windows", [])
+        if isinstance(window, dict)
+    ]
+    return sanitized
+
+
+def browser_session_store_payload(
+    session_store: Path,
+    sessions: list[dict[str, object]],
+) -> dict[str, object]:
+    return {
+        "session_store": str(session_store),
+        "active_session_count": len(sessions),
+        "sessions": [sanitize_browser_session_state(session) for session in sessions],
+    }
+
+
+def find_browser_session(
+    sessions: list[dict[str, object]],
+    session_id: str,
+) -> tuple[int | None, dict[str, object] | None]:
+    for index, session in enumerate(sessions):
+        if str(session.get("session_id") or "") == session_id:
+            return index, session
+    return None, None
+
+
+def ensure_browser_session_active(session: dict[str, object]) -> None:
+    if str(session.get("status") or "active") != "active":
+        raise BrowserCommandError(
+            category="precondition_failed",
+            error_code="browser_session_inactive",
+            message=f"browser session is not active: {session.get('session_id')}",
+            retryable=False,
+        )
+
+
+def resolve_browser_window(
+    session: dict[str, object],
+    window_id: str | None,
+) -> dict[str, object]:
+    windows = [item for item in session.get("windows", []) if isinstance(item, dict)]
+    if not windows:
+        raise BrowserCommandError(
+            category="precondition_failed",
+            error_code="browser_session_empty",
+            message=f"browser session has no windows: {session.get('session_id')}",
+            retryable=False,
+        )
+    if window_id is not None:
+        for window in windows:
+            if str(window.get("window_id") or "") == window_id:
+                return window
+        raise BrowserCommandError(
+            category="precondition_failed",
+            error_code="browser_window_not_found",
+            message=f"browser window not found: {window_id}",
+            retryable=False,
+            details={"session_id": session.get("session_id"), "window_id": window_id},
+        )
+    active_window_id = str(session.get("active_window_id") or "")
+    for window in windows:
+        if str(window.get("window_id") or "") == active_window_id:
+            return window
+    return windows[0]
+
+
+def resolve_browser_tab(
+    session: dict[str, object],
+    window_id: str | None,
+    tab_id: str | None,
+) -> tuple[dict[str, object], dict[str, object]]:
+    windows = [item for item in session.get("windows", []) if isinstance(item, dict)]
+    if tab_id is not None and window_id is None:
+        for window in windows:
+            tabs = [item for item in window.get("tabs", []) if isinstance(item, dict)]
+            for tab in tabs:
+                if str(tab.get("tab_id") or "") == tab_id:
+                    return window, tab
+    window = resolve_browser_window(session, window_id)
+    tabs = [item for item in window.get("tabs", []) if isinstance(item, dict)]
+    if not tabs:
+        raise BrowserCommandError(
+            category="precondition_failed",
+            error_code="browser_window_empty",
+            message=f"browser window has no tabs: {window.get('window_id')}",
+            retryable=False,
+            details={"session_id": session.get("session_id"), "window_id": window.get("window_id")},
+        )
+    if tab_id is not None:
+        for tab in tabs:
+            if str(tab.get("tab_id") or "") == tab_id:
+                return window, tab
+        raise BrowserCommandError(
+            category="precondition_failed",
+            error_code="browser_tab_not_found",
+            message=f"browser tab not found: {tab_id}",
+            retryable=False,
+            details={
+                "session_id": session.get("session_id"),
+                "window_id": window.get("window_id"),
+                "tab_id": tab_id,
+            },
+        )
+    active_tab_id = str(window.get("active_tab_id") or "")
+    for tab in tabs:
+        if str(tab.get("tab_id") or "") == active_tab_id:
+            return window, tab
+    return window, tabs[0]
+
+
+def touch_browser_session(
+    session: dict[str, object],
+    window: dict[str, object],
+    tab: dict[str, object] | None = None,
+) -> str:
+    now = utc_now()
+    session["updated_at"] = now
+    session["active_window_id"] = window.get("window_id")
+    window["updated_at"] = now
+    if tab is not None:
+        window["active_tab_id"] = tab.get("tab_id")
+        tab["updated_at"] = now
+    return now
+
+
+def build_browser_session_binding(
+    session_store: Path,
+    session: dict[str, object],
+    window: dict[str, object] | None = None,
+    tab: dict[str, object] | None = None,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "session_store": str(session_store),
+        "session": sanitize_browser_session_state(session),
+    }
+    if window is not None:
+        payload["window"] = sanitize_browser_window_state(window)
+    if tab is not None:
+        payload["tab"] = sanitize_browser_tab_state(tab)
+    return payload
+
+
+def ensure_session_arguments_coherent(context: BrowserContext) -> None:
+    if context.session_id is None and (context.window_id is not None or context.tab_id is not None):
+        raise BrowserCommandError(
+            category="invalid_request",
+            error_code="browser_session_id_required",
+            message="window_id or tab_id requires session_id",
+            retryable=False,
+        )
+    if (context.endpoint or context.provider_ref) and context.session_id is not None:
+        raise BrowserCommandError(
+            category="invalid_request",
+            error_code="browser_remote_session_unsupported",
+            message="registered remote browser bridge does not yet support local session binding",
+            retryable=False,
+        )
+
+
+def record_browser_navigation_session(
+    args: argparse.Namespace,
+    context: BrowserContext,
+    fetch: dict[str, object],
+    *,
+    body_text: str,
+    title: str,
+    text_preview: str,
+    text_length: int,
+    links: list[dict[str, str]],
+) -> dict[str, object] | None:
+    if context.session_id is None:
+        return None
+    session_store, sessions = load_browser_session_store(args)
+    _, session = find_browser_session(sessions, context.session_id)
+    if session is None:
+        raise BrowserCommandError(
+            category="precondition_failed",
+            error_code="browser_session_not_found",
+            message=f"browser session not found: {context.session_id}",
+            retryable=False,
+            details={"session_store": str(session_store), "session_id": context.session_id},
+        )
+    ensure_browser_session_active(session)
+    window, tab = resolve_browser_tab(session, context.window_id, context.tab_id)
+    now = touch_browser_session(session, window, tab)
+    final_url = fetch.get("final_url") or fetch.get("resolved_url") or context.raw_url
+    history = tab.get("history")
+    if not isinstance(history, list):
+        history = []
+    if final_url and (not history or history[-1] != final_url):
+        history.append(final_url)
+    tab["history"] = history[-12:]
+    tab["url"] = final_url
+    tab["title"] = title or tab.get("title") or final_url
+    tab["last_navigation_at"] = now
+    tab["text_preview"] = text_preview
+    tab["text_length"] = text_length
+    tab["link_count"] = len(links)
+    tab["links"] = links
+    tab["fetch"] = fetch
+    tab["body_text"] = body_text
+    write_browser_session_store(session_store, sessions)
+    return build_browser_session_binding(session_store, session, window, tab)
+
+
+def record_browser_extract_session(
+    args: argparse.Namespace,
+    context: BrowserContext,
+    fetch: dict[str, object],
+    *,
+    text: str,
+    matched_count: int,
+) -> dict[str, object] | None:
+    if context.session_id is None:
+        return None
+    session_store, sessions = load_browser_session_store(args)
+    _, session = find_browser_session(sessions, context.session_id)
+    if session is None:
+        raise BrowserCommandError(
+            category="precondition_failed",
+            error_code="browser_session_not_found",
+            message=f"browser session not found: {context.session_id}",
+            retryable=False,
+            details={"session_store": str(session_store), "session_id": context.session_id},
+        )
+    ensure_browser_session_active(session)
+    window, tab = resolve_browser_tab(session, context.window_id, context.tab_id)
+    now = touch_browser_session(session, window, tab)
+    final_url = fetch.get("final_url") or fetch.get("resolved_url") or context.raw_url
+    if final_url:
+        tab["url"] = final_url
+    tab["last_extract_at"] = now
+    tab["last_selector"] = context.selector
+    tab["matched_count"] = matched_count
+    tab["text_preview"] = text[:TEXT_PREVIEW_CHARS]
+    tab["text_length"] = len(text)
+    tab["fetch"] = fetch
+    write_browser_session_store(session_store, sessions)
+    return build_browser_session_binding(session_store, session, window, tab)
+
+
+def handle_list_sessions(args: argparse.Namespace) -> dict[str, object]:
+    session_store, sessions = load_browser_session_store(args)
+    payload = browser_session_store_payload(session_store, sessions)
+    payload["provider_id"] = PROVIDER_ID
+    return payload
+
+
+def handle_open_session(args: argparse.Namespace) -> dict[str, object]:
+    session_store, sessions = load_browser_session_store(args)
+    session = new_browser_session_state()
+    sessions.append(session)
+    write_browser_session_store(session_store, sessions)
+    window = next(item for item in session["windows"] if isinstance(item, dict))
+    tab = next(item for item in window["tabs"] if isinstance(item, dict))
+    payload = build_browser_session_binding(session_store, session, window, tab)
+    payload.update(
+        {
+            "provider_id": PROVIDER_ID,
+            "opened": True,
+            "active_session_count": len(sessions),
+        }
+    )
+    return payload
+
+
+def handle_close_session(args: argparse.Namespace) -> dict[str, object]:
+    session_store, sessions = load_browser_session_store(args)
+    index, session = find_browser_session(sessions, args.session_id)
+    if index is None or session is None:
+        raise BrowserCommandError(
+            category="precondition_failed",
+            error_code="browser_session_not_found",
+            message=f"browser session not found: {args.session_id}",
+            retryable=False,
+            details={"session_store": str(session_store), "session_id": args.session_id},
+        )
+    removed = sessions.pop(index)
+    write_browser_session_store(session_store, sessions)
+    return {
+        "provider_id": PROVIDER_ID,
+        "session_store": str(session_store),
+        "closed": True,
+        "active_session_count": len(sessions),
+        "session": sanitize_browser_session_state(removed),
+    }
+
+
+def handle_open_window(args: argparse.Namespace) -> dict[str, object]:
+    session_store, sessions = load_browser_session_store(args)
+    _, session = find_browser_session(sessions, args.session_id)
+    if session is None:
+        raise BrowserCommandError(
+            category="precondition_failed",
+            error_code="browser_session_not_found",
+            message=f"browser session not found: {args.session_id}",
+            retryable=False,
+            details={"session_store": str(session_store), "session_id": args.session_id},
+        )
+    ensure_browser_session_active(session)
+    window = new_browser_window_state()
+    session_windows = session.setdefault("windows", [])
+    if not isinstance(session_windows, list):
+        session_windows = []
+        session["windows"] = session_windows
+    session_windows.append(window)
+    tab = next(item for item in window["tabs"] if isinstance(item, dict))
+    touch_browser_session(session, window, tab)
+    write_browser_session_store(session_store, sessions)
+    payload = build_browser_session_binding(session_store, session, window, tab)
+    payload.update({"provider_id": PROVIDER_ID, "opened": True})
+    return payload
+
+
+def handle_close_window(args: argparse.Namespace) -> dict[str, object]:
+    session_store, sessions = load_browser_session_store(args)
+    _, session = find_browser_session(sessions, args.session_id)
+    if session is None:
+        raise BrowserCommandError(
+            category="precondition_failed",
+            error_code="browser_session_not_found",
+            message=f"browser session not found: {args.session_id}",
+            retryable=False,
+            details={"session_store": str(session_store), "session_id": args.session_id},
+        )
+    ensure_browser_session_active(session)
+    windows = [item for item in session.get("windows", []) if isinstance(item, dict)]
+    if len(windows) <= 1:
+        raise BrowserCommandError(
+            category="precondition_failed",
+            error_code="browser_last_window_cannot_close",
+            message="cannot close the last browser window in a session",
+            retryable=False,
+            details={"session_id": args.session_id, "window_id": args.window_id},
+        )
+    index = next(
+        (idx for idx, window in enumerate(windows) if str(window.get("window_id") or "") == args.window_id),
+        None,
+    )
+    if index is None:
+        raise BrowserCommandError(
+            category="precondition_failed",
+            error_code="browser_window_not_found",
+            message=f"browser window not found: {args.window_id}",
+            retryable=False,
+            details={"session_id": args.session_id, "window_id": args.window_id},
+        )
+    removed = windows.pop(index)
+    session["windows"] = windows
+    next_window = windows[0]
+    next_tab = [item for item in next_window.get("tabs", []) if isinstance(item, dict)][0]
+    touch_browser_session(session, next_window, next_tab)
+    write_browser_session_store(session_store, sessions)
+    return {
+        "provider_id": PROVIDER_ID,
+        "session_store": str(session_store),
+        "closed": True,
+        "session": sanitize_browser_session_state(session),
+        "window": sanitize_browser_window_state(removed),
+    }
+
+
+def handle_open_tab(args: argparse.Namespace) -> dict[str, object]:
+    session_store, sessions = load_browser_session_store(args)
+    _, session = find_browser_session(sessions, args.session_id)
+    if session is None:
+        raise BrowserCommandError(
+            category="precondition_failed",
+            error_code="browser_session_not_found",
+            message=f"browser session not found: {args.session_id}",
+            retryable=False,
+            details={"session_store": str(session_store), "session_id": args.session_id},
+        )
+    ensure_browser_session_active(session)
+    window = resolve_browser_window(session, args.window_id)
+    tabs = window.setdefault("tabs", [])
+    if not isinstance(tabs, list):
+        tabs = []
+        window["tabs"] = tabs
+    tab = new_browser_tab_state()
+    tabs.append(tab)
+    touch_browser_session(session, window, tab)
+    write_browser_session_store(session_store, sessions)
+    payload = build_browser_session_binding(session_store, session, window, tab)
+    payload.update({"provider_id": PROVIDER_ID, "opened": True})
+    return payload
+
+
+def handle_close_tab(args: argparse.Namespace) -> dict[str, object]:
+    session_store, sessions = load_browser_session_store(args)
+    _, session = find_browser_session(sessions, args.session_id)
+    if session is None:
+        raise BrowserCommandError(
+            category="precondition_failed",
+            error_code="browser_session_not_found",
+            message=f"browser session not found: {args.session_id}",
+            retryable=False,
+            details={"session_store": str(session_store), "session_id": args.session_id},
+        )
+    ensure_browser_session_active(session)
+    window, _ = resolve_browser_tab(session, None, args.tab_id)
+    tabs = [item for item in window.get("tabs", []) if isinstance(item, dict)]
+    if len(tabs) <= 1:
+        raise BrowserCommandError(
+            category="precondition_failed",
+            error_code="browser_last_tab_cannot_close",
+            message="cannot close the last browser tab in a window",
+            retryable=False,
+            details={"session_id": args.session_id, "tab_id": args.tab_id},
+        )
+    index = next(
+        (idx for idx, tab in enumerate(tabs) if str(tab.get("tab_id") or "") == args.tab_id),
+        None,
+    )
+    if index is None:
+        raise BrowserCommandError(
+            category="precondition_failed",
+            error_code="browser_tab_not_found",
+            message=f"browser tab not found: {args.tab_id}",
+            retryable=False,
+            details={"session_id": args.session_id, "tab_id": args.tab_id},
+        )
+    removed = tabs.pop(index)
+    window["tabs"] = tabs
+    next_tab = tabs[0]
+    touch_browser_session(session, window, next_tab)
+    write_browser_session_store(session_store, sessions)
+    return {
+        "provider_id": PROVIDER_ID,
+        "session_store": str(session_store),
+        "closed": True,
+        "session": sanitize_browser_session_state(session),
+        "window": sanitize_browser_window_state(window),
+        "tab": sanitize_browser_tab_state(removed),
+    }
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="AIOS browser compat provider baseline runtime")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -336,10 +889,43 @@ def parse_args() -> argparse.Namespace:
     control_plane_parser.add_argument("--provider-id")
     control_plane_parser.add_argument("--display-name")
 
+    list_sessions_parser = subparsers.add_parser("list-sessions")
+    list_sessions_parser.add_argument("--session-store", type=Path)
+
+    open_session_parser = subparsers.add_parser("open-session")
+    open_session_parser.add_argument("--session-store", type=Path)
+
+    close_session_parser = subparsers.add_parser("close-session")
+    close_session_parser.add_argument("--session-id", required=True)
+    close_session_parser.add_argument("--session-store", type=Path)
+
+    open_window_parser = subparsers.add_parser("open-window")
+    open_window_parser.add_argument("--session-id", required=True)
+    open_window_parser.add_argument("--session-store", type=Path)
+
+    close_window_parser = subparsers.add_parser("close-window")
+    close_window_parser.add_argument("--session-id", required=True)
+    close_window_parser.add_argument("--window-id", required=True)
+    close_window_parser.add_argument("--session-store", type=Path)
+
+    open_tab_parser = subparsers.add_parser("open-tab")
+    open_tab_parser.add_argument("--session-id", required=True)
+    open_tab_parser.add_argument("--window-id")
+    open_tab_parser.add_argument("--session-store", type=Path)
+
+    close_tab_parser = subparsers.add_parser("close-tab")
+    close_tab_parser.add_argument("--session-id", required=True)
+    close_tab_parser.add_argument("--tab-id", required=True)
+    close_tab_parser.add_argument("--session-store", type=Path)
+
     navigate_parser = subparsers.add_parser("navigate")
     navigate_parser.add_argument("--url", required=True)
     navigate_parser.add_argument("--endpoint")
     navigate_parser.add_argument("--provider-ref")
+    navigate_parser.add_argument("--session-id")
+    navigate_parser.add_argument("--window-id")
+    navigate_parser.add_argument("--tab-id")
+    navigate_parser.add_argument("--session-store", type=Path)
     navigate_parser.add_argument("--timeout-seconds", type=float, default=DEFAULT_TIMEOUT_SECONDS)
     navigate_parser.add_argument("--max-links", type=int, default=8)
     navigate_parser.add_argument("--max-text-chars", type=int, default=TEXT_PREVIEW_CHARS)
@@ -352,6 +938,10 @@ def parse_args() -> argparse.Namespace:
     extract_parser.add_argument("--selector")
     extract_parser.add_argument("--endpoint")
     extract_parser.add_argument("--provider-ref")
+    extract_parser.add_argument("--session-id")
+    extract_parser.add_argument("--window-id")
+    extract_parser.add_argument("--tab-id")
+    extract_parser.add_argument("--session-store", type=Path)
     extract_parser.add_argument("--timeout-seconds", type=float, default=DEFAULT_TIMEOUT_SECONDS)
     extract_parser.add_argument("--max-chars", type=int, default=4096)
     extract_parser.add_argument("--audit-log", type=Path)
@@ -376,6 +966,9 @@ def context_from_args(args: argparse.Namespace) -> BrowserContext:
             max_links=args.max_links,
             max_text_chars=args.max_text_chars,
             max_chars=None,
+            session_id=args.session_id,
+            window_id=args.window_id,
+            tab_id=args.tab_id,
             started_at=started_at,
         )
     if args.command == "extract":
@@ -391,6 +984,9 @@ def context_from_args(args: argparse.Namespace) -> BrowserContext:
             max_links=None,
             max_text_chars=None,
             max_chars=args.max_chars,
+            session_id=args.session_id,
+            window_id=args.window_id,
+            tab_id=args.tab_id,
             started_at=started_at,
         )
     return BrowserContext(
@@ -405,6 +1001,9 @@ def context_from_args(args: argparse.Namespace) -> BrowserContext:
         max_links=None,
         max_text_chars=None,
         max_chars=None,
+        session_id=getattr(args, "session_id", None),
+        window_id=getattr(args, "window_id", None),
+        tab_id=getattr(args, "tab_id", None),
         started_at=started_at,
     )
 
@@ -775,6 +1374,7 @@ def build_remote_auth_headers(
 def build_manifest() -> dict[str, object]:
     trust_policy = browser_trust_policy()
     registry_path, registrations = load_browser_remote_registry()
+    session_store_path, sessions = load_browser_session_store()
     summary = remote_registration_summary(registrations)
     return {
         "provider_id": PROVIDER_ID,
@@ -796,6 +1396,13 @@ def build_manifest() -> dict[str, object]:
             "remote-unregister",
             "remote-control-plane-register",
             "remote-browser-bridge",
+            "session-list",
+            "session-open",
+            "session-close",
+            "window-open",
+            "window-close",
+            "tab-open",
+            "tab-close",
         ],
         "compat_permission_schema_ref": COMPAT_PERMISSION_SCHEMA_REF,
         "compat_permission_manifest": load_compat_permission_manifest(),
@@ -815,11 +1422,17 @@ def build_manifest() -> dict[str, object]:
                 }
             ),
         },
+        "session_store": {
+            "path": str(session_store_path),
+            "active_session_count": len(sessions),
+            "session_ids": [str(session.get("session_id")) for session in sessions],
+        },
         "notes": [
             "Baseline HTML/text fetch runtime is available",
             "Structured compat-browser-fetch-v1 payloads are emitted for success, not-found, and error paths",
             "Optional JSONL audit sink can be configured for machine-readable evidence",
             "Registered remote browser workers can be bridged over HTTP with auth and trust policy",
+            "Local browser session/window/tab lifecycle is persisted through a session store",
         ],
     }
 
@@ -1122,6 +1735,9 @@ def build_result_protocol(
             "max_links": context.max_links,
             "max_text_chars": context.max_text_chars,
             "max_chars": context.max_chars,
+            "session_id": context.session_id,
+            "window_id": context.window_id,
+            "tab_id": context.tab_id,
         },
         "fetch": fetch or fetch_info(requested_url=context.raw_url),
         "document": document or build_document_info(),
@@ -1313,6 +1929,9 @@ def append_audit_log(
             "session_id": token_context.get("session_id"),
             "task_id": token_context.get("task_id"),
             "approval_ref": token_context.get("approval_ref"),
+            "browser_session_id": context.session_id,
+            "browser_window_id": context.window_id,
+            "browser_tab_id": context.tab_id,
         },
         "execution_token": token_context or None,
         "token_verification": policy_context.verification,
@@ -1331,6 +1950,7 @@ def handle_health(audit_log: Path | None, policy_context: CompatPolicyContext) -
     permission_manifest = load_compat_permission_manifest()
     trust_policy = browser_trust_policy()
     registry_path, registrations = load_browser_remote_registry()
+    session_store_path, sessions = load_browser_session_store()
     fleet_ids = sorted(
         {
             registration.governance.fleet_id
@@ -1363,7 +1983,7 @@ def handle_health(audit_log: Path | None, policy_context: CompatPolicyContext) -
         "compat_permission_schema_ref": COMPAT_PERMISSION_SCHEMA_REF,
         "compat_permission_manifest": permission_manifest,
         "result_protocol_schema_ref": RESULT_PROTOCOL_SCHEMA_REF,
-        "engine": "html-fetch+remote-browser-bridge",
+        "engine": "html-fetch+session-store+remote-browser-bridge",
         "audit_log_configured": audit_log is not None,
         "audit_log_path": str(audit_log) if audit_log is not None else None,
         "shared_audit_log_configured": policy_context.shared_audit_log is not None,
@@ -1388,12 +2008,16 @@ def handle_health(audit_log: Path | None, policy_context: CompatPolicyContext) -
         "remote_status_counts": summary["counts"],
         "remote_stale_provider_refs": summary["stale_provider_refs"],
         "remote_revoked_provider_refs": summary["revoked_provider_refs"],
+        "session_store_path": str(session_store_path),
+        "active_session_count": len(sessions),
+        "active_session_ids": [str(session.get("session_id")) for session in sessions],
         "notes": [
             "Supports file://, http://, and https:// targets",
             "Structured compat-browser-fetch-v1 payloads are enabled",
             "Centralized policy/token verification is enabled when policyd_socket + execution_token are supplied",
             "Registered remote browser workers can execute navigate/extract over authenticated HTTP bridge",
             "Remote registrations carry attestation and fleet governance metadata for control-plane promotion",
+            "Local browser session/window/tab state is persisted in the session store",
         ],
     }
 
@@ -1964,6 +2588,7 @@ def handle_navigate(
             message="browser navigate context is incomplete",
             retryable=False,
         )
+    ensure_session_arguments_coherent(context)
     if context.endpoint or context.provider_ref:
         return handle_remote_navigate(
             context,
@@ -1997,27 +2622,41 @@ def handle_navigate(
         text=None,
         links=links,
     )
+    fetch = fetch_info_from_result(result)
+    session_binding = record_browser_navigation_session(
+        args,
+        context,
+        fetch,
+        body_text=result.body_text,
+        title=title,
+        text_preview=text_preview,
+        text_length=text_length,
+        links=links,
+    )
+    extra_payload = {
+        "requested_url": result.requested_url,
+        "resolved_url": result.resolved_url,
+        "final_url": result.final_url,
+        "status_code": result.status_code,
+        "content_type": result.content_type,
+        "charset": result.charset,
+        "title": title,
+        "text_preview": text_preview,
+        "text_length": text_length,
+        "link_count": len(links),
+        "links": links,
+        "truncated": result.truncated,
+        "fetched_at": result.fetched_at,
+    }
+    if session_binding is not None:
+        extra_payload.update(session_binding)
     return build_success_payload(
         status="ok",
         context=context,
-        fetch=fetch_info_from_result(result),
+        fetch=fetch,
         document=document,
         remote_bridge=None,
-        extra_payload={
-            "requested_url": result.requested_url,
-            "resolved_url": result.resolved_url,
-            "final_url": result.final_url,
-            "status_code": result.status_code,
-            "content_type": result.content_type,
-            "charset": result.charset,
-            "title": title,
-            "text_preview": text_preview,
-            "text_length": text_length,
-            "link_count": len(links),
-            "links": links,
-            "truncated": result.truncated,
-            "fetched_at": result.fetched_at,
-        },
+        extra_payload=extra_payload,
         audit_log=audit_log,
         policy_context=policy_context,
     )
@@ -2037,6 +2676,7 @@ def handle_extract(
             message="browser extract context is incomplete",
             retryable=False,
         )
+    ensure_session_arguments_coherent(context)
     if context.endpoint or context.provider_ref:
         return handle_remote_extract(
             context,
@@ -2072,24 +2712,35 @@ def handle_extract(
         text=text_payload,
         links=None,
     )
+    fetch = fetch_info_from_result(result)
+    session_binding = record_browser_extract_session(
+        args,
+        context,
+        fetch,
+        text=text_payload,
+        matched_count=matched_count,
+    )
+    extra_payload = {
+        "requested_url": result.requested_url,
+        "resolved_url": result.resolved_url,
+        "final_url": result.final_url,
+        "status_code": result.status_code,
+        "content_type": result.content_type,
+        "selector": context.selector,
+        "matched_count": matched_count,
+        "text": text_payload,
+        "truncated": result.truncated or len(extracted_text) > max_chars,
+        "fetched_at": result.fetched_at,
+    }
+    if session_binding is not None:
+        extra_payload.update(session_binding)
     return build_success_payload(
         status=payload_status,
         context=context,
-        fetch=fetch_info_from_result(result),
+        fetch=fetch,
         document=document,
         remote_bridge=None,
-        extra_payload={
-            "requested_url": result.requested_url,
-            "resolved_url": result.resolved_url,
-            "final_url": result.final_url,
-            "status_code": result.status_code,
-            "content_type": result.content_type,
-            "selector": context.selector,
-            "matched_count": matched_count,
-            "text": text_payload,
-            "truncated": result.truncated or len(extracted_text) > max_chars,
-            "fetched_at": result.fetched_at,
-        },
+        extra_payload=extra_payload,
         audit_log=audit_log,
         policy_context=policy_context,
     )
@@ -2127,6 +2778,20 @@ def main() -> int:
             payload = handle_unregister_remote(args)
         elif args.command == "register-control-plane":
             payload = handle_register_control_plane(args)
+        elif args.command == "list-sessions":
+            payload = handle_list_sessions(args)
+        elif args.command == "open-session":
+            payload = handle_open_session(args)
+        elif args.command == "close-session":
+            payload = handle_close_session(args)
+        elif args.command == "open-window":
+            payload = handle_open_window(args)
+        elif args.command == "close-window":
+            payload = handle_close_window(args)
+        elif args.command == "open-tab":
+            payload = handle_open_tab(args)
+        elif args.command == "close-tab":
+            payload = handle_close_tab(args)
         elif args.command == "navigate":
             policy_context = resolve_policy_context(
                 args,

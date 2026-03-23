@@ -535,11 +535,15 @@ def primary_capability(plan_result: dict | None) -> str | None:
     if not plan_result:
         return None
     plan = plan_result.get("plan", {})
+    steps = plan.get("steps") or []
+    if steps:
+        capability_id = (steps[0] or {}).get("capability_id")
+        if capability_id:
+            return capability_id
     capabilities = plan.get("candidate_capabilities") or []
     if not capabilities:
         return None
     return capabilities[0]
-
 
 def resolve_provider(
     agent_socket: Path,
@@ -1442,4 +1446,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
 

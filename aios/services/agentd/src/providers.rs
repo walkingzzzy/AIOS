@@ -17,7 +17,7 @@ pub fn resolve_primary_provider(
         })
 }
 
-fn preferred_kind_for_capability(capability_id: &str) -> Option<String> {
+pub fn preferred_kind_for_capability(capability_id: &str) -> Option<String> {
     if capability_id.starts_with("runtime.") {
         return Some("runtime-provider".to_string());
     }
@@ -40,7 +40,7 @@ fn preferred_kind_for_capability(capability_id: &str) -> Option<String> {
     None
 }
 
-fn preferred_execution_location(capability_id: &str) -> Option<String> {
+pub fn preferred_execution_location(capability_id: &str) -> Option<String> {
     if capability_id.starts_with("device.")
         || capability_id.starts_with("compat.")
         || capability_id.starts_with("browser.")

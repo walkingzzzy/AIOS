@@ -3,8 +3,9 @@ import json
 import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
+
+from shell_test_temp import make_temp_dir, restore_session_temp_root, set_session_temp_root
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -26,7 +27,8 @@ def run_python(script: Path, *args: str) -> str:
 
 
 def main() -> int:
-    temp_root = Path(tempfile.mkdtemp(prefix="aios-shell-prototypes-"))
+    previous_temp_root = set_session_temp_root()
+    temp_root = make_temp_dir("aios-shell-prototypes-")
     failed = False
     try:
         recovery_surface = temp_root / "recovery-surface.json"
@@ -352,6 +354,7 @@ def main() -> int:
         print(f"shell prototype smoke failed: {error}")
         return 1
     finally:
+        restore_session_temp_root(previous_temp_root)
         if failed:
             print(f"state kept at: {temp_root}")
         else:

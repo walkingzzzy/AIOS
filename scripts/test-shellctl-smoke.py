@@ -299,7 +299,7 @@ def main() -> int:
                             "endpoint": "https://browser.remote.example/bridge",
                             "control_plane_provider_id": "compat.browser.remote.worker",
                             "registration_status": "active",
-                            "last_heartbeat_at": "2026-03-08T00:05:00Z",
+                            "last_heartbeat_at": "2030-01-01T00:00:00Z",
                             "heartbeat_ttl_seconds": 3600,
                             "attestation": {"mode": "verified", "status": "trusted", "expires_at": "2030-01-01T00:00:00Z"},
                             "governance": {"fleet_id": "fleet-browser", "governance_group": "operator-audit"}
@@ -332,6 +332,28 @@ def main() -> int:
                 ensure_ascii=False,
             )
         )
+        mcp_remote_registry = temp_root / "mcp-remote-registry.json"
+        mcp_remote_registry.write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0.0",
+                    "entries": [
+                        {
+                            "provider_ref": "mcp.remote.worker",
+                            "endpoint": "https://mcp.remote.example/bridge",
+                            "control_plane_provider_id": "compat.mcp.bridge.remote",
+                            "registration_status": "active",
+                            "last_heartbeat_at": "2030-01-01T00:00:00Z",
+                            "heartbeat_ttl_seconds": 3600,
+                            "attestation": {"mode": "verified", "status": "trusted", "expires_at": "2030-01-01T00:00:00Z"},
+                            "governance": {"fleet_id": "fleet-mcp", "governance_group": "operator-audit"}
+                        }
+                    ]
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
         provider_registry_state_dir = temp_root / "provider-registry"
         descriptor_dir = provider_registry_state_dir / "descriptors"
         health_dir = provider_registry_state_dir / "health"
@@ -349,7 +371,7 @@ def main() -> int:
                         "provider_ref": "browser.remote.worker",
                         "endpoint": "https://browser.remote.example/bridge",
                         "registration_status": "active",
-                        "last_heartbeat_at": "2026-03-08T00:05:00Z",
+                        "last_heartbeat_at": "2030-01-01T00:00:00Z",
                         "heartbeat_ttl_seconds": 3600,
                         "attestation": {"mode": "verified", "status": "trusted", "expires_at": "2030-01-01T00:00:00Z"},
                         "governance": {"fleet_id": "fleet-browser", "governance_group": "operator-audit"}
@@ -374,7 +396,7 @@ def main() -> int:
                         "provider_ref": "office.remote.worker",
                         "endpoint": "https://office.remote.example/bridge",
                         "registration_status": "active",
-                        "last_heartbeat_at": "2026-03-08T00:00:00Z",
+                        "last_heartbeat_at": "2030-01-01T00:00:00Z",
                         "heartbeat_ttl_seconds": 3600,
                         "attestation": {"mode": "verified", "status": "trusted", "expires_at": "2030-01-01T00:00:00Z"},
                         "governance": {"fleet_id": "fleet-office", "governance_group": "operator-audit"}
@@ -388,10 +410,130 @@ def main() -> int:
             json.dumps({"provider_id": "compat.office.remote.worker", "status": "unavailable", "disabled": False}, indent=2, ensure_ascii=False)
         )
 
+        (descriptor_dir / "compat.mcp.bridge.remote.json").write_text(
+            json.dumps(
+                {
+                    "provider_id": "compat.mcp.bridge.remote",
+                    "display_name": "MCP Remote Worker",
+                    "kind": "compat-provider",
+                    "execution_location": "attested_remote",
+                    "remote_registration": {
+                        "source_provider_id": "compat.mcp.bridge.local",
+                        "provider_ref": "mcp.remote.worker",
+                        "endpoint": "https://mcp.remote.example/bridge",
+                        "registration_status": "active",
+                        "last_heartbeat_at": "2030-01-01T00:00:00Z",
+                        "heartbeat_ttl_seconds": 3600,
+                        "attestation": {"mode": "verified", "status": "trusted", "expires_at": "2030-01-01T00:00:00Z"},
+                        "governance": {"fleet_id": "fleet-mcp", "governance_group": "operator-audit"}
+                    }
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        (health_dir / "compat.mcp.bridge.remote.json").write_text(
+            json.dumps({"provider_id": "compat.mcp.bridge.remote", "status": "available", "disabled": False}, indent=2, ensure_ascii=False)
+        )
+
         os.environ["AIOS_POLICYD_AUDIT_LOG"] = str(policy_audit_log)
         os.environ["AIOS_RUNTIMED_EVENTS_LOG"] = str(runtime_events_log)
         os.environ["AIOS_RUNTIMED_REMOTE_AUDIT_LOG"] = str(remote_audit_log)
         os.environ["AIOS_COMPAT_OBSERVABILITY_LOG"] = str(compat_observability_log)
+        os.environ["AIOS_MCP_BRIDGE_REMOTE_REGISTRY"] = str(mcp_remote_registry)
+
+        compositor_runtime_state = temp_root / "compositor-runtime-state.json"
+        compositor_runtime_state.write_text(
+            json.dumps(
+                {
+                    "phase": "ready",
+                    "session": {
+                        "runtime_state_status": "published(ready)",
+                        "window_manager_status": "persistent(saved=2)",
+                        "workspace_count": 3,
+                        "active_workspace_index": 1,
+                        "active_workspace_id": "workspace-2",
+                        "active_output_id": "display-2",
+                        "managed_window_count": 2,
+                        "visible_window_count": 1,
+                        "floating_window_count": 1,
+                        "minimized_window_count": 1,
+                        "window_move_count": 4,
+                        "window_resize_count": 2,
+                        "window_minimize_count": 1,
+                        "window_restore_count": 1,
+                        "last_minimized_window_key": "window-beta",
+                        "last_restored_window_key": "window-alpha",
+                        "workspace_window_counts": {
+                            "workspace-1": 1,
+                            "workspace-2": 1,
+                        },
+                        "managed_windows": [
+                            {
+                                "window_key": "window-alpha",
+                                "title": "Docs",
+                                "app_id": "org.demo.docs",
+                                "output_id": "display-2",
+                                "workspace_id": "workspace-2",
+                                "window_policy": "workspace-window",
+                                "visible": True,
+                                "minimized": False,
+                            },
+                            {
+                                "window_key": "window-beta",
+                                "title": "Chat",
+                                "app_id": "org.demo.chat",
+                                "output_id": "display-1",
+                                "workspace_id": "workspace-2",
+                                "window_policy": "floating-utility",
+                                "visible": False,
+                                "minimized": True,
+                            },
+                        ],
+                    },
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        compositor_window_state = temp_root / "compositor-window-state.json"
+        compositor_window_state.write_text(
+            json.dumps(
+                {
+                    "schema": "aios.shell.compositor.window-state/v1",
+                    "active_workspace_index": 1,
+                    "active_output_id": "display-2",
+                    "windows": [
+                        {
+                            "window_key": "window-alpha",
+                            "app_id": "org.demo.docs",
+                            "title": "Docs",
+                            "slot_id": None,
+                            "output_id": "display-2",
+                            "workspace_index": 1,
+                            "window_policy": "workspace-window",
+                            "rect": {"x": 24, "y": 24, "width": 1280, "height": 720},
+                            "minimized": False,
+                            "last_seen_at_ms": 1,
+                        },
+                        {
+                            "window_key": "window-beta",
+                            "app_id": "org.demo.chat",
+                            "title": "Chat",
+                            "slot_id": None,
+                            "output_id": "display-1",
+                            "workspace_index": 1,
+                            "window_policy": "floating-utility",
+                            "rect": {"x": 128, "y": 96, "width": 960, "height": 640},
+                            "minimized": True,
+                            "last_seen_at_ms": 2,
+                        },
+                    ],
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
 
         profile = temp_root / "shell-profile.yaml"
         profile.write_text(
@@ -422,12 +564,15 @@ def main() -> int:
                         "deviced_socket": "/tmp/missing-deviced.sock",
                         "browser_remote_registry": str(browser_remote_registry),
                         "office_remote_registry": str(office_remote_registry),
+                        "mcp_remote_registry": str(mcp_remote_registry),
                         "provider_registry_state_dir": str(provider_registry_state_dir),
                     },
                     "compositor": {
                         "manifest_path": "../compositor/Cargo.toml",
                         "config_path": "../compositor/default-compositor.conf",
                         "panel_action_log_path": str(panel_action_log),
+                        "runtime_state_path": str(compositor_runtime_state),
+                        "window_state_path": str(compositor_window_state),
                     },
                 },
                 indent=2,
@@ -511,8 +656,16 @@ def main() -> int:
             "shellctl status operator audit remote governance mismatch",
         )
         require(
-            status["components"]["remote-governance"]["matched_entry_count"] == 2,
+            status["components"]["remote-governance"]["matched_entry_count"] == 3,
             "shellctl status remote governance count mismatch",
+        )
+        require(
+            status["components"]["remote-governance"]["fleet_count"] == 3,
+            "shellctl status remote governance fleet count mismatch",
+        )
+        require(
+            status["components"]["remote-governance"]["source_counts"].get("mcp") == 1,
+            "shellctl status remote governance mcp source mismatch",
         )
         require(
             status["components"]["remote-governance"]["issue_count"] >= 2,
@@ -821,8 +974,9 @@ def main() -> int:
         )
         notification_panel = json.loads(output)
         require(notification_panel["panel_id"] == "notification-center-panel", "shellctl notification panel mismatch")
-        require(notification_panel["meta"]["notification_count"] == 12, "shellctl notification panel count mismatch")
+        require(notification_panel["meta"]["notification_count"] == 14, "shellctl notification panel count mismatch")
         require(notification_panel["meta"]["source_summary"]["shell"] == 2, "shellctl notification panel shell source mismatch")
+        require(notification_panel["meta"]["source_summary"]["compositor"] == 2, "shellctl notification panel compositor source mismatch")
         require(
             notification_panel["meta"]["operator_audit_issue_count"] == 4,
             "shellctl notification panel operator audit mismatch",
@@ -837,8 +991,32 @@ def main() -> int:
             "shellctl notification panel release-grade backend ids mismatch",
         )
         require(
+            notification_panel["meta"]["compositor_active_workspace_id"] == "workspace-2",
+            "shellctl notification panel compositor workspace mismatch",
+        )
+        require(
+            notification_panel["meta"]["compositor_minimized_window_count"] == 1,
+            "shellctl notification panel compositor minimized mismatch",
+        )
+        require(
+            notification_panel["meta"]["compositor_release_grade_output_status"] == "uninitialized",
+            "shellctl notification panel compositor output status mismatch",
+        )
+        require(
             notification_panel["meta"]["remote_governance_issue_count"] >= 2,
             "shellctl notification panel remote governance mismatch",
+        )
+        require(
+            notification_panel["meta"]["remote_governance_matched_entry_count"] == 3,
+            "shellctl notification panel remote governance matched mismatch",
+        )
+        require(
+            notification_panel["meta"]["remote_governance_fleet_count"] == 3,
+            "shellctl notification panel remote governance fleet mismatch",
+        )
+        require(
+            notification_panel["meta"]["remote_governance_source_counts"].get("mcp") == 1,
+            "shellctl notification panel remote governance mcp source mismatch",
         )
 
         output = run_python(
@@ -941,6 +1119,82 @@ def main() -> int:
         require(launcher_panel["panel_id"] == "launcher-panel", "shellctl launcher panel mismatch")
         require(launcher_panel["meta"]["task_count"] >= 1, "shellctl launcher panel task count mismatch")
         require(launcher_panel["meta"]["recent_session_count"] == 1, "shellctl launcher recent session mismatch")
+        require(launcher_panel["meta"]["active_workspace_id"] == "workspace-2", "shellctl launcher workspace mismatch")
+        require(launcher_panel["meta"]["minimized_window_count"] == 1, "shellctl launcher minimized window count mismatch")
+        launcher_active_windows = next(
+            section for section in launcher_panel["sections"] if section["section_id"] == "active-workspace-windows"
+        )
+        require(len(launcher_active_windows["items"]) == 1, "shellctl launcher active workspace window count mismatch")
+        require(
+            launcher_active_windows["items"][0]["action"]["action_id"] == "focus-window",
+            "shellctl launcher active workspace action mismatch",
+        )
+        launcher_minimized_windows = next(
+            section for section in launcher_panel["sections"] if section["section_id"] == "minimized-windows"
+        )
+        require(len(launcher_minimized_windows["items"]) == 1, "shellctl launcher minimized windows section mismatch")
+        require(
+            launcher_minimized_windows["items"][0]["action"]["action_id"] == "restore-window",
+            "shellctl launcher restore action mismatch",
+        )
+
+        output = run_python(
+            ROOT / "aios/shell/shellctl.py",
+            "--profile",
+            str(profile),
+            "--json",
+            "panel",
+            "launcher",
+            "action",
+            "--fixture",
+            str(session_fixture),
+            "--session-id",
+            "session-1",
+            "--action",
+            "restore-window",
+            "--window-key",
+            "window-beta",
+            "--workspace-id",
+            "workspace-2",
+            "--output-id",
+            "display-2",
+        )
+        launcher_restore = json.loads(output)
+        require(launcher_restore["target_component"] == "task-surface", "shellctl launcher restore target mismatch")
+        require(launcher_restore["window_action"] == "restore-window", "shellctl launcher restore action mismatch")
+        require(launcher_restore["minimized_window_count"] == 0, "shellctl launcher restore minimized count mismatch")
+
+        output = run_python(
+            ROOT / "aios/shell/shellctl.py",
+            "--profile",
+            str(profile),
+            "--json",
+            "panel",
+            "launcher",
+            "model",
+            "--fixture",
+            str(session_fixture),
+            "--session-id",
+            "session-1",
+            "--user-id",
+            "user-1",
+            "--intent",
+            "open docs",
+        )
+        launcher_panel_after_restore = json.loads(output)
+        require(
+            launcher_panel_after_restore["meta"]["minimized_window_count"] == 0,
+            "shellctl launcher restore result mismatch",
+        )
+        launcher_active_windows_after_restore = next(
+            section
+            for section in launcher_panel_after_restore["sections"]
+            if section["section_id"] == "active-workspace-windows"
+        )
+        require(
+            len(launcher_active_windows_after_restore["items"]) == 2,
+            "shellctl launcher restored workspace window count mismatch",
+        )
 
         output = run_python(
             ROOT / "aios/shell/shellctl.py",

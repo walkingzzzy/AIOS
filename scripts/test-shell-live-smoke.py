@@ -10,11 +10,11 @@ import signal
 import socket
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 
 from aios_cargo_bins import default_aios_bin_dir, resolve_binary_path
+from shell_test_temp import make_temp_dir, restore_session_temp_root, set_session_temp_root
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -312,7 +312,8 @@ def main() -> int:
     ensure_binary(updated, "aios-updated")
     ensure_binary(deviced, "aios-deviced")
 
-    temp_root = Path(tempfile.mkdtemp(prefix="asl-", dir="/tmp"))
+    previous_temp_root = set_session_temp_root()
+    temp_root = make_temp_dir("asl-")
     updated_root = temp_root / "updated"
     deviced_root = temp_root / "deviced"
     panel_action_log_path = temp_root / "panel-action-events.jsonl"
@@ -706,6 +707,7 @@ def main() -> int:
         print(f"shell live smoke failed: {error}")
         return 1
     finally:
+        restore_session_temp_root(previous_temp_root)
         updated_log = terminate(updated_process)
         deviced_log = terminate(deviced_process)
         if updated_log:

@@ -9,10 +9,13 @@ import sys
 import textwrap
 import time
 import base64
+import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
+from pathlib import PurePosixPath
+from xml.etree import ElementTree
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 if str(REPO_ROOT) not in sys.path:
@@ -90,6 +93,14 @@ SUPPORTED_SUFFIXES = {
     ".yml",
     ".html",
     ".htm",
+    ".docx",
+    ".xlsx",
+    ".pptx",
+}
+OOXML_MIME_TYPES = {
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
 }
 PDF_PAGE_WIDTH = 612
 PDF_PAGE_HEIGHT = 792
@@ -201,6 +212,269 @@ def utc_now() -> str:
 
 def collapse_whitespace(value: str) -> str:
     return " ".join(value.split())
+
+
+def xml_local_name(value: str) -> str:
+    return value.rsplit("}", 1)[-1]
+
+
+def xml_attr(element: ElementTree.Element, local_name: str) -> str | None:
+    direct = element.attrib.get(local_name)
+    if direct:
+        return direct
+    for key, value in element.attrib.items():
+        if xml_local_name(key) == local_name:
+            return value
+    return None
+
+
+def office_mime_type(source_path: Path) -> str:
+    return OOXML_MIME_TYPES.get(source_path.suffix.lower()) or mimetypes.guess_type(str(source_path))[0] or "text/plain"
+
+
+def parse_xml_payload(source_path: Path, member_name: str, payload: bytes) -> ElementTree.Element:
+    try:
+        return ElementTree.fromstring(payload)
+    except ElementTree.ParseError as exc:
+        raise OfficeCommandError(
+            category="invalid_request",
+            error_code="office_document_parse_failed",
+            message=f"failed to parse document payload: {source_path.name}:{member_name}",
+            retryable=False,
+            details={"source_path": str(source_path), "member_name": member_name},
+        ) from exc
+
+
+def parse_zip_document(source_path: Path) -> zipfile.ZipFile:
+    try:
+        return zipfile.ZipFile(source_path)
+    except zipfile.BadZipFile as exc:
+        raise OfficeCommandError(
+            category="invalid_request",
+            error_code="office_document_parse_failed",
+            message=f"unsupported or corrupted Office document: {source_path}",
+            retryable=False,
+            details={"source_path": str(source_path)},
+        ) from exc
+
+
+def normalize_document_lines(lines: list[str]) -> str:
+    normalized: list[str] = []
+    for line in lines:
+        candidate = collapse_whitespace(line)
+        if candidate:
+            normalized.append(candidate)
+    return "\n".join(normalized)
+
+
+def parse_docx_paragraphs(root: ElementTree.Element) -> list[str]:
+    paragraphs: list[str] = []
+    for paragraph in root.iter():
+        if xml_local_name(paragraph.tag) != "p":
+            continue
+        fragments: list[str] = []
+        for node in paragraph.iter():
+            local_name = xml_local_name(node.tag)
+            if local_name == "t" and node.text:
+                fragments.append(node.text)
+            elif local_name == "tab":
+                fragments.append("\t")
+            elif local_name in {"br", "cr"}:
+                fragments.append("\n")
+        text = normalize_document_lines("".join(fragments).splitlines())
+        if text:
+            paragraphs.append(text)
+    return paragraphs
+
+
+def parse_docx_document(source_path: Path) -> tuple[str, str]:
+    with parse_zip_document(source_path) as archive:
+        names = set(archive.namelist())
+        if "word/document.xml" not in names:
+            raise OfficeCommandError(
+                category="invalid_request",
+                error_code="office_document_parse_failed",
+                message=f"missing word/document.xml in Office document: {source_path}",
+                retryable=False,
+                details={"source_path": str(source_path)},
+            )
+        ordered_parts = [
+            "word/document.xml",
+            *sorted(name for name in names if name.startswith("word/header") and name.endswith(".xml")),
+            *sorted(name for name in names if name.startswith("word/footer") and name.endswith(".xml")),
+        ]
+        blocks: list[str] = []
+        for member_name in ordered_parts:
+            paragraphs = parse_docx_paragraphs(
+                parse_xml_payload(source_path, member_name, archive.read(member_name))
+            )
+            if paragraphs:
+                blocks.append("\n".join(paragraphs))
+    text_content = "\n\n".join(blocks).strip()
+    return infer_title(source_path, text_content), text_content
+
+
+def join_zip_path(base_name: str, target: str) -> str:
+    return str(PurePosixPath(base_name).parent.joinpath(target).as_posix())
+
+
+def load_xlsx_shared_strings(
+    source_path: Path,
+    archive: zipfile.ZipFile,
+) -> list[str]:
+    if "xl/sharedStrings.xml" not in archive.namelist():
+        return []
+    root = parse_xml_payload(source_path, "xl/sharedStrings.xml", archive.read("xl/sharedStrings.xml"))
+    shared_strings: list[str] = []
+    for item in root.iter():
+        if xml_local_name(item.tag) != "si":
+            continue
+        fragments = [text for node in item.iter() if xml_local_name(node.tag) == "t" and (text := node.text)]
+        shared_strings.append(collapse_whitespace("".join(fragments)))
+    return shared_strings
+
+
+def load_xlsx_sheet_specs(
+    source_path: Path,
+    archive: zipfile.ZipFile,
+) -> list[tuple[str, str]]:
+    workbook_name = "xl/workbook.xml"
+    if workbook_name not in archive.namelist():
+        return []
+    workbook_root = parse_xml_payload(source_path, workbook_name, archive.read(workbook_name))
+    rel_name = "xl/_rels/workbook.xml.rels"
+    relationship_targets: dict[str, str] = {}
+    if rel_name in archive.namelist():
+        rel_root = parse_xml_payload(source_path, rel_name, archive.read(rel_name))
+        for relationship in rel_root.iter():
+            if xml_local_name(relationship.tag) != "Relationship":
+                continue
+            rel_id = xml_attr(relationship, "Id")
+            target = xml_attr(relationship, "Target")
+            if rel_id and target:
+                relationship_targets[rel_id] = join_zip_path(workbook_name, target)
+
+    sheets: list[tuple[str, str]] = []
+    for index, sheet in enumerate(
+        item for item in workbook_root.iter() if xml_local_name(item.tag) == "sheet"
+    ):
+        name = xml_attr(sheet, "name") or f"Sheet{index + 1}"
+        rel_id = xml_attr(sheet, "id")
+        member_name = relationship_targets.get(rel_id or "")
+        if member_name:
+            sheets.append((name, member_name))
+    if sheets:
+        return sheets
+
+    fallback_members = sorted(
+        name for name in archive.namelist() if name.startswith("xl/worksheets/") and name.endswith(".xml")
+    )
+    return [(f"Sheet{index + 1}", member_name) for index, member_name in enumerate(fallback_members)]
+
+
+def xlsx_cell_text(cell: ElementTree.Element, shared_strings: list[str]) -> str:
+    cell_type = xml_attr(cell, "t") or ""
+    value_text = None
+    formula_text = None
+    inline_fragments: list[str] = []
+
+    for node in cell:
+        local_name = xml_local_name(node.tag)
+        if local_name == "v" and node.text is not None:
+            value_text = node.text
+        elif local_name == "f" and node.text is not None:
+            formula_text = node.text
+        elif local_name == "is":
+            inline_fragments.extend(
+                text for text_node in node.iter() if xml_local_name(text_node.tag) == "t" and (text := text_node.text)
+            )
+
+    if cell_type == "s" and value_text is not None:
+        try:
+            index = int(value_text)
+        except ValueError:
+            return collapse_whitespace(value_text)
+        if 0 <= index < len(shared_strings):
+            return shared_strings[index]
+        return str(index)
+    if cell_type == "inlineStr":
+        return collapse_whitespace("".join(inline_fragments))
+    if cell_type == "b" and value_text is not None:
+        return "TRUE" if value_text == "1" else "FALSE"
+    if value_text is not None:
+        return collapse_whitespace(value_text)
+    if formula_text is not None:
+        return f"={collapse_whitespace(formula_text)}"
+    return collapse_whitespace("".join(inline_fragments))
+
+
+def parse_xlsx_sheet_rows(root: ElementTree.Element, shared_strings: list[str]) -> list[str]:
+    rows: list[str] = []
+    for row in root.iter():
+        if xml_local_name(row.tag) != "row":
+            continue
+        values: list[str] = []
+        for cell in row:
+            if xml_local_name(cell.tag) != "c":
+                continue
+            value = xlsx_cell_text(cell, shared_strings)
+            if value:
+                values.append(value)
+        if values:
+            rows.append("\t".join(values))
+    return rows
+
+
+def parse_xlsx_document(source_path: Path) -> tuple[str, str]:
+    with parse_zip_document(source_path) as archive:
+        shared_strings = load_xlsx_shared_strings(source_path, archive)
+        sheet_specs = load_xlsx_sheet_specs(source_path, archive)
+        blocks: list[str] = []
+        for sheet_name, member_name in sheet_specs:
+            if member_name not in archive.namelist():
+                continue
+            rows = parse_xlsx_sheet_rows(
+                parse_xml_payload(source_path, member_name, archive.read(member_name)),
+                shared_strings,
+            )
+            if rows:
+                blocks.append("\n".join([f"[工作表] {sheet_name}", *rows]))
+    text_content = "\n\n".join(blocks).strip()
+    title = blocks[0].splitlines()[0].replace("[工作表] ", "", 1) if blocks else source_path.stem
+    return title, text_content
+
+
+def slide_sort_key(member_name: str) -> tuple[int, str]:
+    digits = "".join(character for character in Path(member_name).stem if character.isdigit())
+    if digits:
+        return int(digits), member_name
+    return 0, member_name
+
+
+def parse_pptx_document(source_path: Path) -> tuple[str, str]:
+    with parse_zip_document(source_path) as archive:
+        slide_members = sorted(
+            (
+                name
+                for name in archive.namelist()
+                if name.startswith("ppt/slides/slide") and name.endswith(".xml")
+            ),
+            key=slide_sort_key,
+        )
+        blocks: list[str] = []
+        title: str | None = None
+        for index, member_name in enumerate(slide_members, start=1):
+            root = parse_xml_payload(source_path, member_name, archive.read(member_name))
+            texts = [
+                collapse_whitespace(node.text or "")
+                for node in root.iter()
+                if xml_local_name(node.tag) == "t" and collapse_whitespace(node.text or "")
+            ]
+            if texts:
+                title = title or texts[0]
+                blocks.append("\n".join([f"[幻灯片 {index}]", *texts]))
+    text_content = "\n\n".join(blocks).strip()
+    return title or infer_title(source_path, text_content), text_content
 
 
 def parse_args() -> argparse.Namespace:
@@ -805,12 +1079,20 @@ def infer_title(source_path: Path, text_content: str) -> str:
 def load_document(path: Path) -> DocumentContent:
     source_path = resolve_supported_path(path)
     raw_bytes = source_path.read_bytes()
-    raw_text = decode_bytes(raw_bytes)
-    mime_type = mimetypes.guess_type(str(source_path))[0] or "text/plain"
+    suffix = source_path.suffix.lower()
+    mime_type = office_mime_type(source_path)
 
-    if source_path.suffix.lower() in {".html", ".htm"} or mime_type == "text/html":
+    if suffix in {".html", ".htm"} or mime_type == "text/html":
+        raw_text = decode_bytes(raw_bytes)
         title, text_content = parse_html_document(source_path, raw_text)
+    elif suffix == ".docx":
+        title, text_content = parse_docx_document(source_path)
+    elif suffix == ".xlsx":
+        title, text_content = parse_xlsx_document(source_path)
+    elif suffix == ".pptx":
+        title, text_content = parse_pptx_document(source_path)
     else:
+        raw_text = decode_bytes(raw_bytes)
         text_content = raw_text
         title = infer_title(source_path, text_content)
 

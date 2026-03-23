@@ -31,7 +31,7 @@ FILTER_FIELDS = {
 }
 
 AUDIT_LOG_SOURCES = {"policy", "runtime", "remote", "compat"}
-REMOTE_GOVERNANCE_SOURCE_FILTERS = {"browser", "office", "compat"}
+REMOTE_GOVERNANCE_SOURCE_FILTERS = {"browser", "office", "mcp", "compat"}
 
 
 def default_policy_audit_log() -> Path:
@@ -90,6 +90,10 @@ def default_browser_remote_registry() -> Path:
 
 def default_office_remote_registry() -> Path:
     return remote_governance_helpers().default_office_remote_registry()
+
+
+def default_mcp_remote_registry() -> Path:
+    return remote_governance_helpers().default_mcp_remote_registry()
 
 
 def default_provider_registry_state_dir() -> Path:
@@ -430,6 +434,7 @@ def load_operator_audit(
     *,
     browser_remote_registry: Path | None = None,
     office_remote_registry: Path | None = None,
+    mcp_remote_registry: Path | None = None,
     provider_registry_state_dir: Path | None = None,
     limit: int = 10,
     filters: dict[str, object] | None = None,
@@ -506,6 +511,7 @@ def load_operator_audit(
         governance_payload = remote_governance_helpers().load_remote_governance(
             browser_remote_registry,
             office_remote_registry,
+            mcp_remote_registry,
             provider_registry_state_dir,
             limit=32,
             filters=governance_filters,
@@ -611,6 +617,11 @@ def load_operator_audit(
             "office_remote_registry": (
                 str(office_remote_registry)
                 if office_remote_registry is not None and office_remote_registry.exists()
+                else None
+            ),
+            "mcp_remote_registry": (
+                str(mcp_remote_registry)
+                if mcp_remote_registry is not None and mcp_remote_registry.exists()
                 else None
             ),
             "provider_registry_state_dir": (

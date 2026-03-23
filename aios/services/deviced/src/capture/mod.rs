@@ -17,6 +17,7 @@ pub mod audio;
 pub mod camera;
 pub mod input;
 pub mod screen;
+pub mod ui_tree;
 
 #[derive(Debug, Clone, Default)]
 struct StartupRecoverySummary {
@@ -295,6 +296,9 @@ pub fn capabilities(config: &Config) -> Vec<DeviceCapabilityDescriptor> {
         input::capability(config),
         camera::capability(config),
     ];
+    if config.ui_tree_supported {
+        capabilities.push(ui_tree::capability(config));
+    }
     for capability in &mut capabilities {
         adapters::extend_capability_notes(config, capability);
     }
@@ -363,6 +367,37 @@ mod tests {
             camera_live_command: None,
             ui_tree_live_command: None,
             continuous_capture_interval_ms: 500,
+        }
+    }
+
+    #[test]
+    fn capabilities_include_ui_tree_when_supported() {
+        let mut config = config();
+        config.ui_tree_supported = true;
+        if let Some(parent) = config.ui_tree_state_path.parent() {
+            fs::create_dir_all(parent).expect("create ui_tree state dir");
+        }
+        fs::write(&config.ui_tree_state_path, b"{}").expect("write ui_tree state file");
+
+        let capabilities = capabilities(&config);
+        let ui_tree = capabilities
+            .iter()
+            .find(|item| item.modality == "ui_tree")
+            .expect("ui_tree capability");
+        assert!(ui_tree.available);
+        assert!(ui_tree.conditional);
+        assert_eq!(ui_tree.source_backend, "at-spi");
+        assert!(ui_tree
+            .notes
+            .iter()
+            .any(|note| note == "adapter_id=ui_tree.atspi-state-file"));
+        assert!(ui_tree
+            .notes
+            .iter()
+            .any(|note| note == "adapter_execution_path=native-state-bridge"));
+
+        if let Some(parent) = config.capture_state_path.parent() {
+            fs::remove_dir_all(parent).ok();
         }
     }
 

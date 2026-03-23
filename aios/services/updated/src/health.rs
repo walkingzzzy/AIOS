@@ -338,6 +338,8 @@ mod tests {
             current_channel: "stable".to_string(),
             current_version: "0.1.0".to_string(),
             target_version_hint: None,
+            failure_injection_stage: None,
+            failure_injection_reason: None,
             sysupdate_check_command: None,
             sysupdate_apply_command: None,
             rollback_command: None,

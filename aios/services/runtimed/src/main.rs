@@ -3,6 +3,7 @@ mod budget;
 mod config;
 mod events;
 mod events_persistence;
+mod export;
 mod managed_workers;
 mod observability;
 mod queue;
@@ -10,6 +11,7 @@ mod remote_audit;
 mod remote_security;
 mod rpc;
 mod scheduler;
+mod trace_query;
 
 use std::time::Duration;
 

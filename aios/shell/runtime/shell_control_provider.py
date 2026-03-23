@@ -45,6 +45,7 @@ class Config:
     compat_observability_log: Path
     browser_remote_registry: Path
     office_remote_registry: Path
+    mcp_remote_registry: Path
     provider_registry_state_dir: Path
 
 
@@ -181,6 +182,15 @@ def load_config() -> Config:
                 ),
             )
         ),
+        mcp_remote_registry=Path(
+            os.environ.get(
+                "AIOS_SHELL_PROVIDER_MCP_REMOTE_REGISTRY",
+                os.environ.get(
+                    "AIOS_MCP_BRIDGE_REMOTE_REGISTRY",
+                    str(Path.home() / ".local" / "state" / "aios" / "compat-mcp-bridge" / "remote-registry.json"),
+                ),
+            )
+        ),
         provider_registry_state_dir=Path(
             os.environ.get(
                 "AIOS_SHELL_PROVIDER_PROVIDER_REGISTRY_STATE_DIR",
@@ -298,6 +308,7 @@ def notification_panel_command(config: Config) -> list[str]:
     command.extend(["--compat-observability-log", str(config.compat_observability_log)])
     command.extend(["--browser-remote-registry", str(config.browser_remote_registry)])
     command.extend(["--office-remote-registry", str(config.office_remote_registry)])
+    command.extend(["--mcp-remote-registry", str(config.mcp_remote_registry)])
     command.extend(["--provider-registry-state-dir", str(config.provider_registry_state_dir)])
     return command
 
@@ -351,6 +362,8 @@ def operator_audit_panel_command(
         str(config.browser_remote_registry),
         "--office-remote-registry",
         str(config.office_remote_registry),
+        "--mcp-remote-registry",
+        str(config.mcp_remote_registry),
         "--provider-registry-state-dir",
         str(config.provider_registry_state_dir),
         "--limit",
@@ -438,6 +451,8 @@ def remote_governance_panel_command(
         str(config.browser_remote_registry),
         "--office-remote-registry",
         str(config.office_remote_registry),
+        "--mcp-remote-registry",
+        str(config.mcp_remote_registry),
         "--provider-registry-state-dir",
         str(config.provider_registry_state_dir),
         "--limit",

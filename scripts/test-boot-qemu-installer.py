@@ -88,13 +88,18 @@ def find_ovmf_code() -> str | None:
 def choose_accel() -> tuple[str, str]:
     sysname = os.uname().sysname
     machine = os.uname().machine
+    default_accel = "tcg"
+    default_cpu = "max"
     if sysname == "Darwin" and machine == "arm64":
-        return "tcg", "max"
-    if sysname == "Darwin":
-        return "hvf:tcg", "host"
-    if sysname == "Linux":
-        return "kvm:tcg", "host"
-    return "tcg", "max"
+        default_accel, default_cpu = "tcg", "max"
+    elif sysname == "Darwin":
+        default_accel, default_cpu = "hvf:tcg", "host"
+    elif sysname == "Linux":
+        default_accel, default_cpu = "kvm:tcg", "host"
+    return (
+        os.environ.get("AIOS_QEMU_ACCEL", default_accel),
+        os.environ.get("AIOS_QEMU_CPU", default_cpu),
+    )
 
 
 def ensure_file(path: Path, description: str) -> None:
@@ -245,3 +250,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

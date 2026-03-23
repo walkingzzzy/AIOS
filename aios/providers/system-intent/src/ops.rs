@@ -1,5 +1,6 @@
 use aios_contracts::{
-    methods, AgentPlan, SystemIntentAction, SystemIntentRequest, SystemIntentResponse, TaskRecord,
+    methods, AgentPlan, AgentPlanStep, SystemIntentAction, SystemIntentRequest,
+    SystemIntentResponse, TaskRecord,
 };
 
 use crate::AppState;
@@ -124,11 +125,15 @@ fn normalize_plan(mut plan: AgentPlan, intent: &str) -> AgentPlan {
     if plan.next_action.trim().is_empty() {
         plan.next_action = derive_next_action(&plan.candidate_capabilities);
     }
+    if plan.steps.is_empty() {
+        plan.steps = heuristic_steps(&plan.candidate_capabilities, &plan.next_action);
+    }
     plan
 }
 
 fn heuristic_plan(task: &TaskRecord, intent: &str) -> AgentPlan {
     let candidate_capabilities = heuristic_capabilities(intent);
+    let next_action = derive_next_action(&candidate_capabilities);
     AgentPlan {
         task_id: task.task_id.clone(),
         session_id: task.session_id.clone(),
@@ -138,7 +143,8 @@ fn heuristic_plan(task: &TaskRecord, intent: &str) -> AgentPlan {
             .filter(|title| !title.trim().is_empty())
             .unwrap_or_else(|| summarize(intent)),
         route_preference: derive_route_preference(&candidate_capabilities),
-        next_action: derive_next_action(&candidate_capabilities),
+        next_action: next_action.clone(),
+        steps: heuristic_steps(&candidate_capabilities, &next_action),
         candidate_capabilities,
     }
 }
@@ -265,6 +271,35 @@ fn derive_next_action(candidate_capabilities: &[String]) -> String {
     }
 
     "review-local-control-plan".to_string()
+}
+
+fn heuristic_steps(candidate_capabilities: &[String], next_action: &str) -> Vec<AgentPlanStep> {
+    candidate_capabilities
+        .iter()
+        .enumerate()
+        .map(|(index, capability_id)| AgentPlanStep {
+            step: capability_id.replace('.', "-"),
+            capability_id: capability_id.clone(),
+            status: if index == 0 {
+                "ready".to_string()
+            } else {
+                "planned".to_string()
+            },
+            provider_kind: None,
+            execution_location: None,
+            requires_approval: capability_id == methods::SYSTEM_FILE_BULK_DELETE,
+            requires_portal_handle: matches!(
+                capability_id.as_str(),
+                "provider.fs.open" | methods::SYSTEM_FILE_BULK_DELETE | "compat.document.open"
+            ),
+            portal_kind: matches!(
+                capability_id.as_str(),
+                "provider.fs.open" | methods::SYSTEM_FILE_BULK_DELETE | "compat.document.open"
+            )
+            .then(|| "file_handle".to_string()),
+            recovery_action: Some(next_action.to_string()),
+        })
+        .collect()
 }
 
 fn build_actions(candidate_capabilities: &[String]) -> Vec<SystemIntentAction> {

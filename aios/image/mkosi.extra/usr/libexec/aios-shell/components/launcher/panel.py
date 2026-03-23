@@ -3,6 +3,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -26,6 +29,17 @@ SUGGESTED_INTENTS = [
     "review approvals",
     "inspect device health",
 ]
+WINDOW_ACTION_IDS = {
+    "activate-next-workspace",
+    "activate-previous-workspace",
+    "focus-window",
+    "minimize-window",
+    "move-window-next-workspace",
+    "restore-recent-window",
+    "restore-window",
+    "send-window-active-output",
+}
+TASK_SURFACE_PANEL = Path(__file__).resolve().parent.parent / "task-surface" / "panel.py"
 
 
 def tone_for(status: str | None) -> str:
@@ -66,6 +80,176 @@ def restore_point_at(session: dict | None) -> str | None:
     if not session:
         return None
     return session.get("last_resumed_at") or session.get("created_at")
+
+
+
+def default_compositor_runtime_state() -> Path | None:
+    value = os.environ.get("AIOS_SHELL_COMPOSITOR_RUNTIME_STATE_PATH")
+    return Path(value) if value else None
+
+
+def default_compositor_window_state() -> Path | None:
+    value = os.environ.get("AIOS_SHELL_COMPOSITOR_WINDOW_STATE_PATH")
+    return Path(value) if value else None
+
+
+def parse_int(value, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def load_json_payload(path: Path | None) -> tuple[dict, str | None]:
+    if path is None:
+        return {}, None
+    if not path.exists():
+        return {}, f"missing:{path}"
+    try:
+        payload = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as error:
+        return {}, str(error)
+    if isinstance(payload, dict):
+        return payload, None
+    return {}, f"invalid-json-object:{path}"
+
+
+def derive_managed_windows(window_payload: dict, runtime_session: dict) -> list[dict]:
+    managed_windows: list[dict] = []
+    for entry in window_payload.get("windows", []):
+        if not isinstance(entry, dict):
+            continue
+        rect = entry.get("rect") if isinstance(entry.get("rect"), dict) else {}
+        workspace_index = parse_int(entry.get("workspace_index"), 0)
+        workspace_id = f"workspace-{workspace_index + 1}"
+        output_id = entry.get("output_id") or runtime_session.get("active_output_id") or "display-1"
+        window_policy = str(entry.get("window_policy") or "workspace-window")
+        minimized = bool(entry.get("minimized"))
+        managed_windows.append(
+            {
+                "window_key": entry.get("window_key"),
+                "surface_id": entry.get("slot_id") or entry.get("window_key"),
+                "app_id": entry.get("app_id"),
+                "title": entry.get("title"),
+                "slot_id": entry.get("slot_id"),
+                "output_id": output_id,
+                "workspace_id": workspace_id,
+                "window_policy": window_policy,
+                "floating": "floating" in window_policy,
+                "visible": not minimized,
+                "minimized": minimized,
+                "persisted": True,
+                "interaction_state": "minimized" if minimized else "persisted",
+                "layout_x": parse_int(rect.get("x"), 0),
+                "layout_y": parse_int(rect.get("y"), 0),
+                "layout_width": parse_int(rect.get("width"), 0),
+                "layout_height": parse_int(rect.get("height"), 0),
+            }
+        )
+    return managed_windows
+
+
+def workspace_id_from_index(index: int) -> str:
+    return f"workspace-{max(index, 0) + 1}"
+
+
+def derive_release_grade_output_status(outputs: list[dict], renderable_output_count: int) -> str:
+    if not outputs:
+        return "uninitialized"
+    output_count = len(outputs)
+    if output_count == 1:
+        return f"single-output(renderable={renderable_output_count}/{output_count})"
+    if renderable_output_count >= output_count:
+        return f"multi-output(renderable={renderable_output_count}/{output_count})"
+    return f"multi-output(partial-renderable={renderable_output_count}/{output_count})"
+
+
+def load_compositor_summary(
+    runtime_state_path: Path | None,
+    window_state_path: Path | None,
+) -> dict:
+    runtime_payload, runtime_error = load_json_payload(runtime_state_path)
+    window_payload, window_error = load_json_payload(window_state_path)
+    runtime_session = runtime_payload.get("session")
+    if not isinstance(runtime_session, dict):
+        runtime_session = runtime_payload if isinstance(runtime_payload, dict) else {}
+
+    runtime_managed_windows = [
+        item
+        for item in runtime_session.get("managed_windows", [])
+        if isinstance(item, dict)
+    ]
+    window_managed_windows = derive_managed_windows(window_payload, runtime_session)
+    managed_windows = window_managed_windows or runtime_managed_windows
+
+    derived_workspace_counts: dict[str, int] = {}
+    for window in managed_windows:
+        workspace_id = str(window.get("workspace_id") or "workspace-1")
+        derived_workspace_counts[workspace_id] = derived_workspace_counts.get(workspace_id, 0) + 1
+    workspace_window_counts = dict(sorted(derived_workspace_counts.items()))
+
+    active_workspace_index = parse_int(
+        window_payload.get("active_workspace_index"),
+        parse_int(runtime_session.get("active_workspace_index"), 0),
+    )
+    active_workspace_id = workspace_id_from_index(active_workspace_index)
+    workspace_count = max(
+        1,
+        parse_int(
+            runtime_session.get("workspace_count"),
+            max(len(workspace_window_counts), active_workspace_index + 1, 1),
+        ),
+    )
+    outputs = [
+        item
+        for item in runtime_session.get("outputs", [])
+        if isinstance(item, dict)
+    ]
+    output_count = parse_int(runtime_session.get("output_count"), len(outputs))
+    renderable_output_count = parse_int(
+        runtime_session.get("renderable_output_count"),
+        sum(1 for item in outputs if item.get("renderable")),
+    )
+    non_renderable_output_count = parse_int(
+        runtime_session.get("non_renderable_output_count"),
+        max(output_count - renderable_output_count, 0),
+    )
+    errors = [error for error in (runtime_error, window_error) if error]
+    data_status = "ready" if runtime_payload or window_payload else "unavailable"
+    if errors and data_status == "ready":
+        data_status = "partial"
+
+    return {
+        "data_status": data_status,
+        "data_error": "; ".join(errors) if errors else None,
+        "runtime_phase": runtime_payload.get("phase"),
+        "runtime_state_status": runtime_session.get("runtime_state_status"),
+        "runtime_state_path": str(runtime_state_path) if runtime_state_path else None,
+        "window_state_path": str(window_state_path) if window_state_path else None,
+        "window_manager_status": runtime_session.get("window_manager_status"),
+        "workspace_count": workspace_count,
+        "active_workspace_index": active_workspace_index,
+        "active_workspace_id": active_workspace_id,
+        "active_output_id": window_payload.get("active_output_id") or runtime_session.get("active_output_id"),
+        "output_count": output_count,
+        "renderable_output_count": renderable_output_count,
+        "non_renderable_output_count": non_renderable_output_count,
+        "release_grade_output_status": runtime_session.get("release_grade_output_status")
+        or derive_release_grade_output_status(outputs, renderable_output_count),
+        "managed_window_count": len(managed_windows),
+        "visible_window_count": sum(1 for item in managed_windows if item.get("visible")),
+        "floating_window_count": sum(1 for item in managed_windows if item.get("floating")),
+        "minimized_window_count": sum(1 for item in managed_windows if item.get("minimized")),
+        "window_move_count": parse_int(runtime_session.get("window_move_count"), 0),
+        "window_resize_count": parse_int(runtime_session.get("window_resize_count"), 0),
+        "window_minimize_count": parse_int(runtime_session.get("window_minimize_count"), 0),
+        "window_restore_count": parse_int(runtime_session.get("window_restore_count"), 0),
+        "last_minimized_window_key": runtime_session.get("last_minimized_window_key"),
+        "last_restored_window_key": runtime_session.get("last_restored_window_key"),
+        "workspace_window_counts": workspace_window_counts,
+        "managed_windows": managed_windows,
+        "outputs": outputs,
+    }
 
 
 def load_fixture_state(path: Path, session_id: str | None) -> dict:
@@ -169,7 +353,15 @@ def load_state(agent_socket_path: Path, fixture: Path | None, session_id: str | 
     return load_live_state(agent_socket_path, session_id)
 
 
-def build_model(state: dict, requested_session_id: str | None, user_id: str, intent: str, title: str | None, task_state: str) -> dict:
+def build_model(
+    state: dict,
+    requested_session_id: str | None,
+    user_id: str,
+    intent: str,
+    title: str | None,
+    task_state: str,
+    compositor_summary: dict,
+) -> dict:
     sessions = list(state.get("sessions", []))
     tasks = list(state.get("tasks", []))
     all_tasks = list(state.get("all_tasks", tasks))
@@ -228,6 +420,17 @@ def build_model(state: dict, requested_session_id: str | None, user_id: str, int
             }
         )
 
+    active_workspace_id = compositor_summary.get("active_workspace_id")
+    active_output_id = compositor_summary.get("active_output_id")
+    active_workspace_windows = [
+        item
+        for item in compositor_summary.get("managed_windows", [])
+        if item.get("workspace_id") == active_workspace_id and not item.get("minimized")
+    ]
+    minimized_windows = [
+        item for item in compositor_summary.get("managed_windows", []) if item.get("minimized")
+    ]
+
     actions = [
         {
             "action_id": "create-session",
@@ -251,6 +454,113 @@ def build_model(state: dict, requested_session_id: str | None, user_id: str, int
             "target_state": task_state,
         },
     ]
+    if compositor_summary.get("window_state_path"):
+        actions.extend(
+            [
+                {
+                    "action_id": "restore-recent-window",
+                    "label": "Restore Window",
+                    "enabled": compositor_summary.get("minimized_window_count", 0) > 0,
+                    "tone": "positive",
+                    "workspace_id": active_workspace_id,
+                    "output_id": active_output_id,
+                },
+                {
+                    "action_id": "activate-next-workspace",
+                    "label": "Next Workspace",
+                    "enabled": compositor_summary.get("workspace_count", 1) > 1,
+                    "tone": "neutral",
+                    "workspace_id": active_workspace_id,
+                    "output_id": active_output_id,
+                },
+            ]
+        )
+
+    active_workspace_window_items = [
+        {
+            "label": item.get("title") or item.get("app_id") or item.get("window_key") or "window",
+            "value": " · ".join(
+                part
+                for part in (
+                    item.get("window_policy") or "workspace-window",
+                    item.get("output_id") or "display-1",
+                    item.get("window_key") or "",
+                )
+                if part
+            ),
+            "tone": "neutral",
+            "action": {
+                "action_id": "focus-window",
+                "label": "Focus",
+                "enabled": bool(item.get("window_key")) and bool(compositor_summary.get("window_state_path")),
+                "window_key": item.get("window_key"),
+                "workspace_id": item.get("workspace_id"),
+                "output_id": item.get("output_id"),
+            },
+        }
+        for item in active_workspace_windows
+    ]
+    minimized_window_items = [
+        {
+            "label": item.get("title") or item.get("app_id") or item.get("window_key") or "window",
+            "value": " · ".join(
+                part
+                for part in (
+                    item.get("workspace_id") or "workspace-1",
+                    item.get("output_id") or "display-1",
+                    item.get("window_key") or "",
+                )
+                if part
+            ),
+            "tone": "warning",
+            "action": {
+                "action_id": "restore-window",
+                "label": "Restore",
+                "enabled": bool(item.get("window_key")) and bool(compositor_summary.get("window_state_path")),
+                "window_key": item.get("window_key"),
+                "workspace_id": item.get("workspace_id") or active_workspace_id,
+                "output_id": active_output_id or item.get("output_id"),
+            },
+        }
+        for item in minimized_windows
+    ]
+    window_overview_items = [
+        {
+            "label": "window_manager_status",
+            "value": compositor_summary.get("window_manager_status") or compositor_summary.get("data_status") or "unavailable",
+            "tone": "warning" if compositor_summary.get("data_status") != "ready" else "neutral",
+        },
+        {
+            "label": "active_workspace",
+            "value": active_workspace_id or "workspace-1",
+            "tone": "positive" if active_workspace_id else "neutral",
+        },
+        {
+            "label": "active_output",
+            "value": active_output_id or "-",
+            "tone": "neutral",
+        },
+        {
+            "label": "renderable_outputs",
+            "value": compositor_summary.get("renderable_output_count", 0),
+            "tone": "positive" if compositor_summary.get("renderable_output_count", 0) else "neutral",
+        },
+        {
+            "label": "output_status",
+            "value": compositor_summary.get("release_grade_output_status") or "uninitialized",
+            "tone": "neutral",
+        },
+        {
+            "label": "managed_windows",
+            "value": compositor_summary.get("managed_window_count", 0),
+            "tone": "neutral",
+        },
+        {
+            "label": "minimized_windows",
+            "value": compositor_summary.get("minimized_window_count", 0),
+            "tone": "warning" if compositor_summary.get("minimized_window_count", 0) else "neutral",
+        },
+    ]
 
     return {
         "component_id": "launcher",
@@ -266,6 +576,8 @@ def build_model(state: dict, requested_session_id: str | None, user_id: str, int
             {"label": "Sessions", "value": state.get("session_count", len(sessions)), "tone": "neutral"},
             {"label": "Tasks", "value": len(tasks), "tone": "neutral"},
             {"label": "Focus", "value": resolved_session_id or "none", "tone": tone_for((focus_session or {}).get("status"))},
+            {"label": "Workspace", "value": active_workspace_id or "-", "tone": "positive" if active_workspace_id else "neutral"},
+            {"label": "Minimized", "value": compositor_summary.get("minimized_window_count", 0), "tone": "warning" if compositor_summary.get("minimized_window_count", 0) else "neutral"},
         ],
         "actions": actions,
         "sections": [
@@ -332,7 +644,7 @@ def build_model(state: dict, requested_session_id: str | None, user_id: str, int
                     {"label": "session_id", "value": focus_session.get("session_id"), "tone": "neutral"},
                     {"label": "user_id", "value": focus_session.get("user_id"), "tone": "neutral"},
                     {"label": "status", "value": focus_session.get("status"), "tone": tone_for(focus_session.get("status"))},
-                    {"label": "created_at", "value": focus_session.get("created_at", "-"), "tone": "neutral"},
+                    {"label": "created_at", "value": focus_session.get("created_at", "-") , "tone": "neutral"},
                 ],
                 "empty_state": "No active session selected",
             },
@@ -359,6 +671,24 @@ def build_model(state: dict, requested_session_id: str | None, user_id: str, int
                 ],
                 "empty_state": "No tasks in session",
             },
+            {
+                "section_id": "window-overview",
+                "title": "Window Restore",
+                "items": window_overview_items,
+                "empty_state": "No compositor window manager summary",
+            },
+            {
+                "section_id": "active-workspace-windows",
+                "title": "Active Workspace Windows",
+                "items": active_workspace_window_items,
+                "empty_state": "No visible windows in the active workspace",
+            },
+            {
+                "section_id": "minimized-windows",
+                "title": "Minimized Windows",
+                "items": minimized_window_items,
+                "empty_state": "No minimized windows",
+            },
         ],
         "meta": {
             "requested_session_id": requested_session_id,
@@ -380,6 +710,32 @@ def build_model(state: dict, requested_session_id: str | None, user_id: str, int
             "focus_session_last_resumed_at": (focus_session or {}).get("last_resumed_at"),
             "data_source_status": state.get("data_source_status", "ready"),
             "data_source_error": state.get("data_source_error"),
+            "compositor_data_status": compositor_summary.get("data_status"),
+            "compositor_data_error": compositor_summary.get("data_error"),
+            "compositor_runtime_phase": compositor_summary.get("runtime_phase"),
+            "compositor_runtime_state_status": compositor_summary.get("runtime_state_status"),
+            "compositor_runtime_state_path": compositor_summary.get("runtime_state_path"),
+            "compositor_window_state_path": compositor_summary.get("window_state_path"),
+            "compositor_window_manager_status": compositor_summary.get("window_manager_status"),
+            "workspace_count": compositor_summary.get("workspace_count", 1),
+            "active_workspace_index": compositor_summary.get("active_workspace_index", 0),
+            "active_workspace_id": active_workspace_id,
+            "active_output_id": active_output_id,
+            "output_count": compositor_summary.get("output_count", 0),
+            "renderable_output_count": compositor_summary.get("renderable_output_count", 0),
+            "non_renderable_output_count": compositor_summary.get("non_renderable_output_count", 0),
+            "release_grade_output_status": compositor_summary.get("release_grade_output_status"),
+            "managed_window_count": compositor_summary.get("managed_window_count", 0),
+            "visible_window_count": compositor_summary.get("visible_window_count", 0),
+            "floating_window_count": compositor_summary.get("floating_window_count", 0),
+            "minimized_window_count": compositor_summary.get("minimized_window_count", 0),
+            "window_move_count": compositor_summary.get("window_move_count", 0),
+            "window_resize_count": compositor_summary.get("window_resize_count", 0),
+            "window_minimize_count": compositor_summary.get("window_minimize_count", 0),
+            "window_restore_count": compositor_summary.get("window_restore_count", 0),
+            "last_minimized_window_key": compositor_summary.get("last_minimized_window_key"),
+            "last_restored_window_key": compositor_summary.get("last_restored_window_key"),
+            "workspace_window_counts": compositor_summary.get("workspace_window_counts", {}),
         },
     }
 
@@ -429,7 +785,27 @@ def resolve_action_session_id(args: argparse.Namespace) -> str | None:
     return None
 
 
+
+def dispatch_window_action(args: argparse.Namespace) -> dict:
+    command = [sys.executable, str(TASK_SURFACE_PANEL), "action", "--action", args.action]
+    if args.compositor_runtime_state is not None:
+        command.extend(["--compositor-runtime-state", str(args.compositor_runtime_state)])
+    if args.compositor_window_state is not None:
+        command.extend(["--compositor-window-state", str(args.compositor_window_state)])
+    if args.window_key:
+        command.extend(["--window-key", args.window_key])
+    if args.workspace_id:
+        command.extend(["--workspace-id", args.workspace_id])
+    if args.output_id:
+        command.extend(["--output-id", args.output_id])
+    completed = subprocess.run(command, check=True, text=True, capture_output=True)
+    return json.loads(completed.stdout.strip() or "{}")
+
+
 def run_action(args: argparse.Namespace) -> dict:
+    if args.action in WINDOW_ACTION_IDS:
+        return dispatch_window_action(args)
+
     if args.action == "create-session":
         action_args = argparse.Namespace(
             user_id=args.user_id,
@@ -499,6 +875,11 @@ def main() -> int:
     parser.add_argument("--title")
     parser.add_argument("--state", default="planned")
     parser.add_argument("--action")
+    parser.add_argument("--window-key")
+    parser.add_argument("--workspace-id")
+    parser.add_argument("--output-id")
+    parser.add_argument("--compositor-runtime-state", type=Path, default=default_compositor_runtime_state())
+    parser.add_argument("--compositor-window-state", type=Path, default=default_compositor_window_state())
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--interval", type=float, default=2.0)
     parser.add_argument("--iterations", type=int, default=1)
@@ -515,7 +896,19 @@ def main() -> int:
         iterations = max(1, args.iterations)
         for index in range(iterations):
             state = load_state(args.agent_socket, args.fixture, args.session_id)
-            model = build_model(state, args.session_id, args.user_id, args.intent, args.title, args.state)
+            compositor_summary = load_compositor_summary(
+                args.compositor_runtime_state,
+                args.compositor_window_state,
+            )
+            model = build_model(
+                state,
+                args.session_id,
+                args.user_id,
+                args.intent,
+                args.title,
+                args.state,
+                compositor_summary,
+            )
             if args.json:
                 print(json.dumps(model, indent=2, ensure_ascii=False))
             else:
@@ -527,7 +920,19 @@ def main() -> int:
         return 0
 
     state = load_state(args.agent_socket, args.fixture, args.session_id)
-    model = build_model(state, args.session_id, args.user_id, args.intent, args.title, args.state)
+    compositor_summary = load_compositor_summary(
+        args.compositor_runtime_state,
+        args.compositor_window_state,
+    )
+    model = build_model(
+        state,
+        args.session_id,
+        args.user_id,
+        args.intent,
+        args.title,
+        args.state,
+        compositor_summary,
+    )
     if args.command == "model" or args.json:
         print(json.dumps(model, indent=2, ensure_ascii=False))
     else:

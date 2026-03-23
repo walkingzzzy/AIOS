@@ -24,7 +24,8 @@
 - 已有 remote browser bridge：可把 `navigate` / `extract` 请求转发到已注册远端 worker，并返回结构化 bridge metadata
 - 已有 `register-control-plane`：可把已注册 remote worker descriptor 通过 `agentd provider.register` 提升为 `attested_remote` provider，并携带 `attestation` / `governance` 元数据参与 resolve 路径，且已由 smoke 直接验证
 - 已有 compat runtime smoke 覆盖 manifest / health / registry resolution
-- 仍未有 JS-rendered DOM、tab/window session lifecycle 与下载/自动化级浏览器执行栈
+- 已有基于 session store 的本地 session/window/tab lifecycle，并可把 `navigate` / `extract` 状态回写到 tab 绑定
+- 仍未有 JS-rendered DOM、登录态 / cookie jar、下载与自动化级浏览器执行栈
 
 ## 当前边界
 
@@ -38,13 +39,12 @@
 
 当前不提供：
 
-- 真正的 tab / window session 管理
+- 真实浏览器内核驱动的 session / cookie jar / 多页交互
 - JS 执行后的 DOM
-- 登录态 / cookie jar / 多页交互
-- screenshot / download / form automation
+- 登录态继承、下载、screenshot 与 form automation
 
 ## 下一步
 
-1. 把当前 registered-remote baseline 继续推进到更正式的 browser session / target adapter 与 tab/window 对象模型
+1. 把当前本地 session/window/tab model 继续推进到真正的 browser target adapter、cookie jar 与 automation-backed session
 2. 在现有 remote attestation / fleet governance baseline 之上继续补更细粒度 target-bound policy、registration 生命周期与 fleet control-plane 约束
 3. 把 browser bridge/result protocol 继续接进更持久的 operator audit query / correlation UI

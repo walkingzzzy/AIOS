@@ -37,6 +37,14 @@ impl AppState {
                 "observability_log_path={}",
                 self.config.observability_log_path.display()
             ),
+            format!(
+                "hardware_profile_path={}",
+                self.config
+                    .hardware_profile_path
+                    .as_ref()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|| "<none>".to_string())
+            ),
             format!("device_overall_status={}", metadata.summary.overall_status),
             format!(
                 "device_backend_overall_status={}",
@@ -89,6 +97,23 @@ impl AppState {
             (
                 "release_grade_contract_kinds",
                 "device_release_grade_contract_kinds",
+            ),
+            ("hardware_profile_id", "device_hardware_profile_id"),
+            (
+                "hardware_profile_validation_status",
+                "device_hardware_profile_validation_status",
+            ),
+            (
+                "hardware_profile_required_modalities",
+                "device_hardware_profile_required_modalities",
+            ),
+            (
+                "hardware_profile_missing_required_modalities",
+                "device_hardware_profile_missing_required_modalities",
+            ),
+            (
+                "hardware_profile_missing_conditional_modalities",
+                "device_hardware_profile_missing_conditional_modalities",
             ),
         ] {
             if let Some(value) = metadata

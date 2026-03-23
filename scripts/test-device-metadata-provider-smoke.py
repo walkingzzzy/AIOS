@@ -225,6 +225,7 @@ def make_env(root: Path) -> dict[str, str]:
     camera_root = state_root / "deviced" / "camera"
     screencast_state_path = state_root / "deviced" / "screencast-state.json"
     pipewire_node_path = state_root / "deviced" / "pipewire-node.json"
+    ui_tree_state_path = state_root / "deviced" / "ui-tree-state.json"
 
     pipewire_socket_path.parent.mkdir(parents=True, exist_ok=True)
     input_root.mkdir(parents=True, exist_ok=True)
@@ -251,6 +252,15 @@ def make_env(root: Path) -> dict[str, str]:
             }
         )
     )
+    ui_tree_state_path.write_text(
+        json.dumps(
+            {
+                "snapshot_id": "tree-state-1",
+                "focus_node": "screen-1",
+                "capture_mode": "native-state-bridge",
+            }
+        )
+    )
 
     env = os.environ.copy()
     env.update(
@@ -273,8 +283,10 @@ def make_env(root: Path) -> dict[str, str]:
             "AIOS_DEVICED_INPUT_DEVICE_ROOT": str(input_root),
             "AIOS_DEVICED_CAMERA_DEVICE_ROOT": str(camera_root),
             "AIOS_DEVICED_CAMERA_ENABLED": "1",
+            "AIOS_DEVICED_UI_TREE_SUPPORTED": "1",
             "AIOS_DEVICED_SCREENCAST_STATE_PATH": str(screencast_state_path),
             "AIOS_DEVICED_PIPEWIRE_NODE_PATH": str(pipewire_node_path),
+            "AIOS_DEVICED_UI_TREE_STATE_PATH": str(ui_tree_state_path),
             "AIOS_DEVICED_APPROVAL_MODE": "metadata-only",
             "AIOS_DEVICE_METADATA_PROVIDER_RUNTIME_DIR": str(runtime_root / "device-metadata-provider"),
             "AIOS_DEVICE_METADATA_PROVIDER_STATE_DIR": str(state_root / "device-metadata-provider"),
@@ -288,6 +300,9 @@ def make_env(root: Path) -> dict[str, str]:
             ),
             "AIOS_DEVICE_METADATA_PROVIDER_OBSERVABILITY_LOG": str(
                 state_root / "device-metadata-provider" / "observability.jsonl"
+            ),
+            "AIOS_DEVICE_METADATA_PROVIDER_HARDWARE_PROFILE": str(
+                repo / "aios" / "hardware" / "profiles" / "framework-laptop-13-amd-7040.yaml"
             ),
         }
     )
@@ -347,6 +362,14 @@ def main() -> int:
         require(
             "xdg-desktop-portal-screencast" in (provider_notes.get("device_release_grade_backend_ids") or ""),
             "provider health missing release-grade backend ids",
+        )
+        require(
+            provider_notes.get("device_hardware_profile_id") == "framework-laptop-13-amd-7040",
+            "provider health missing hardware profile id",
+        )
+        require(
+            provider_notes.get("device_hardware_profile_validation_status") == "matched",
+            "provider health missing matched hardware profile validation status",
         )
         wait_for_provider_health(sockets["agentd"], provider_id, "available", args.timeout)
 
@@ -432,6 +455,27 @@ def main() -> int:
         require("approval_mode=metadata-only" in metadata["notes"], "state notes not included in metadata response")
         require("overall_status=ready" in metadata["notes"], "metadata response missing overall status note")
         require("backend_overall_status=ready" in metadata["notes"], "metadata response missing backend overall status note")
+        metadata_notes = note_map(metadata)
+        require(
+            metadata_notes.get("hardware_profile_id") == "framework-laptop-13-amd-7040",
+            "metadata response missing hardware profile id",
+        )
+        require(
+            metadata_notes.get("hardware_profile_required_modalities") == "audio,camera,input,screen,ui_tree",
+            "metadata response missing required hardware profile modalities",
+        )
+        require(
+            metadata_notes.get("hardware_profile_validation_status") == "matched",
+            "metadata response missing matched hardware profile validation status",
+        )
+        require(
+            metadata_notes.get("hardware_profile_missing_required_modalities") == "",
+            "metadata response should not report missing required modalities",
+        )
+        require(
+            "hardware_profile_expectation=required" in entries["screen"]["backend_details"],
+            "screen metadata entry missing hardware profile expectation",
+        )
 
         screen_only = rpc_call(
             sockets["provider"],
@@ -445,6 +489,37 @@ def main() -> int:
         )
         require(len(screen_only["entries"]) == 1, "screen-only metadata filter failed")
         require(screen_only["entries"][0]["modality"] == "screen", "screen-only filter returned wrong modality")
+
+        ui_tree_only = rpc_call(
+            sockets["provider"],
+            "device.metadata.get",
+            {
+                "modalities": ["ui_tree"],
+                "only_available": True,
+                "include_state_notes": False,
+            },
+            timeout=args.timeout,
+        )
+        require(ui_tree_only["summary"]["requested_modalities"] == ["ui_tree"], "ui_tree-only metadata request mismatch")
+        require(ui_tree_only["summary"]["unknown_modalities"] == [], "ui_tree should not be treated as an unknown modality")
+        require(ui_tree_only["summary"]["available_modalities"] == ["ui_tree"], "ui_tree should be reported as an available modality")
+        require(len(ui_tree_only["entries"]) == 1, "ui_tree-only metadata filter failed")
+        require(ui_tree_only["entries"][0]["modality"] == "ui_tree", "ui_tree-only filter returned wrong modality")
+        require(ui_tree_only["entries"][0]["adapter_id"] == "ui_tree.atspi-state-file", "ui_tree adapter id mismatch")
+        require(ui_tree_only["entries"][0]["available"] is True, "ui_tree should be available")
+        require(ui_tree_only["entries"][0]["readiness"] == "native-live", "ui_tree readiness mismatch")
+        require(
+            "ui_tree_current_environment_id=current-session" in ui_tree_only["entries"][0]["backend_details"],
+            "ui_tree metadata entry missing current support row detail",
+        )
+        require(
+            "hardware_profile_expectation=required" in ui_tree_only["entries"][0]["backend_details"],
+            "ui_tree metadata entry missing hardware profile expectation",
+        )
+        require(
+            "hardware_profile_validation_status=matched" in ui_tree_only["entries"][0]["notes"],
+            "ui_tree metadata entry missing hardware profile validation status",
+        )
 
         deviced_process = processes["deviced"]
         stop_process(deviced_process)

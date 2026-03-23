@@ -1,0 +1,35 @@
+schema_version: "1.0.0"
+profile_id: worker-integration
+description: "Configuration linking runtimed backends to worker implementations"
+updated_at: "2026-03-23"
+
+backends:
+  local-cpu:
+    worker_command: "python3 ${AIOS_ROOT}/aios/runtime/workers/local_cpu_worker.py"
+    worker_contract: "runtime-worker-v1"
+    transport: "stdio"
+    model_source: "model-manager"
+    env:
+      AIOS_WORKER_BACKEND: "auto"
+    timeout_ms: 30000
+    max_concurrent: 2
+
+  local-gpu:
+    worker_command: "python3 ${AIOS_ROOT}/aios/runtime/platforms/nvidia-jetson-orin-agx/bin/vendor_accel_worker.py"
+    worker_contract: "runtime-worker-v1"
+    transport: "stdio"
+    model_source: "vendor-provided"
+    env:
+      AIOS_WORKER_BACKEND: "tensorrt"
+    timeout_ms: 60000
+    max_concurrent: 1
+    platform_constraint: "nvidia-jetson"
+
+model_manager:
+  scan_paths:
+    - "${AIOS_MODEL_DIR}"
+    - "${HOME}/.local/share/aios/models"
+  default_model_capability_map:
+    text-generation: "default-text"
+    embedding: "default-embed"
+    reranking: "default-rerank"

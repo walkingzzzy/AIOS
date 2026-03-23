@@ -343,36 +343,89 @@ def build_response(spec: VendorRuntimeSpec, request: dict[str, Any]) -> dict[str
     }
 
 
-def handle_payload(spec: VendorRuntimeSpec, payload: bytes) -> bytes | None:
+def classify_worker_error(exc: Exception) -> str:
+    if isinstance(exc, subprocess.TimeoutExpired):
+        return "timeout"
+    if isinstance(exc, (FileNotFoundError, OSError)):
+        return "unavailable"
+    return "command-failed"
+
+
+def build_failure_response(
+    spec: VendorRuntimeSpec, request: dict[str, Any], exc: Exception
+) -> dict[str, Any]:
+    work_dir = request_work_dir(spec, request)
+    error_path = work_dir / "vendor-error.json"
+    error_text = str(exc)
+    error_excerpt = excerpt(error_text)
+    error_payload = {
+        "backend_id": spec.backend_id,
+        "provider_id": spec.provider_id,
+        "provider_kind": spec.provider_kind,
+        "provider_status": "error",
+        "runtime_service_id": RUNTIME_SERVICE_ID,
+        "worker_contract": worker_contract(),
+        "contract_kind": "vendor-runtime-error-v1",
+        "runtime_binary": spec.runtime_binary,
+        "engine_path": str(spec.engine_path),
+        "task_id": request.get("task_id"),
+        "session_id": request.get("session_id"),
+        "model": request.get("model"),
+        "prompt_excerpt": excerpt(str(request.get("prompt") or ""), 120),
+        "error": error_text,
+        "error_type": type(exc).__name__,
+        "error_class": classify_worker_error(exc),
+    }
+    if spec.dla_core is not None:
+        error_payload["dla_core"] = spec.dla_core
+    write_json(error_path, error_payload)
+
+    notes = [
+        f"vendor_provider={spec.provider_id}",
+        f"vendor_provider_kind={spec.provider_kind}",
+        f"vendor_runtime_binary={spec.runtime_binary}",
+        f"vendor_engine_path={spec.engine_path}",
+        f"vendor_evidence_path={error_path}",
+        f"vendor_error_path={error_path}",
+        f"vendor_error_type={type(exc).__name__}",
+        f"vendor_error={error_excerpt}",
+    ]
+    if spec.dla_core is not None:
+        notes.append(f"vendor_dla_core={spec.dla_core}")
+
+    return {
+        "worker_contract": worker_contract(),
+        "backend_id": spec.backend_id,
+        "route_state": f"{spec.backend_id}-worker-error",
+        "content": "",
+        "rejected": True,
+        "degraded": True,
+        "reason": f"jetson vendor runtime {spec.provider_kind} failed: {error_excerpt}",
+        "estimated_latency_ms": request.get("estimated_latency_ms"),
+        "provider_id": spec.provider_id,
+        "runtime_service_id": RUNTIME_SERVICE_ID,
+        "provider_status": "error",
+        "notes": notes,
+        "worker_error": True,
+        "worker_error_class": classify_worker_error(exc),
+    }
+
+
+def handle_payload(spec: VendorRuntimeSpec, payload: bytes) -> bytes:
     request = json.loads(payload.decode("utf-8") or "{}")
     request.setdefault("worker_contract", worker_contract())
     try:
         response = build_response(spec, request)
     except Exception as exc:  # noqa: BLE001
-        error_path = request_work_dir(spec, request) / "vendor-error.json"
-        write_json(
-            error_path,
-            {
-                "backend_id": spec.backend_id,
-                "provider_id": spec.provider_id,
-                "runtime_service_id": RUNTIME_SERVICE_ID,
-                "task_id": request.get("task_id"),
-                "session_id": request.get("session_id"),
-                "error": str(exc),
-            },
-        )
-        return None
+        response = build_failure_response(spec, request, exc)
     return json.dumps(response, ensure_ascii=False).encode("utf-8")
 
 
 def run_stdio(spec: VendorRuntimeSpec) -> int:
     payload = os.read(0, 1024 * 1024)
     response = handle_payload(spec, payload)
-    if response is None:
-        return 70
     os.write(1, response)
     return 0
-
 
 def run_unix(spec: VendorRuntimeSpec, socket_path: Path) -> int:
     if socket_path.exists():
@@ -413,3 +466,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

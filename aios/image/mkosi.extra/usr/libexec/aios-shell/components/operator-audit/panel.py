@@ -10,6 +10,7 @@ from prototype import (
     FILTER_FIELDS,
     default_browser_remote_registry,
     default_compat_observability_log,
+    default_mcp_remote_registry,
     default_office_remote_registry,
     default_policy_audit_log,
     default_provider_registry_state_dir,
@@ -329,6 +330,7 @@ def main() -> int:
     )
     parser.add_argument("--browser-remote-registry", type=Path, default=default_browser_remote_registry())
     parser.add_argument("--office-remote-registry", type=Path, default=default_office_remote_registry())
+    parser.add_argument("--mcp-remote-registry", type=Path, default=default_mcp_remote_registry())
     parser.add_argument("--provider-registry-state-dir", type=Path, default=default_provider_registry_state_dir())
     parser.add_argument("--issue-only", action="store_true")
     parser.add_argument("--limit", type=int, default=10)
@@ -419,6 +421,7 @@ def main() -> int:
             args.compat_observability_log,
             browser_remote_registry=args.browser_remote_registry,
             office_remote_registry=args.office_remote_registry,
+            mcp_remote_registry=args.mcp_remote_registry,
             provider_registry_state_dir=args.provider_registry_state_dir,
             limit=limit,
             filters=filters,
@@ -477,6 +480,7 @@ def main() -> int:
         args.compat_observability_log,
         browser_remote_registry=args.browser_remote_registry,
         office_remote_registry=args.office_remote_registry,
+        mcp_remote_registry=args.mcp_remote_registry,
         provider_registry_state_dir=args.provider_registry_state_dir,
         limit=limit,
         filters=filters,

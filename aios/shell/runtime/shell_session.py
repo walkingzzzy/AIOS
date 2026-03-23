@@ -4,11 +4,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -54,7 +56,8 @@ def probe_compositor(plan: dict, args: argparse.Namespace) -> int:
         print("shell session probe requires a compositor-backed profile", file=sys.stderr)
         return 1
 
-    env = apply_panel_host_bridge_env(plan, dict(os.environ))
+    env = build_session_environment(plan, "compositor")
+    env = apply_panel_host_bridge_env(plan, env)
     env = merge_env_overrides(env, plan["compositor"].get("env")) or env
     command = [*plan["compositor"]["launch_command"], "--probe"]
     if args.json:
@@ -254,10 +257,102 @@ def read_process_log(path: Path, limit: int = 2400) -> str:
     return content[-limit:]
 
 
+def create_temp_dir(prefix: str) -> Path:
+    temp_root = os.environ.get("AIOS_SHELL_SESSION_TEMP_ROOT") or os.environ.get("AIOS_SHELL_TEMP_ROOT")
+    root = Path(temp_root).expanduser() if temp_root else Path(tempfile.gettempdir())
+    root.mkdir(parents=True, exist_ok=True)
+    while True:
+        candidate = root / f"{prefix}{uuid.uuid4().hex}"
+        try:
+            candidate.mkdir(parents=True, exist_ok=False)
+            return candidate
+        except FileExistsError:
+            continue
+
+
+def cleanup_temp_dir(path: Path | None) -> None:
+    if path is not None:
+        shutil.rmtree(path, ignore_errors=True)
+
+
+@contextmanager
+def temporary_directory(prefix: str):
+    path = create_temp_dir(prefix)
+    try:
+        yield str(path)
+    finally:
+        cleanup_temp_dir(path)
+
+
 def run_host_command(command: str, env_overrides: dict[str, str | None]) -> int:
     with patched_environment(env_overrides):
         completed = subprocess.run(shell_command_args(command), check=False)
     return completed.returncode
+
+
+def resolve_host_command(plan: dict, desktop_host: str | None = None) -> str | None:
+    host_runtime = plan.get("host_runtime", {})
+    planned_host = plan.get("desktop_host", "tk")
+    target_host = desktop_host or planned_host
+    if target_host == "gtk":
+        return host_runtime.get("gtk_host_command") or (
+            host_runtime.get("host_command") if planned_host == "gtk" else None
+        )
+    return host_runtime.get("tk_host_command") or (
+        host_runtime.get("host_command") if planned_host == "tk" else None
+    )
+
+
+def should_use_panel_clients(
+    plan: dict,
+    active_backend: str,
+    desktop_host: str | None = None,
+) -> bool:
+    host_runtime = plan.get("host_runtime", {})
+    target_host = desktop_host or plan.get("desktop_host", "tk")
+    return (
+        active_backend == "compositor"
+        and target_host == "gtk"
+        and bool(host_runtime.get("panel_clients_enabled"))
+        and bool(host_runtime.get("gtk_panel_client_command"))
+    )
+
+
+def resolve_host_launch_mode(
+    plan: dict,
+    active_backend: str,
+    desktop_host: str | None = None,
+) -> str:
+    target_host = desktop_host or plan.get("desktop_host", "tk")
+    if should_use_panel_clients(plan, active_backend, target_host):
+        return "python-gtk-panel-clients"
+    if resolve_host_command(plan, target_host):
+        return "external-command"
+    return "python-gtk-host" if target_host == "gtk" else "python-tk-host"
+
+
+def build_session_environment(
+    plan: dict,
+    active_backend: str,
+    desktop_host: str | None = None,
+    extra_env: dict[str, str | None] | None = None,
+) -> dict[str, str]:
+    target_host = desktop_host or plan.get("desktop_host", "tk")
+    env = merge_env_overrides(
+        dict(os.environ),
+        {
+            "AIOS_SHELL_SESSION_PROFILE_ID": str(plan.get("profile_id", "unknown")),
+            "AIOS_SHELL_SESSION_ENTRYPOINT": str(plan.get("entrypoint", "compatibility")),
+            "AIOS_SHELL_SESSION_BACKEND_ACTIVE": active_backend,
+            "AIOS_SHELL_SESSION_DESKTOP_HOST": str(target_host),
+            "AIOS_SHELL_SESSION_BACKEND": str(plan.get("session_backend", "standalone")),
+            "AIOS_SHELL_SESSION_HOST_LAUNCH_MODE": resolve_host_launch_mode(plan, active_backend, target_host),
+            "AIOS_SHELL_SESSION_PANEL_CLIENTS_ENABLED": str(
+                should_use_panel_clients(plan, active_backend, target_host)
+            ).lower(),
+        },
+    ) or dict(os.environ)
+    return merge_env_overrides(env, extra_env) or env
 
 
 @contextmanager
@@ -272,10 +367,10 @@ def managed_panel_bridge(
         yield {}
         return
 
-    temp_dir: tempfile.TemporaryDirectory[str] | None = None
+    temp_dir: Path | None = None
     if bridge_root is None:
-        temp_dir = tempfile.TemporaryDirectory(prefix="aios-shell-panel-bridge-")
-        bridge_root = Path(temp_dir.name)
+        temp_dir = create_temp_dir(prefix="aios-shell-panel-bridge-")
+        bridge_root = temp_dir
 
     bridge_root.mkdir(parents=True, exist_ok=True)
     socket_path = choose_panel_bridge_socket_path(bridge_root)
@@ -293,8 +388,7 @@ def managed_panel_bridge(
         finally:
             if socket_path.exists():
                 socket_path.unlink()
-            if temp_dir is not None:
-                temp_dir.cleanup()
+            cleanup_temp_dir(temp_dir)
         return
 
     with log_path.open("w", encoding="utf-8") as log_handle:
@@ -333,8 +427,7 @@ def managed_panel_bridge(
         logs = read_process_log(log_path)
         if returncode not in (0, None) and logs:
             print(f"panel bridge service exited with code {returncode}: {logs}", file=sys.stderr)
-        if temp_dir is not None:
-            temp_dir.cleanup()
+        cleanup_temp_dir(temp_dir)
 
 
 def run_gtk_host(
@@ -348,7 +441,7 @@ def run_gtk_host(
     if panel_client_command and env_overrides.get("AIOS_SHELL_SESSION_BACKEND_ACTIVE") == "compositor":
         return run_host_command(panel_client_command, env_overrides)
 
-    external_host_command = host_runtime.get("gtk_host_command")
+    external_host_command = resolve_host_command(plan, "gtk")
     if external_host_command:
         return run_host_command(external_host_command, env_overrides)
 
@@ -361,6 +454,47 @@ def run_gtk_host(
         if exc.code not in (None, 0):
             print(exc.code, file=sys.stderr)
         return 0 if exc.code in (None, 0) else 1
+
+
+def run_tk_host(
+    profile: dict,
+    args: argparse.Namespace,
+    plan: dict,
+    env_overrides: dict[str, str | None],
+) -> int:
+    external_host_command = resolve_host_command(plan, "tk")
+    if external_host_command:
+        return run_host_command(external_host_command, env_overrides)
+
+    try:
+        with patched_environment(env_overrides):
+            return shell_desktop.run_tk_gui(profile, args)
+    except SystemExit as exc:
+        if isinstance(exc.code, int):
+            return exc.code
+        if exc.code not in (None, 0):
+            print(exc.code, file=sys.stderr)
+        return 0 if exc.code in (None, 0) else 1
+
+
+def launch_selected_host(
+    profile: dict,
+    args: argparse.Namespace,
+    plan: dict,
+    active_backend: str,
+    desktop_host: str | None = None,
+    extra_env: dict[str, str | None] | None = None,
+) -> int:
+    target_host = desktop_host or plan.get("desktop_host", "tk")
+    host_env = build_session_environment(
+        plan,
+        active_backend,
+        desktop_host=target_host,
+        extra_env=extra_env,
+    )
+    if target_host == "gtk":
+        return run_gtk_host(profile, args, plan, host_env)
+    return run_tk_host(profile, args, plan, host_env)
 
 
 def fallback_from_nested_session(
@@ -380,29 +514,40 @@ def fallback_from_nested_session(
         return 1
 
     print(f"compositor session fallback: {fallback} ({reason})", file=sys.stderr)
-    fallback_env = {
-        "AIOS_SHELL_SESSION_ENTRYPOINT": str(plan.get("entrypoint", "compatibility")),
-        "AIOS_SHELL_SESSION_BACKEND_ACTIVE": "standalone-fallback",
-    }
     if fallback == "standalone-tk":
-        with patched_environment(fallback_env):
-            return shell_desktop.run_tk_gui(profile, args)
-    return run_gtk_host(profile, args, plan, fallback_env)
+        return launch_selected_host(
+            profile,
+            args,
+            plan,
+            "standalone-fallback",
+            desktop_host="tk",
+        )
+    return launch_selected_host(
+        profile,
+        args,
+        plan,
+        "standalone-fallback",
+        desktop_host="gtk",
+    )
 
 
 def launch_nested_gtk_session(plan: dict, profile: dict, args: argparse.Namespace) -> int:
     if args.json:
         raise SystemExit("JSON output is unsupported for compositor-backed GTK serve mode")
 
-    with tempfile.TemporaryDirectory(prefix="aios-shell-session-") as temp_dir:
+    with temporary_directory(prefix="aios-shell-session-") as temp_dir:
         runtime_dir = Path(temp_dir) / "xdg-runtime"
         runtime_dir.mkdir(parents=True, exist_ok=True)
         socket_name = f"aios-shell-{os.getpid()}"
-        compositor_env = apply_panel_host_bridge_env(plan, {
-            **os.environ,
-            "XDG_RUNTIME_DIR": str(runtime_dir),
-            "AIOS_SHELL_COMPOSITOR_SOCKET_NAME": socket_name,
-        })
+        compositor_env = build_session_environment(
+            plan,
+            "compositor",
+            extra_env={
+                "XDG_RUNTIME_DIR": str(runtime_dir),
+                "AIOS_SHELL_COMPOSITOR_SOCKET_NAME": socket_name,
+            },
+        )
+        compositor_env = apply_panel_host_bridge_env(plan, compositor_env)
         compositor_env = merge_env_overrides(compositor_env, plan["compositor"].get("env")) or compositor_env
         with managed_panel_bridge(plan, args, runtime_dir) as bridge_env:
             compositor = subprocess.Popen(
@@ -427,18 +572,22 @@ def launch_nested_gtk_session(plan: dict, profile: dict, args: argparse.Namespac
                             f"compositor socket not ready: {socket_path}",
                         )
 
-                host_env = {
-                    "XDG_RUNTIME_DIR": str(runtime_dir),
-                    "WAYLAND_DISPLAY": socket_name,
-                    "GDK_BACKEND": "wayland" if sys.platform.startswith("linux") else os.environ.get("GDK_BACKEND"),
-                    "DISPLAY": None if sys.platform.startswith("linux") else os.environ.get("DISPLAY"),
-                    "AIOS_SHELL_COMPOSITOR_PANEL_BRIDGE_SOCKET": bridge_env.get(
-                        "AIOS_SHELL_COMPOSITOR_PANEL_BRIDGE_SOCKET"
-                    ),
-                    "AIOS_SHELL_SESSION_ENTRYPOINT": str(plan.get("entrypoint", "compatibility")),
-                    "AIOS_SHELL_SESSION_BACKEND_ACTIVE": "compositor",
-                }
-                host_returncode = run_gtk_host(profile, args, plan, host_env)
+                host_returncode = launch_selected_host(
+                    profile,
+                    args,
+                    plan,
+                    "compositor",
+                    desktop_host="gtk",
+                    extra_env={
+                        "XDG_RUNTIME_DIR": str(runtime_dir),
+                        "WAYLAND_DISPLAY": socket_name,
+                        "GDK_BACKEND": "wayland" if sys.platform.startswith("linux") else os.environ.get("GDK_BACKEND"),
+                        "DISPLAY": None if sys.platform.startswith("linux") else os.environ.get("DISPLAY"),
+                        "AIOS_SHELL_COMPOSITOR_PANEL_BRIDGE_SOCKET": bridge_env.get(
+                            "AIOS_SHELL_COMPOSITOR_PANEL_BRIDGE_SOCKET"
+                        ),
+                    },
+                )
                 if host_returncode == 0:
                     return 0
                 return fallback_from_nested_session(
@@ -457,9 +606,10 @@ def launch_nested_gtk_session(plan: dict, profile: dict, args: argparse.Namespac
 
 
 def launch_compositor_with_bridge(plan: dict, args: argparse.Namespace) -> int:
-    with tempfile.TemporaryDirectory(prefix="aios-shell-compositor-bridge-") as temp_dir:
+    with temporary_directory(prefix="aios-shell-compositor-bridge-") as temp_dir:
         with managed_panel_bridge(plan, args, Path(temp_dir)) as bridge_env:
-            env = apply_panel_host_bridge_env(plan, {**os.environ, **bridge_env})
+            env = build_session_environment(plan, "compositor", extra_env=bridge_env)
+            env = apply_panel_host_bridge_env(plan, env)
             return launch_compositor(plan, args, env=env)
 
 
@@ -480,9 +630,7 @@ def main() -> int:
             if plan["desktop_host"] == "gtk":
                 return launch_nested_gtk_session(plan, profile, args)
             return launch_compositor_with_bridge(plan, args)
-        if plan["desktop_host"] == "gtk":
-            return run_gtk_gui(profile, args)
-        return shell_desktop.run_tk_gui(profile, args)
+        return launch_selected_host(profile, args, plan, "standalone")
 
     if args.command == "probe":
         return probe_compositor(plan, args)

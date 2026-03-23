@@ -9,11 +9,11 @@ import signal
 import socket
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 
 from aios_cargo_bins import default_aios_bin_dir, resolve_binary_path
+from shell_test_temp import make_temp_dir, restore_session_temp_root, set_session_temp_root
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -187,7 +187,8 @@ def main() -> int:
     }
     ensure_binaries(binaries)
 
-    temp_root = Path(tempfile.mkdtemp(prefix="ascl-", dir="/tmp"))
+    previous_temp_root = set_session_temp_root()
+    temp_root = make_temp_dir("ascl-")
     env = make_env(temp_root)
     failed = False
     shell_profile = temp_root / "shell-profile.yaml"
@@ -675,6 +676,7 @@ def main() -> int:
         print(f"shell control clients live smoke failed: {error}")
         return 1
     finally:
+        restore_session_temp_root(previous_temp_root)
         terminate(list(processes.values()))
         print_logs(processes)
         if failed or args.keep_state:

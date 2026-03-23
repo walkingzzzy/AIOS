@@ -39,6 +39,8 @@ pub struct Config {
     pub current_version: String,
     pub current_slot: String,
     pub target_version_hint: Option<String>,
+    pub failure_injection_stage: Option<String>,
+    pub failure_injection_reason: Option<String>,
     pub platform_profile_path: Option<PathBuf>,
     pub platform_profile_id: Option<String>,
 }
@@ -107,6 +109,10 @@ struct PlatformProfile {
     current_slot: Option<String>,
     #[serde(default)]
     target_version_hint: Option<String>,
+    #[serde(default)]
+    failure_injection_stage: Option<String>,
+    #[serde(default)]
+    failure_injection_reason: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -325,6 +331,10 @@ impl Config {
             .unwrap_or_else(|| "a".to_string());
         let target_version_hint = env_string("AIOS_UPDATED_TARGET_VERSION")
             .or_else(|| profile.and_then(|value| value.target_version_hint.clone()));
+        let failure_injection_stage = env_string("AIOS_UPDATED_FAILURE_INJECTION_STAGE")
+            .or_else(|| profile.and_then(|value| value.failure_injection_stage.clone()));
+        let failure_injection_reason = env_string("AIOS_UPDATED_FAILURE_INJECTION_REASON")
+            .or_else(|| profile.and_then(|value| value.failure_injection_reason.clone()));
         let boot_backend = env_string("AIOS_UPDATED_BOOT_BACKEND")
             .or_else(|| profile.and_then(|value| value.boot_backend.clone()))
             .unwrap_or_else(|| "state-file".to_string());
@@ -380,6 +390,8 @@ impl Config {
             current_version,
             current_slot,
             target_version_hint,
+            failure_injection_stage,
+            failure_injection_reason,
             platform_profile_path: loaded_profile.as_ref().map(|loaded| loaded.path.clone()),
             platform_profile_id: profile.and_then(|value| value.profile_id.clone()),
         })

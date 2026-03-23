@@ -9,11 +9,11 @@ import signal
 import socket
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 
 from aios_cargo_bins import default_aios_bin_dir, resolve_binary_path
+from shell_test_temp import make_temp_dir, restore_session_temp_root, set_session_temp_root
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -244,7 +244,8 @@ def main() -> int:
     ensure_binary(binaries["policyd"], "aios-policyd")
     ensure_binary(binaries["agentd"], "aios-agentd")
 
-    temp_root = Path(tempfile.mkdtemp(prefix="aios-shell-cp-", dir="/tmp"))
+    previous_temp_root = set_session_temp_root()
+    temp_root = make_temp_dir("aios-shell-cp-")
     env = make_env(temp_root)
     shell_profile = temp_root / "shell-profile.json"
     write_shell_profile(shell_profile, env)
@@ -473,6 +474,7 @@ def main() -> int:
         print_logs(processes)
         return 1
     finally:
+        restore_session_temp_root(previous_temp_root)
         terminate(list(processes.values()))
         if failed or args.keep_state:
             print(f"state kept at: {temp_root}")

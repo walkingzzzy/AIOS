@@ -2,10 +2,12 @@
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
+
+from shell_test_temp import make_temp_dir, restore_session_temp_root, set_session_temp_root
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -22,8 +24,11 @@ def require(condition: bool, message: str) -> None:
 
 
 def main() -> int:
-    with tempfile.TemporaryDirectory(prefix="aios-shell-desktop-") as temp_dir:
-        temp_root = Path(temp_dir)
+    previous_temp_root = set_session_temp_root()
+    temp_root = make_temp_dir("aios-shell-desktop-")
+    success = False
+
+    try:
 
         launcher_fixture = temp_root / "launcher.json"
         launcher_fixture.write_text(
@@ -893,7 +898,14 @@ def main() -> int:
             require("GUI display unavailable" in combined, "tk host failure message mismatch")
 
         print("shell desktop smoke passed")
+        success = True
         return 0
+    finally:
+        restore_session_temp_root(previous_temp_root)
+        if success:
+            shutil.rmtree(temp_root, ignore_errors=True)
+        else:
+            print(f"shell desktop smoke state kept at: {temp_root}", file=sys.stderr)
 
 
 if __name__ == "__main__":

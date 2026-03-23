@@ -56,6 +56,10 @@ pub fn target_hash(handle: &PortalHandleRecord) -> Option<String> {
         .map(|value| value.to_string())
 }
 
+pub fn requested_handle_kind(intent: &str, capability_id: &str) -> Option<String> {
+    derive_target(intent, capability_id).map(|(kind, _)| kind)
+}
+
 fn derive_target(intent: &str, capability_id: &str) -> Option<(String, String)> {
     if matches!(
         capability_id,
@@ -262,5 +266,16 @@ mod tests {
         };
 
         assert_eq!(target_hash(&handle), Some("sha256:abc".to_string()));
+    }
+
+    #[test]
+    fn requested_handle_kind_uses_derived_portal_kind() {
+        assert_eq!(
+            requested_handle_kind(
+                "Export /tmp/report.docx to /tmp/report.pdf",
+                "compat.office.export_pdf",
+            ),
+            Some("export_target_handle".to_string())
+        );
     }
 }

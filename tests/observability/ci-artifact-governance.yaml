@@ -26,6 +26,8 @@ jobs:
         - "out/validation/tier1-hardware-known-limitations.md"
         - "out/validation/tier1-hardware-validation-report.md"
         - "out/validation/tier1-hardware-evidence-index.json"
+        - "out/validation/release-gate-vendor-runtime-smoke-report.json"
+        - "out/validation/release-gate-vendor-runtime-smoke-report.md"
         - "out/validation/image-build-strategy-report.json"
         - "out/validation/image-build-strategy-report.md"
         - "out/validation/ci-artifact-governance-report.json"

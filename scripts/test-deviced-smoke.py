@@ -266,9 +266,13 @@ def main() -> int:
 
         state = rpc_call(socket_path, "device.state.get", {}, timeout=args.timeout)
         require(any(item["modality"] == "screen" for item in state["capabilities"]), "screen capability missing")
+        require(any(item["modality"] == "ui_tree" for item in state["capabilities"]), "ui_tree capability missing")
         require(any(item["modality"] == "screen" for item in state["capture_adapters"]), "screen adapter missing from rpc state")
         screen_capability = next(item for item in state["capabilities"] if item["modality"] == "screen")
+        ui_tree_capability = next(item for item in state["capabilities"] if item["modality"] == "ui_tree")
         require(any(note == "adapter_id=screen.portal-probe" for note in screen_capability["notes"]), "screen capability adapter note missing")
+        require(ui_tree_capability["source_backend"] == "at-spi", "ui_tree capability backend mismatch")
+        require(any(note == "adapter_id=ui_tree.atspi-native" for note in ui_tree_capability["notes"]), "ui_tree capability adapter note missing")
         require(any(note == "approval_mode=metadata-only" for note in state["notes"]), "approval mode note missing")
         require(any(note.startswith("available_backends=") for note in state["notes"]), "backend availability note missing")
         require(any(note == f"backend_state_path={backend_state_path}" for note in state["notes"]), "backend state note missing")

@@ -6,10 +6,10 @@ import json
 import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 from shell_evidence_manifest import write_shell_evidence_manifest
+from shell_test_temp import make_temp_dir, restore_session_temp_root, set_session_temp_root
 from mock_device_capture_rpc import managed_mock_deviced
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -92,7 +92,8 @@ def load_shell_modules() -> tuple[object, object]:
 
 def main() -> int:
     args = parse_args()
-    temp_root = Path(tempfile.mkdtemp(prefix="aios-shell-acceptance-"))
+    previous_temp_root = set_session_temp_root()
+    temp_root = make_temp_dir("aios-shell-acceptance-")
     failed = False
 
     try:
@@ -520,6 +521,60 @@ def main() -> int:
             require(launcher_resume["result"]["recovery_status"] == "baseline", "launcher recovery status mismatch")
             require(launcher_resume["result"]["restore_status"] == "baseline", "launcher restore status mismatch")
 
+            launcher_minimized_section = next(
+                section for section in component_map["launcher"]["model"]["sections"] if section["section_id"] == "minimized-windows"
+            )
+            require(len(launcher_minimized_section["items"]) == 1, "launcher minimized window section mismatch")
+            require(
+                launcher_minimized_section["items"][0]["action"]["action_id"] == "restore-window",
+                "launcher minimized restore action mismatch",
+            )
+            launcher_restore = shell_desktop_gtk.dispatch_panel_action(
+                loaded_profile,
+                action_args,
+                snapshot,
+                "launcher",
+                launcher_minimized_section["items"][0]["action"],
+            )
+            require(launcher_restore["result"]["target_component"] == "task-surface", "launcher restore target mismatch")
+            require(launcher_restore["result"]["window_action"] == "restore-window", "launcher restore action mismatch")
+            require(launcher_restore["result"]["minimized_window_count"] == 0, "launcher restore minimized count mismatch")
+
+            restored_snapshot = json.loads(
+                run_python(
+                    ROOT / "aios/shell/runtime/shell_session.py",
+                    "snapshot",
+                    "--json",
+                    "--profile",
+                    str(profile),
+                    "--desktop-host",
+                    "gtk",
+                    "--session-backend",
+                    "compositor",
+                    "--session-id",
+                    "session-1",
+                    "--task-id",
+                    "task-1",
+                    "--launcher-fixture",
+                    str(launcher_fixture),
+                    "--task-fixture",
+                    str(task_fixture),
+                    "--approval-fixture",
+                    str(approval_fixture),
+                    "--chooser-fixture",
+                    str(chooser_fixture),
+                )
+            )
+            restored_components = {surface["component"]: surface for surface in restored_snapshot["surfaces"]}
+            require(
+                restored_components["launcher"]["model"]["meta"]["minimized_window_count"] == 0,
+                "launcher restore snapshot mismatch",
+            )
+            require(
+                restored_components["task-surface"]["model"]["meta"]["minimized_window_count"] == 0,
+                "task surface restore snapshot mismatch",
+            )
+
             notification_review = shell_desktop_gtk.dispatch_panel_action(
                 loaded_profile,
                 action_args,
@@ -892,7 +947,10 @@ def main() -> int:
         print(f"shell acceptance smoke failed: {error}")
         return 1
     finally:
-        if not failed and not args.keep_state:
+        restore_session_temp_root(previous_temp_root)
+        if failed or args.keep_state:
+            print(f"state kept at: {temp_root}")
+        else:
             shutil.rmtree(temp_root, ignore_errors=True)
 
 

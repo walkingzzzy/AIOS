@@ -123,6 +123,10 @@ def default_office_remote_registry() -> Path:
     return remote_governance_helpers().default_office_remote_registry()
 
 
+def default_mcp_remote_registry() -> Path:
+    return remote_governance_helpers().default_mcp_remote_registry()
+
+
 def default_provider_registry_state_dir() -> Path:
     return remote_governance_helpers().default_provider_registry_state_dir()
 
@@ -331,12 +335,14 @@ def load_panel_action_events(path: Path | None, limit: int = 6) -> list[dict]:
 def load_remote_governance_summary(
     browser_remote_registry: Path,
     office_remote_registry: Path,
+    mcp_remote_registry: Path,
     provider_registry_state_dir: Path,
 ) -> dict:
     try:
         payload = remote_governance_helpers().load_remote_governance(
             browser_remote_registry,
             office_remote_registry,
+            mcp_remote_registry,
             provider_registry_state_dir,
             limit=6,
         )
@@ -351,6 +357,7 @@ def load_remote_governance_summary(
             "artifact_paths": {
                 "browser_remote_registry": str(browser_remote_registry),
                 "office_remote_registry": str(office_remote_registry),
+                "mcp_remote_registry": str(mcp_remote_registry),
                 "provider_registry_state_dir": str(provider_registry_state_dir),
             },
             "issues": [],

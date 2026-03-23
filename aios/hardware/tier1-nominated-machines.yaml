@@ -1,5 +1,5 @@
 schema_version: "1.0.0"
-updated_at: "2026-03-14"
+updated_at: "2026-03-23"
 task_id: "P5-HW-001"
 nominated_machines:
   - machine_id: "framework-laptop-13-amd-7040"
@@ -9,7 +9,7 @@ nominated_machines:
     platform_media_id: "generic-x86_64-uefi"
     updated_platform_profile: "/usr/share/aios/updated/platforms/generic-x86_64-uefi/profile.yaml"
     runtime_profile: "/etc/aios/runtime/default-runtime-profile.yaml"
-    evidence_status: "nominated-no-hardware-evidence"
+    evidence_status: "bringup-report-recorded-pending-hardware"
     release_track_intent:
       - "developer-preview"
       - "product-preview"
@@ -23,10 +23,24 @@ nominated_machines:
     platform_media_id: "nvidia-jetson-orin-agx"
     updated_platform_profile: "/usr/share/aios/updated/platforms/nvidia-jetson-orin-agx/profile.yaml"
     runtime_profile: "/usr/share/aios/runtime/platforms/nvidia-jetson-orin-agx/default-runtime-profile.yaml"
-    evidence_status: "bringup-kit-only"
+    evidence_status: "bringup-report-recorded-vendor-worker-validated"
     release_track_intent:
       - "developer-preview"
       - "product-preview"
     notes:
       - "Primary accelerator-oriented Tier 1 nomination for local-gpu and managed worker bring-up."
       - "Remains blocked on real hardware install, rollback, and recovery evidence."
+  - machine_id: "qemu-x86_64-baseline"
+    role: "ci-emulated-baseline"
+    profile_path: "aios/hardware/profiles/qemu-x86_64.yaml"
+    canonical_hardware_profile_id: "qemu-x86_64"
+    platform_media_id: "generic-x86_64-uefi"
+    updated_platform_profile: "/usr/share/aios/updated/platforms/generic-x86_64-uefi/profile.yaml"
+    runtime_profile: "/etc/aios/runtime/default-runtime-profile.yaml"
+    evidence_status: "validated-pass"
+    evidence_path: "aios/hardware/evidence/qemu-x86_64-validation-evidence.yaml"
+    release_track_intent:
+      - "developer-preview"
+    notes:
+      - "QEMU emulated baseline for CI validation pipeline."
+      - "Full validation evidence recorded 2026-03-23, all checks passed."

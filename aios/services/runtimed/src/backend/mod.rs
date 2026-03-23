@@ -24,6 +24,7 @@ pub struct BackendExecutionError {
     pub route_state: String,
     pub reason: String,
     pub fallback_backend: Option<&'static str>,
+    pub notes: Vec<String>,
 }
 
 impl BackendExecutionError {
@@ -38,7 +39,13 @@ impl BackendExecutionError {
             route_state: route_state.to_string(),
             reason: reason.into(),
             fallback_backend,
+            notes: Vec::new(),
         }
+    }
+
+    pub fn with_notes(mut self, notes: Vec<String>) -> Self {
+        self.notes = notes;
+        self
     }
 }
 

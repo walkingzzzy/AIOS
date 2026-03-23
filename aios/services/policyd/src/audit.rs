@@ -1,13 +1,13 @@
-use std::{
-    fs::{self, File, OpenOptions},
-    io::{BufRead, BufReader, BufWriter, Write},
-    path::{Path, PathBuf},
-};
-
 use anyhow::Context;
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::{
+    collections::BTreeSet,
+    fs::{self, File, OpenOptions},
+    io::{BufRead, BufReader, BufWriter, Write},
+    path::{Path, PathBuf},
+};
 
 use aios_contracts::{
     ApprovalRecord, AuditExportRequest, AuditExportResponse, AuditQueryRequest, AuditQueryResponse,
@@ -428,12 +428,45 @@ impl AuditWriter {
         }
         fs::write(&export_path, serde_json::to_vec_pretty(&bundle)?)?;
 
+        let session_count = count_u32(
+            entries
+                .iter()
+                .map(|entry| entry.session_id.clone())
+                .collect::<BTreeSet<_>>()
+                .len(),
+        );
+        let task_count = count_u32(
+            entries
+                .iter()
+                .map(|entry| entry.task_id.clone())
+                .collect::<BTreeSet<_>>()
+                .len(),
+        );
+        let approval_ref_count = count_u32(
+            entries
+                .iter()
+                .filter_map(audit_approval_ref)
+                .collect::<BTreeSet<_>>()
+                .len(),
+        );
+        let decision_count = count_u32(
+            entries
+                .iter()
+                .map(|entry| entry.decision.clone())
+                .collect::<BTreeSet<_>>()
+                .len(),
+        );
+
         Ok(AuditExportResponse {
             service_id: service_id.to_string(),
             export_id,
             export_path: export_path.display().to_string(),
             created_at,
             entry_count: count_u32(entries.len()),
+            session_count,
+            task_count,
+            approval_ref_count,
+            decision_count,
             active_segment_path: audit_store.active_segment_path,
             index_path: audit_store.index_path,
             archive_dir: audit_store.archive_dir,
@@ -796,6 +829,13 @@ fn audit_query_from_export_request(request: &AuditExportRequest) -> AuditQueryRe
     }
 }
 
+fn audit_approval_ref(entry: &AuditRecord) -> Option<String> {
+    entry
+        .result
+        .get("approval_ref")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
 fn count_u32(len: usize) -> u32 {
     len.try_into().unwrap_or(u32::MAX)
 }
@@ -1073,7 +1113,7 @@ mod tests {
             "capability_id": "system.file.bulk_delete",
             "decision": "approval-pending",
             "execution_location": "local",
-            "result": {"summary": "export me"}
+            "result": {"summary": "export me", "approval_ref": "apr-export-1"}
         }))?;
 
         let export_dir = root.join("exports");
@@ -1095,6 +1135,14 @@ mod tests {
 
         assert!(Path::new(&response.export_path).exists());
         assert_eq!(response.entry_count, 1);
+        assert_eq!(response.session_count, 1);
+        assert_eq!(response.task_count, 1);
+        assert_eq!(response.approval_ref_count, 1);
+        assert_eq!(response.decision_count, 1);
+        assert_eq!(response.session_count, 1);
+        assert_eq!(response.task_count, 1);
+        assert_eq!(response.approval_ref_count, 1);
+        assert_eq!(response.decision_count, 1);
         assert_eq!(response.active_segment_path, path.display().to_string());
         let payload: Value = serde_json::from_str(&fs::read_to_string(&response.export_path)?)?;
         assert_eq!(payload["entries"][0]["audit_id"], "audit-export-1");

@@ -307,6 +307,15 @@ pub fn parse_response_body(
             validate_worker_response_payload(&value, envelope.backend_id)?;
         }
 
+        let notes = worker_notes(&value);
+        if value
+            .get("worker_error")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            return Err(structured_worker_error(&value, &notes, &envelope));
+        }
+
         let content = value
             .get("content")
             .and_then(Value::as_str)
@@ -317,18 +326,6 @@ pub fn parse_response_body(
             .and_then(Value::as_str)
             .unwrap_or(envelope.default_route_state)
             .to_string();
-
-        let notes = value
-            .get("notes")
-            .and_then(Value::as_array)
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(ToOwned::to_owned)
-                    .collect()
-            })
-            .unwrap_or_default();
 
         return Ok(RuntimeInferResponse {
             backend_id: envelope.backend_id.to_string(),
@@ -397,6 +394,61 @@ pub fn parse_response_body(
     })
 }
 
+fn worker_notes(value: &Value) -> Vec<String> {
+    value
+        .get("notes")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn structured_worker_error(
+    value: &Value,
+    notes: &[String],
+    envelope: &ResponseEnvelope<'_>,
+) -> BackendExecutionError {
+    let class = match value.get("worker_error_class").and_then(Value::as_str) {
+        Some("timeout") => BackendFailureClass::Timeout,
+        Some("unreachable") => BackendFailureClass::Unreachable,
+        Some("unavailable") => BackendFailureClass::Unavailable,
+        Some("invalid-response") => BackendFailureClass::InvalidResponse,
+        _ => BackendFailureClass::CommandFailed,
+    };
+    let route_state = match class {
+        BackendFailureClass::Timeout => "backend-timeout",
+        BackendFailureClass::Unreachable => "backend-worker-unreachable",
+        BackendFailureClass::InvalidResponse => "backend-invalid-response",
+        BackendFailureClass::Unavailable | BackendFailureClass::CommandFailed => {
+            "backend-worker-error"
+        }
+    };
+    let reason = value
+        .get("reason")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|reason| !reason.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| {
+            format!(
+                "backend {} worker returned a structured error response",
+                envelope.backend_id
+            )
+        });
+
+    BackendExecutionError::new(
+        class,
+        route_state,
+        reason,
+        fallback_for(envelope.backend_id),
+    )
+    .with_notes(notes.to_vec())
+}
 fn build_request_payload(spec: &WrapperExecution<'_>, include_worker_contract: bool) -> Value {
     let mut payload = serde_json::json!({
         "backend_id": spec.backend_id,
@@ -645,6 +697,27 @@ mod tests {
         assert_eq!(response.notes.len(), 2);
         assert!(response.notes[0].contains("vendor_provider="));
         assert!(response.notes[1].contains("vendor_evidence_path="));
+    }
+
+    #[test]
+    fn parse_response_body_converts_structured_worker_error_into_backend_failure() {
+        let error = parse_response_body(
+            r#"{"worker_contract":"runtime-worker-v1","backend_id":"local-gpu","route_state":"local-gpu-worker-error","content":"","rejected":true,"degraded":true,"reason":"vendor runtime failed","provider_id":"nvidia.jetson.tensorrt","runtime_service_id":"aios-runtimed.jetson-vendor-helper","provider_status":"error","notes":["vendor_provider=nvidia.jetson.tensorrt","vendor_evidence_path=/var/lib/aios/runtimed/jetson-vendor-evidence/local-gpu/task-gpu/vendor-error.json"],"worker_error":true,"worker_error_class":"command-failed"}"#,
+            ResponseEnvelope {
+                backend_id: "local-gpu",
+                estimated_latency_ms: 42,
+                default_route_state: "local-wrapper",
+                expected_worker_contract: Some(WORKER_CONTRACT_V1),
+                require_worker_json: true,
+            },
+        )
+        .expect_err("structured worker error should become backend failure");
+
+        assert_eq!(error.class, BackendFailureClass::CommandFailed);
+        assert_eq!(error.route_state, "backend-worker-error");
+        assert_eq!(error.reason, "vendor runtime failed");
+        assert_eq!(error.notes.len(), 2);
+        assert!(error.notes[1].contains("vendor_evidence_path="));
     }
 
     #[test]

@@ -1,0 +1,5 @@
+# AIOS CI/validation Python dependencies
+# Used by smoke tests, schema validation scripts, and build tooling
+
+PyYAML
+jsonschema

@@ -597,21 +597,36 @@ struct RuntimeErrorClassification {
 }
 
 fn classify_runtime_error(message: &str) -> RuntimeErrorClassification {
-    if message.contains("failed to connect to") || message.contains("No such file or directory") {
-        return RuntimeErrorClassification {
-            route_state: "runtime-unavailable",
-            degraded: true,
-            provider_status: "degraded",
-            reported_status: "unavailable",
-        };
-    }
+    let message_lower = message.to_ascii_lowercase();
 
-    if message.contains("remote rpc error") {
+    if message_lower.contains("remote rpc error") {
         return RuntimeErrorClassification {
             route_state: "runtime-rejected",
             degraded: false,
             provider_status: "available",
             reported_status: "available",
+        };
+    }
+
+    let runtime_unavailable_patterns = [
+        "failed to connect to",
+        "no such file or directory",
+        "connection refused",
+        "connection reset",
+        "broken pipe",
+        "rpc response missing result",
+        "unix rpc transport is not supported",
+        "timed out",
+    ];
+    if runtime_unavailable_patterns
+        .iter()
+        .any(|pattern| message_lower.contains(pattern))
+    {
+        return RuntimeErrorClassification {
+            route_state: "runtime-unavailable",
+            degraded: true,
+            provider_status: "degraded",
+            reported_status: "unavailable",
         };
     }
 
@@ -642,6 +657,28 @@ mod tests {
     fn classify_runtime_error_keeps_remote_rpc_rejections_available() {
         let classification =
             classify_runtime_error("remote rpc error -32603: internal error: backend failed");
+
+        assert_eq!(classification.route_state, "runtime-rejected");
+        assert!(!classification.degraded);
+        assert_eq!(classification.provider_status, "available");
+    }
+
+    #[test]
+    fn classify_runtime_error_marks_connection_refused_as_unavailable() {
+        let classification = classify_runtime_error(
+            "failed to read provider response: Connection refused (os error 111)",
+        );
+
+        assert_eq!(classification.route_state, "runtime-unavailable");
+        assert!(classification.degraded);
+        assert_eq!(classification.reported_status, "unavailable");
+    }
+
+    #[test]
+    fn classify_runtime_error_prioritizes_remote_rpc_response_over_local_io_keywords() {
+        let classification = classify_runtime_error(
+            "remote rpc error -32603: internal error: backend wrapper failed: No such file or directory",
+        );
 
         assert_eq!(classification.route_state, "runtime-rejected");
         assert!(!classification.degraded);

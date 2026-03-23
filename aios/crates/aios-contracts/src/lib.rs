@@ -62,6 +62,7 @@ pub mod methods {
     pub const RUNTIME_QUEUE_GET: &str = "runtime.queue.get";
     pub const RUNTIME_BUDGET_GET: &str = "runtime.budget.get";
     pub const RUNTIME_EVENTS_GET: &str = "runtime.events.get";
+    pub const RUNTIME_OBSERVABILITY_EXPORT: &str = "runtime.observability.export";
 
     pub const PROVIDER_REGISTER: &str = "provider.register";
     pub const PROVIDER_UNREGISTER: &str = "provider.unregister";
@@ -198,6 +199,7 @@ pub fn shared_contract_manifest() -> ContractManifest {
         methods::RUNTIME_QUEUE_GET,
         methods::RUNTIME_BUDGET_GET,
         methods::RUNTIME_EVENTS_GET,
+        methods::RUNTIME_OBSERVABILITY_EXPORT,
         methods::PROVIDER_DISCOVER,
         methods::PROVIDER_RESOLVE_CAPABILITY,
         methods::PROVIDER_GET_DESCRIPTOR,
@@ -294,6 +296,10 @@ fn default_query_limit() -> u32 {
 }
 
 fn default_query_reverse() -> bool {
+    true
+}
+
+fn default_true() -> bool {
     true
 }
 
@@ -778,6 +784,24 @@ pub struct RecoveryRef {
     pub recovery_id: String,
     pub session_id: String,
     pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_task_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_task_state: Option<String>,
+    #[serde(default)]
+    pub resumable_task_ids: Vec<String>,
+    #[serde(default)]
+    pub pending_task_ids: Vec<String>,
+    #[serde(default)]
+    pub approved_task_ids: Vec<String>,
+    #[serde(default)]
+    pub portal_handle_ids: Vec<String>,
+    #[serde(default)]
+    pub working_memory_refs: Vec<String>,
+    #[serde(default)]
+    pub notes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -873,6 +897,8 @@ pub struct SessionEvidenceExportResponse {
     pub created_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recovery_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery_status: Option<String>,
     pub task_count: u32,
     pub task_event_count: u32,
     pub working_memory_count: u32,
@@ -880,6 +906,10 @@ pub struct SessionEvidenceExportResponse {
     pub semantic_memory_count: u32,
     pub procedural_memory_count: u32,
     pub portal_handle_count: u32,
+    #[serde(default)]
+    pub resumable_task_count: u32,
+    #[serde(default)]
+    pub pending_task_count: u32,
     #[serde(default)]
     pub notes: Vec<String>,
 }
@@ -1115,6 +1145,14 @@ pub struct AuditExportResponse {
     pub export_path: String,
     pub created_at: String,
     pub entry_count: u32,
+    #[serde(default)]
+    pub session_count: u32,
+    #[serde(default)]
+    pub task_count: u32,
+    #[serde(default)]
+    pub approval_ref_count: u32,
+    #[serde(default)]
+    pub decision_count: u32,
     pub active_segment_path: String,
     pub index_path: String,
     pub archive_dir: String,
@@ -1144,6 +1182,12 @@ pub struct TraceQueryRequest {
     pub task_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub payload_equals: BTreeMap<String, Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload_contains: Option<String>,
     #[serde(default = "default_query_limit")]
     pub limit: u32,
     #[serde(default = "default_query_reverse")]
@@ -1154,6 +1198,52 @@ pub struct TraceQueryRequest {
 pub struct TraceQueryResponse {
     #[serde(default)]
     pub entries: Vec<TraceEventRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeObservabilityExportRequest {
+    #[serde(flatten)]
+    pub query: TraceQueryRequest,
+    #[serde(default = "default_true")]
+    pub include_runtime_events: bool,
+    #[serde(default = "default_true")]
+    pub include_observability: bool,
+    #[serde(default = "default_true")]
+    pub include_remote_audit: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+impl Default for RuntimeObservabilityExportRequest {
+    fn default() -> Self {
+        Self {
+            query: TraceQueryRequest::default(),
+            include_runtime_events: true,
+            include_observability: true,
+            include_remote_audit: true,
+            reason: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeObservabilityExportResponse {
+    pub service_id: String,
+    pub export_id: String,
+    pub export_path: String,
+    pub created_at: String,
+    pub runtime_event_count: u32,
+    pub observability_count: u32,
+    pub remote_audit_count: u32,
+    pub backend_count: u32,
+    #[serde(default)]
+    pub correlated_session_count: u32,
+    #[serde(default)]
+    pub correlated_task_count: u32,
+    #[serde(default)]
+    pub artifact_count: u32,
+    #[serde(default)]
+    pub notes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2285,6 +2375,27 @@ pub struct AgentPlan {
     pub route_preference: String,
     pub candidate_capabilities: Vec<String>,
     pub next_action: String,
+    #[serde(default)]
+    pub steps: Vec<AgentPlanStep>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentPlanStep {
+    pub step: String,
+    pub capability_id: String,
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_location: Option<String>,
+    #[serde(default)]
+    pub requires_approval: bool,
+    #[serde(default)]
+    pub requires_portal_handle: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub portal_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery_action: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2306,6 +2417,50 @@ pub struct AgentProviderExecutionResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentApprovalSummary {
+    pub required: bool,
+    pub approval_status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_lane: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capability_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_location: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentChooserRequest {
+    pub chooser_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subtitle: Option<String>,
+    pub status: String,
+    #[serde(default)]
+    pub requested_kinds: Vec<String>,
+    pub selection_mode: String,
+    pub approval_status: String,
+    #[serde(default)]
+    pub attempt_count: u32,
+    #[serde(default)]
+    pub max_attempts: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capability_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub portal_handle_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
+    #[serde(default)]
+    pub audit_tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentIntentSubmissionResponse {
     pub session: SessionRecord,
     pub task: TaskRecord,
@@ -2322,6 +2477,12 @@ pub struct AgentIntentSubmissionResponse {
     pub runtime_preview: Option<RuntimeInferResponse>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_execution: Option<AgentProviderExecutionResult>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_summary: Option<AgentApprovalSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chooser_request: Option<AgentChooserRequest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery: Option<RecoveryRef>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2347,6 +2508,12 @@ pub struct AgentTaskGetResponse {
     pub execution_token: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_execution: Option<AgentProviderExecutionResult>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_summary: Option<AgentApprovalSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chooser_request: Option<AgentChooserRequest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery: Option<RecoveryRef>,
     #[serde(default)]
     pub notes: Vec<String>,
 }
@@ -2361,6 +2528,12 @@ pub struct AgentTaskResumeResponse {
     pub execution_token: ExecutionToken,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_execution: Option<AgentProviderExecutionResult>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_summary: Option<AgentApprovalSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chooser_request: Option<AgentChooserRequest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery: Option<RecoveryRef>,
 }
 
 #[cfg(test)]

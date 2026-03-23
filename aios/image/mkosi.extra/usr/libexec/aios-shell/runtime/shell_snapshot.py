@@ -126,6 +126,17 @@ def derive_managed_windows(window_payload: dict, runtime_session: dict) -> list[
     return managed_windows
 
 
+def derive_release_grade_output_status(outputs: list[dict[str, Any]], renderable_output_count: int) -> str:
+    if not outputs:
+        return "uninitialized"
+    output_count = len(outputs)
+    if output_count == 1:
+        return f"single-output(renderable={renderable_output_count}/{output_count})"
+    if renderable_output_count >= output_count:
+        return f"multi-output(renderable={renderable_output_count}/{output_count})"
+    return f"multi-output(partial-renderable={renderable_output_count}/{output_count})"
+
+
 def load_compositor_window_manager(profile: dict) -> dict[str, Any]:
     compositor = profile.get("compositor", {}) or {}
     runtime_state_path = None
@@ -141,23 +152,37 @@ def load_compositor_window_manager(profile: dict) -> dict[str, Any]:
     if not isinstance(runtime_session, dict):
         runtime_session = runtime_payload if isinstance(runtime_payload, dict) else {}
 
-    managed_windows = [
+    runtime_managed_windows = [
         item
         for item in runtime_session.get("managed_windows", [])
         if isinstance(item, dict)
     ]
-    if not managed_windows:
-        managed_windows = derive_managed_windows(window_payload, runtime_session)
+    window_managed_windows = derive_managed_windows(window_payload, runtime_session)
+    managed_windows = window_managed_windows or runtime_managed_windows
 
-    workspace_window_counts = runtime_session.get("workspace_window_counts")
-    if not isinstance(workspace_window_counts, dict):
-        workspace_window_counts = {}
-    if not workspace_window_counts:
-        derived_counts: dict[str, int] = {}
-        for window in managed_windows:
-            workspace_id = str(window.get("workspace_id") or "workspace-1")
-            derived_counts[workspace_id] = derived_counts.get(workspace_id, 0) + 1
-        workspace_window_counts = derived_counts
+    derived_counts: dict[str, int] = {}
+    for window in managed_windows:
+        workspace_id = str(window.get("workspace_id") or "workspace-1")
+        derived_counts[workspace_id] = derived_counts.get(workspace_id, 0) + 1
+    workspace_window_counts = dict(sorted(derived_counts.items()))
+
+    outputs = [
+        item
+        for item in runtime_session.get("outputs", [])
+        if isinstance(item, dict)
+    ]
+    output_count = parse_int(runtime_session.get("output_count"), len(outputs))
+    renderable_output_count = parse_int(
+        runtime_session.get("renderable_output_count"),
+        sum(1 for item in outputs if item.get("renderable")),
+    )
+    non_renderable_output_count = parse_int(
+        runtime_session.get("non_renderable_output_count"),
+        max(output_count - renderable_output_count, 0),
+    )
+    active_workspace_index = parse_int(window_payload.get("active_workspace_index"), 0)
+    if window_payload.get("active_workspace_index") in (None, ""):
+        active_workspace_index = parse_int(runtime_session.get("active_workspace_index"), 0)
 
     data_status = "ready" if runtime_payload or window_payload else "unavailable"
     errors = [error for error in (runtime_error, window_error) if error]
@@ -173,21 +198,27 @@ def load_compositor_window_manager(profile: dict) -> dict[str, Any]:
         "window_state_path": str(window_state_path) if window_state_path else None,
         "window_manager_status": runtime_session.get("window_manager_status"),
         "workspace_count": parse_int(runtime_session.get("workspace_count"), max(len(workspace_window_counts), 1)),
-        "active_workspace_index": parse_int(runtime_session.get("active_workspace_index"), 0),
-        "active_workspace_id": runtime_session.get("active_workspace_id") or "workspace-1",
-        "active_output_id": runtime_session.get("active_output_id") or window_payload.get("active_output_id"),
-        "managed_window_count": parse_int(runtime_session.get("managed_window_count"), len(managed_windows)),
-        "visible_window_count": parse_int(runtime_session.get("visible_window_count"), sum(1 for item in managed_windows if item.get("visible"))),
-        "floating_window_count": parse_int(runtime_session.get("floating_window_count"), sum(1 for item in managed_windows if item.get("window_policy") and "floating" in str(item.get("window_policy")))) ,
-        "minimized_window_count": parse_int(runtime_session.get("minimized_window_count"), sum(1 for item in managed_windows if item.get("minimized"))),
+        "active_workspace_index": active_workspace_index,
+        "active_workspace_id": f"workspace-{active_workspace_index + 1}",
+        "active_output_id": window_payload.get("active_output_id") or runtime_session.get("active_output_id"),
+        "output_count": output_count,
+        "renderable_output_count": renderable_output_count,
+        "non_renderable_output_count": non_renderable_output_count,
+        "release_grade_output_status": runtime_session.get("release_grade_output_status")
+        or derive_release_grade_output_status(outputs, renderable_output_count),
+        "managed_window_count": len(managed_windows),
+        "visible_window_count": sum(1 for item in managed_windows if item.get("visible")),
+        "floating_window_count": sum(1 for item in managed_windows if item.get("window_policy") and "floating" in str(item.get("window_policy"))),
+        "minimized_window_count": sum(1 for item in managed_windows if item.get("minimized")),
         "window_move_count": parse_int(runtime_session.get("window_move_count"), 0),
         "window_resize_count": parse_int(runtime_session.get("window_resize_count"), 0),
         "window_minimize_count": parse_int(runtime_session.get("window_minimize_count"), 0),
         "window_restore_count": parse_int(runtime_session.get("window_restore_count"), 0),
         "last_minimized_window_key": runtime_session.get("last_minimized_window_key"),
         "last_restored_window_key": runtime_session.get("last_restored_window_key"),
-        "workspace_window_counts": dict(sorted(workspace_window_counts.items())),
+        "workspace_window_counts": workspace_window_counts,
         "managed_windows": managed_windows,
+        "outputs": outputs,
     }
 
 

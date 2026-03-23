@@ -240,13 +240,11 @@ def remote_target_hash(endpoint: str) -> str:
 
 def main() -> int:
     args = parse_args()
-    if not unix_rpc_supported():
-        print("mcp bridge provider smoke skipped: unix rpc transport unsupported on this platform")
-        return 0
+    control_plane_transport_supported = unix_rpc_supported()
     server = ThreadingHTTPServer(("127.0.0.1", 0), BridgeHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    agentd_binary = resolve_binary("agentd", args.agentd, args.bin_dir)
+    agentd_binary = resolve_binary("agentd", args.agentd, args.bin_dir) if control_plane_transport_supported else None
     agentd_process: subprocess.Popen | None = None
     if args.output_dir is not None:
         temp_root = args.output_dir
@@ -411,7 +409,9 @@ def main() -> int:
         control_plane_provider_id = None
         control_plane_mode = "skipped"
         control_plane_skip_reason = None
-        if agentd_binary.exists():
+        if not control_plane_transport_supported:
+            control_plane_skip_reason = "unix rpc transport unsupported on this platform"
+        elif agentd_binary is not None and agentd_binary.exists():
             control_plane_env, agentd_socket = build_agentd_env(temp_root)
             agentd_process = launch(agentd_binary, control_plane_env)
             try:

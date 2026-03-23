@@ -1,13 +1,22 @@
 #!/usr/bin/env python3
 import json
+import shutil
 import subprocess
 import sys
-import tempfile
+import uuid
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent.parent
 MANIFEST = ROOT / "aios/shell/compositor/Cargo.toml"
+TEMP_ROOT_DIR = ROOT / "out" / "tmp"
+
+
+def make_temp_dir(prefix: str) -> Path:
+    TEMP_ROOT_DIR.mkdir(parents=True, exist_ok=True)
+    path = TEMP_ROOT_DIR / f"{prefix}{uuid.uuid4().hex}"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def require(condition: bool, message: str) -> None:
@@ -16,8 +25,10 @@ def require(condition: bool, message: str) -> None:
 
 
 def main() -> int:
-    with tempfile.TemporaryDirectory(prefix="aios-shell-compositor-") as temp_dir:
-        snapshot_path = Path(temp_dir) / "panel-snapshot.json"
+    temp_dir = make_temp_dir("aios-shell-compositor-")
+    failed = False
+    try:
+        snapshot_path = temp_dir / "panel-snapshot.json"
         panel_action_log_path = Path(temp_dir) / "panel-action-events.jsonl"
         runtime_lock_path = Path(temp_dir) / "compositor.lock"
         runtime_ready_path = Path(temp_dir) / "compositor-ready.json"
@@ -157,6 +168,9 @@ def main() -> int:
         require("output_count" in payload, "compositor output count missing")
         require("connected_output_count" in payload, "compositor connected output count missing")
         require("primary_output_name" in payload, "compositor primary output name missing")
+        require("renderable_output_count" in payload, "compositor renderable output count missing")
+        require("non_renderable_output_count" in payload, "compositor non-renderable output count missing")
+        require("release_grade_output_status" in payload, "compositor release-grade output status missing")
         require("workspace_toplevel_mode" in payload, "compositor workspace toplevel mode missing")
         require("workspace_count" in payload, "compositor workspace count missing")
         require("active_workspace_index" in payload, "compositor active workspace index missing")
@@ -277,6 +291,9 @@ def main() -> int:
         require(payload["active_workspace_id"] == "workspace-1", "compositor active workspace id mismatch")
         require(payload["workspace_switch_count"] == 0, "compositor workspace switch count mismatch")
         require(payload["output_layout_mode"] == "horizontal", "compositor output layout mode mismatch")
+        require(payload["renderable_output_count"] == 0, "compositor renderable output count mismatch")
+        require(payload["non_renderable_output_count"] == 0, "compositor non-renderable output count mismatch")
+        require(payload["release_grade_output_status"] == "uninitialized", "compositor release-grade output status mismatch")
         require(payload["window_state_path"] == str(window_state_path), "compositor window state path mismatch")
         require(payload["managed_window_count"] == 0, "compositor managed window count mismatch")
         require(payload["visible_window_count"] == 0, "compositor visible window count mismatch")
@@ -534,6 +551,15 @@ def main() -> int:
 
         print("shell compositor smoke passed")
         return 0
+    except Exception as error:
+        failed = True
+        print(f"shell compositor smoke failed: {error}")
+        return 1
+    finally:
+        if failed:
+            print(f"state kept at: {temp_dir}")
+        else:
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":

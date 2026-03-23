@@ -213,6 +213,9 @@ def build_session_plan(
     gtk_host_command = env_map.get("AIOS_SHELL_SESSION_GTK_HOST_COMMAND") or session_options.get(
         "gtk_host_command"
     )
+    tk_host_command = env_map.get("AIOS_SHELL_SESSION_TK_HOST_COMMAND") or session_options.get(
+        "tk_host_command"
+    )
     gtk_panel_client_command = env_map.get("AIOS_SHELL_SESSION_GTK_PANEL_CLIENT_COMMAND") or session_options.get(
         "gtk_panel_client_command"
     )
@@ -253,9 +256,17 @@ def build_session_plan(
                 args,
             )
 
-    if desktop_host == "gtk" and session_backend == "compositor" and gtk_panel_client_command:
+    panel_clients_enabled = (
+        desktop_host == "gtk"
+        and session_backend == "compositor"
+        and not gtk_host_command
+        and bool(gtk_panel_client_command)
+    )
+    active_host_command = gtk_host_command if desktop_host == "gtk" else tk_host_command
+
+    if panel_clients_enabled:
         host_launch_mode = "python-gtk-panel-clients"
-    elif gtk_host_command:
+    elif active_host_command:
         host_launch_mode = "external-command"
     else:
         host_launch_mode = "python-gtk-host" if desktop_host == "gtk" else "python-tk-host"
@@ -269,9 +280,11 @@ def build_session_plan(
         "session_entrypoint": str(session_entrypoint.resolve()),
         "compatibility_entrypoint": str(compatibility_entrypoint.resolve()),
         "host_runtime": {
+            "host_command": active_host_command,
             "gtk_host_command": gtk_host_command,
+            "tk_host_command": tk_host_command,
             "gtk_panel_client_command": gtk_panel_client_command,
-            "panel_clients_enabled": bool(gtk_panel_client_command),
+            "panel_clients_enabled": panel_clients_enabled,
             "host_launch_mode": host_launch_mode,
             "nested_fallback": nested_fallback,
             "compositor_required": compositor_required,
@@ -515,8 +528,12 @@ def render_session_plan(plan: dict[str, Any]) -> str:
             "window_state_path: "
             + str(compositor["env"]["AIOS_SHELL_COMPOSITOR_WINDOW_STATE_PATH"])
         )
+    if host_runtime.get("host_command"):
+        lines.append("host_command: " + host_runtime["host_command"])
     if host_runtime["gtk_host_command"]:
         lines.append("gtk_host_command: " + host_runtime["gtk_host_command"])
+    if host_runtime.get("tk_host_command"):
+        lines.append("tk_host_command: " + host_runtime["tk_host_command"])
     if host_runtime.get("gtk_panel_client_command"):
         lines.append("gtk_panel_client_command: " + host_runtime["gtk_panel_client_command"])
     if panel_host_bridge["snapshot_command"]:

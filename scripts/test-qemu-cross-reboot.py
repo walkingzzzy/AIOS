@@ -9,6 +9,7 @@ import selectors
 import signal
 import socket
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 
@@ -45,6 +46,17 @@ def sanitize(line: str) -> str:
 def unix_rpc_supported() -> bool:
     return hasattr(socket, "AF_UNIX") and os.name != "nt"
 
+
+
+def resolve_monitor_dir() -> Path:
+    override = os.environ.get("AIOS_QEMU_MONITOR_DIR")
+    if override:
+        return Path(override).expanduser()
+
+    if unix_rpc_supported() and os.name != "nt" and str(DEFAULT_WORK_ROOT).startswith("/mnt/"):
+        return Path(tempfile.gettempdir()) / "aios-qemu-cross-reboot-smoke"
+
+    return DEFAULT_WORK_ROOT
 
 def terminate(proc: subprocess.Popen[str]) -> None:
     if proc.poll() is not None:
@@ -99,7 +111,7 @@ def main() -> int:
         print("qemu cross reboot smoke skipped: unix rpc transport unsupported on this platform")
         return 0
     args.log_path.parent.mkdir(parents=True, exist_ok=True)
-    monitor_dir = DEFAULT_WORK_ROOT
+    monitor_dir = resolve_monitor_dir()
     if monitor_dir.exists():
         import shutil
         shutil.rmtree(monitor_dir, ignore_errors=True)
@@ -274,6 +286,7 @@ def main() -> int:
         "image_path": str(args.image_path.resolve()),
         "timeout_seconds": args.timeout,
         "log_path": str(args.log_path),
+        "monitor_dir": str(monitor_dir),
         "reset_sent": reset_sent,
         "kernel_count": kernel_count,
         "firstboot_count": len(firstboot_lines),
@@ -288,3 +301,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

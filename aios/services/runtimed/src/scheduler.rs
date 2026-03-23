@@ -148,9 +148,7 @@ impl Scheduler {
 
         let reason = if selected_backend != requested_backend {
             let fallback_reason =
-                crate::backend::readiness(&requested_backend, &self.backend_commands)
-                    .map(|readiness| readiness.reason)
-                    .unwrap_or_else(|| "requested backend is not executable".to_string());
+                self.non_executable_backend_reason(&requested_backend, request.allow_remote);
             format!(
                 "selected {} instead of requested {} because {}",
                 selected_backend, requested_backend, fallback_reason
@@ -201,6 +199,7 @@ impl Scheduler {
                         "estimated latency {}ms exceeded timeout {}ms; downgraded to local-cpu",
                         estimated_latency_ms, self.runtime_profile.timeout_ms
                     ),
+                    Vec::new(),
                 );
             }
 
@@ -272,6 +271,7 @@ impl Scheduler {
                 estimated_latency_ms,
                 route_state,
                 error.reason,
+                error.notes,
             );
         }
 
@@ -296,42 +296,108 @@ impl Scheduler {
             provider_status: None,
             queue_saturated: None,
             runtime_budget: None,
-            notes: Vec::new(),
+            notes: error.notes,
         }
     }
 
     fn ensure_executable_backend(&self, requested_backend: &str, allow_remote: bool) -> String {
-        if requested_backend == "attested-remote" && !allow_remote {
-            return self.local_cpu_if_allowed();
-        }
-
-        if requested_backend == "local-cpu" {
+        if self.backend_is_executable(requested_backend, allow_remote) {
             return requested_backend.to_string();
         }
 
-        if let Some(readiness) =
-            crate::backend::readiness(requested_backend, &self.backend_commands)
-        {
-            if readiness.is_available() {
-                return requested_backend.to_string();
-            }
-        }
-
-        self.local_cpu_if_allowed()
-    }
-
-    fn local_cpu_if_allowed(&self) -> String {
         if self.runtime_profile.cpu_fallback
-            && self
-                .runtime_profile
-                .allowed_backends
-                .iter()
-                .any(|item| item == "local-cpu")
+            && requested_backend != "local-cpu"
+            && self.is_backend_allowed("local-cpu")
         {
             return "local-cpu".to_string();
         }
 
-        self.runtime_profile.default_backend.clone()
+        if let Some(backend_id) =
+            self.first_alternate_executable_backend(requested_backend, allow_remote)
+        {
+            return backend_id;
+        }
+
+        self.first_allowed_backend_for_policy(allow_remote)
+            .unwrap_or_else(|| self.runtime_profile.default_backend.clone())
+    }
+
+    fn first_alternate_executable_backend(
+        &self,
+        requested_backend: &str,
+        allow_remote: bool,
+    ) -> Option<String> {
+        let mut candidates = Vec::new();
+        if self.runtime_profile.default_backend != requested_backend
+            && self.runtime_profile.default_backend != "local-cpu"
+        {
+            candidates.push(self.runtime_profile.default_backend.as_str());
+        }
+        for backend_id in &self.runtime_profile.allowed_backends {
+            let backend_id = backend_id.as_str();
+            if backend_id == requested_backend
+                || backend_id == "local-cpu"
+                || candidates.contains(&backend_id)
+            {
+                continue;
+            }
+            candidates.push(backend_id);
+        }
+
+        candidates
+            .into_iter()
+            .find(|backend_id| self.backend_is_executable(backend_id, allow_remote))
+            .map(str::to_string)
+    }
+
+    fn first_allowed_backend_for_policy(&self, allow_remote: bool) -> Option<String> {
+        if self.backend_allowed_under_policy(&self.runtime_profile.default_backend, allow_remote) {
+            return Some(self.runtime_profile.default_backend.clone());
+        }
+
+        self.runtime_profile
+            .allowed_backends
+            .iter()
+            .find(|backend_id| self.backend_allowed_under_policy(backend_id, allow_remote))
+            .cloned()
+    }
+
+    fn backend_is_executable(&self, backend_id: &str, allow_remote: bool) -> bool {
+        if !self.backend_allowed_under_policy(backend_id, allow_remote) {
+            return false;
+        }
+
+        if backend_id == "local-cpu" {
+            return true;
+        }
+
+        crate::backend::readiness(backend_id, &self.backend_commands)
+            .map(|readiness| readiness.is_available())
+            .unwrap_or(false)
+    }
+
+    fn backend_allowed_under_policy(&self, backend_id: &str, allow_remote: bool) -> bool {
+        self.is_backend_allowed(backend_id) && (allow_remote || backend_id != "attested-remote")
+    }
+
+    fn is_backend_allowed(&self, backend_id: &str) -> bool {
+        self.runtime_profile
+            .allowed_backends
+            .iter()
+            .any(|item| item == backend_id)
+    }
+
+    fn non_executable_backend_reason(&self, backend_id: &str, allow_remote: bool) -> String {
+        if !self.is_backend_allowed(backend_id) {
+            return format!("{} is not allowed by runtime profile", backend_id);
+        }
+        if backend_id == "attested-remote" && !allow_remote {
+            return "attested-remote is disallowed for this request".to_string();
+        }
+
+        crate::backend::readiness(backend_id, &self.backend_commands)
+            .map(|readiness| readiness.reason)
+            .unwrap_or_else(|| "requested backend is not executable".to_string())
     }
 
     fn fallback_response(
@@ -341,6 +407,7 @@ impl Scheduler {
         estimated_latency_ms: u64,
         route_state: &str,
         reason: String,
+        failure_notes: Vec<String>,
     ) -> RuntimeInferResponse {
         match crate::backend::execute(
             backend_id,
@@ -353,6 +420,7 @@ impl Scheduler {
                 response.degraded = true;
                 response.route_state = route_state.to_string();
                 response.reason = Some(reason);
+                response.notes.extend(failure_notes);
                 return response;
             }
             Err(error) => RuntimeInferResponse {
@@ -371,7 +439,7 @@ impl Scheduler {
                 provider_status: None,
                 queue_saturated: None,
                 runtime_budget: None,
-                notes: Vec::new(),
+                notes: failure_notes,
             },
         }
     }
@@ -517,6 +585,46 @@ mod tests {
             allow_remote: false,
         });
         assert_eq!(response.selected_backend, "local-cpu");
+        assert!(response.reason.contains("attested-remote is disallowed"));
+    }
+
+    #[test]
+    fn resolve_uses_alternate_local_backend_when_cpu_fallback_is_disabled() {
+        let mut scheduler = scheduler();
+        scheduler.runtime_profile.cpu_fallback = false;
+        scheduler.runtime_profile.allowed_backends =
+            vec!["local-gpu".to_string(), "local-npu".to_string()];
+        scheduler.backend_commands.local_npu = Some("echo configured".to_string());
+
+        let response = scheduler.resolve(&RuntimeRouteResolveRequest {
+            preferred_backend: Some("local-gpu".to_string()),
+            allow_remote: false,
+        });
+
+        assert_eq!(response.selected_backend, "local-npu");
+        assert!(response.degraded);
+        assert!(response.reason.contains("no supported gpu device detected"));
+    }
+
+    #[test]
+    fn resolve_uses_local_backend_when_remote_is_blocked_and_cpu_fallback_is_disabled() {
+        let mut scheduler = scheduler();
+        scheduler.runtime_profile.cpu_fallback = false;
+        scheduler.runtime_profile.default_backend = "attested-remote".to_string();
+        scheduler.runtime_profile.allowed_backends =
+            vec!["attested-remote".to_string(), "local-gpu".to_string()];
+        scheduler.backend_commands.attested_remote =
+            Some("http://127.0.0.1:8081/infer".to_string());
+        scheduler.backend_commands.local_gpu = Some("echo configured".to_string());
+
+        let response = scheduler.resolve(&RuntimeRouteResolveRequest {
+            preferred_backend: None,
+            allow_remote: false,
+        });
+
+        assert_eq!(response.selected_backend, "local-gpu");
+        assert!(response.degraded);
+        assert!(response.reason.contains("attested-remote is disallowed"));
     }
 
     #[test]

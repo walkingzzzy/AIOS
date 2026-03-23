@@ -6,6 +6,7 @@ from pathlib import Path
 from prototype import (
     notification_context,
     default_browser_remote_registry,
+    default_mcp_remote_registry,
     default_office_remote_registry,
     default_provider_registry_state_dir,
     default_compat_observability_log,
@@ -66,6 +67,8 @@ def main() -> int:
     parser.add_argument("--deviced-socket", type=Path, default=default_deviced_socket())
     parser.add_argument("--policy-socket", type=Path, default=default_policy_socket())
     parser.add_argument("--agent-socket", type=Path, default=default_agent_socket())
+    parser.add_argument("--compositor-runtime-state", type=Path)
+    parser.add_argument("--compositor-window-state", type=Path)
     parser.add_argument("--panel-action-log", type=Path, default=default_panel_action_log())
     parser.add_argument("--policy-audit-log", type=Path, default=default_policy_audit_log())
     parser.add_argument("--runtime-events-log", type=Path, default=default_runtime_events_log())
@@ -73,6 +76,7 @@ def main() -> int:
     parser.add_argument("--compat-observability-log", type=Path, default=default_compat_observability_log())
     parser.add_argument("--browser-remote-registry", type=Path, default=default_browser_remote_registry())
     parser.add_argument("--office-remote-registry", type=Path, default=default_office_remote_registry())
+    parser.add_argument("--mcp-remote-registry", type=Path, default=default_mcp_remote_registry())
     parser.add_argument("--provider-registry-state-dir", type=Path, default=default_provider_registry_state_dir())
     parser.add_argument("--approval-fixture", type=Path)
     parser.add_argument("--json", action="store_true")
@@ -92,6 +96,7 @@ def main() -> int:
     remote_governance_summary = load_remote_governance_summary(
         args.browser_remote_registry,
         args.office_remote_registry,
+        args.mcp_remote_registry,
         args.provider_registry_state_dir,
     )
     context = notification_context(

@@ -18,6 +18,7 @@ CORRELATION_REPORT_SCHEMA = ROOT / "aios" / "observability" / "schemas" / "cross
 PROVIDER_KEYS = {"provider_id", "selected_provider_id"}
 RUNTIME_SERVICE_KEYS = {"runtime_service_id"}
 PROVIDER_STATUS_KEYS = {"provider_status"}
+BACKEND_KEYS = {"backend_id", "resolved_backend", "fallback_backend", "selected_backend", "requested_backend", "actual_backend"}
 ARTIFACT_KEYS = {
     "artifact_path",
     "evidence_path",
@@ -33,6 +34,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--runtime-events-log", type=Path)
     parser.add_argument("--remote-audit-log", type=Path)
     parser.add_argument("--observability-log", type=Path)
+    parser.add_argument("--runtime-observability-export", type=Path)
     parser.add_argument("--session-id")
     parser.add_argument("--limit", type=int, default=100)
     parser.add_argument("--output-prefix", type=Path, default=DEFAULT_OUTPUT_PREFIX)
@@ -60,6 +62,34 @@ def read_jsonl(path: Path | None) -> list[dict[str, Any]]:
         records.append(json.loads(stripped))
     return records
 
+
+def load_runtime_export(path: Path | None) -> dict[str, Any] | None:
+    if path is None or not path.exists():
+        return None
+    payload = load_json(path)
+    if not isinstance(payload, dict):
+        raise SystemExit(f"runtime observability export must be a JSON object: {path}")
+    return payload
+
+
+def runtime_export_records(
+    runtime_export: dict[str, Any] | None,
+    artifact_key: str,
+    payload_key: str,
+) -> list[dict[str, Any]]:
+    if runtime_export is None:
+        return []
+    artifacts = runtime_export.get("exported_artifacts")
+    if isinstance(artifacts, dict):
+        artifact_path = artifacts.get(artifact_key)
+        if isinstance(artifact_path, str) and artifact_path:
+            records = read_jsonl(Path(artifact_path))
+            if records:
+                return records
+    records = runtime_export.get(payload_key)
+    if isinstance(records, list):
+        return [item for item in records if isinstance(item, dict)]
+    return []
 
 def query_one(connection: sqlite3.Connection, sql: str, params: tuple[Any, ...]) -> sqlite3.Row | None:
     cursor = connection.execute(sql, params)
@@ -147,22 +177,24 @@ def build_markdown(report: dict[str, Any]) -> str:
         f"- Providers: `{', '.join(report['summary']['provider_ids']) or '-'}`",
         f"- Runtime services: `{', '.join(report['summary']['runtime_service_ids']) or '-'}`",
         f"- Provider statuses: `{', '.join(report['summary']['provider_statuses']) or '-'}`",
+        f"- Backends: `{', '.join(report['summary'].get('backend_ids', [])) or '-'}`",
         f"- Artifacts: `{', '.join(report['summary']['artifact_paths']) or '-'}`",
         "",
         "## Tasks",
         "",
-        "| Task | State | Audit Decisions | Runtime Events | Providers | Runtime Services | Transitions |",
-        "|------|-------|-----------------|----------------|-----------|------------------|-------------|",
+        "| Task | State | Audit Decisions | Runtime Events | Providers | Runtime Services | Backends | Transitions |",
+        "|------|-------|-----------------|----------------|-----------|------------------|----------|-------------|",
     ]
     for item in report["correlations"]:
         lines.append(
-            "| `{task_id}` | `{state}` | `{audit}` | `{runtime}` | `{providers}` | `{runtime_services}` | `{transitions}` |".format(
+            "| `{task_id}` | `{state}` | `{audit}` | `{runtime}` | `{providers}` | `{runtime_services}` | `{backends}` | `{transitions}` |".format(
                 task_id=item["task_id"],
                 state=item.get("state", "unknown"),
                 audit=", ".join(item["audit_decisions"]) or "-",
                 runtime=", ".join(item["runtime_event_kinds"]) or "-",
                 providers=", ".join(item["provider_ids"]) or "-",
                 runtime_services=", ".join(item["runtime_service_ids"]) or "-",
+                backends=", ".join(item.get("backend_ids", [])) or "-",
                 transitions=", ".join(item["state_transitions"]) or "-",
             )
         )
@@ -267,6 +299,8 @@ def main() -> int:
         for row in episodic_rows
     ]
 
+    runtime_export = load_runtime_export(args.runtime_observability_export)
+
     audit_entries = [
         item
         for item in read_jsonl(args.policy_audit_log)
@@ -274,17 +308,29 @@ def main() -> int:
     ]
     runtime_events = [
         item
-        for item in read_jsonl(args.runtime_events_log)
+        for item in (
+            read_jsonl(args.runtime_events_log)
+            if args.runtime_events_log is not None
+            else runtime_export_records(runtime_export, "runtime_events_path", "runtime_events")
+        )
         if item.get("session_id") == session_id
     ]
     remote_audits = [
         item
-        for item in read_jsonl(args.remote_audit_log)
+        for item in (
+            read_jsonl(args.remote_audit_log)
+            if args.remote_audit_log is not None
+            else runtime_export_records(runtime_export, "remote_audit_path", "remote_audit")
+        )
         if item.get("session_id") == session_id
     ]
     observability_records = [
         item
-        for item in read_jsonl(args.observability_log)
+        for item in (
+            read_jsonl(args.observability_log)
+            if args.observability_log is not None
+            else runtime_export_records(runtime_export, "observability_path", "observability")
+        )
         if item.get("session_id") == session_id
     ]
 
@@ -347,6 +393,11 @@ def main() -> int:
             | collect_strings(task_remote, PROVIDER_STATUS_KEYS)
             | collect_strings(task_observability, PROVIDER_STATUS_KEYS)
         )
+        backend_ids = sorted(
+            collect_strings(task_runtime, BACKEND_KEYS)
+            | collect_strings(task_remote, BACKEND_KEYS)
+            | collect_strings(task_observability, BACKEND_KEYS)
+        )
         artifact_paths = sorted(
             collect_strings(task_audits, ARTIFACT_KEYS)
             | collect_strings(task_runtime, ARTIFACT_KEYS)
@@ -368,6 +419,7 @@ def main() -> int:
                 "provider_ids": provider_ids,
                 "runtime_service_ids": runtime_service_ids,
                 "provider_statuses": provider_statuses,
+                "backend_ids": backend_ids,
                 "artifact_paths": artifact_paths,
             }
         )
@@ -410,6 +462,11 @@ def main() -> int:
                 | collect_strings(remote_audits, PROVIDER_STATUS_KEYS)
                 | collect_strings(observability_records, PROVIDER_STATUS_KEYS)
             ),
+            "backend_ids": sorted(
+                collect_strings(runtime_events, BACKEND_KEYS)
+                | collect_strings(remote_audits, BACKEND_KEYS)
+                | collect_strings(observability_records, BACKEND_KEYS)
+            ),
             "artifact_paths": sorted(
                 collect_strings(audit_entries, ARTIFACT_KEYS)
                 | collect_strings(runtime_events, ARTIFACT_KEYS)
@@ -431,6 +488,7 @@ def main() -> int:
             f"runtime_events_log={args.runtime_events_log}" if args.runtime_events_log else "runtime_events_log=missing",
             f"remote_audit_log={args.remote_audit_log}" if args.remote_audit_log else "remote_audit_log=missing",
             f"observability_log={args.observability_log}" if args.observability_log else "observability_log=missing",
+            f"runtime_observability_export={args.runtime_observability_export}" if args.runtime_observability_export else "runtime_observability_export=missing",
         ],
     }
 
@@ -453,6 +511,7 @@ def main() -> int:
                 "runtime_event_count": report["summary"]["runtime_event_count"],
                 "provider_ids": report["summary"]["provider_ids"],
                 "runtime_service_ids": report["summary"]["runtime_service_ids"],
+                "backend_ids": report["summary"].get("backend_ids", []),
             },
             indent=2,
             ensure_ascii=False,
@@ -463,3 +522,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+

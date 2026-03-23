@@ -252,6 +252,7 @@ def component_base_args(profile: dict, component: str) -> list[str]:
             ("--compat-observability-log", "compat_observability_log"),
             ("--browser-remote-registry", "browser_remote_registry"),
             ("--office-remote-registry", "office_remote_registry"),
+            ("--mcp-remote-registry", "mcp_remote_registry"),
             ("--provider-registry-state-dir", "provider_registry_state_dir"),
         ):
             value = paths.get(key)
@@ -271,6 +272,7 @@ def component_base_args(profile: dict, component: str) -> list[str]:
             ("--compat-observability-log", "compat_observability_log"),
             ("--browser-remote-registry", "browser_remote_registry"),
             ("--office-remote-registry", "office_remote_registry"),
+            ("--mcp-remote-registry", "mcp_remote_registry"),
             ("--provider-registry-state-dir", "provider_registry_state_dir"),
         ):
             value = paths.get(key)
@@ -282,6 +284,7 @@ def component_base_args(profile: dict, component: str) -> list[str]:
         for flag, key in (
             ("--browser-remote-registry", "browser_remote_registry"),
             ("--office-remote-registry", "office_remote_registry"),
+            ("--mcp-remote-registry", "mcp_remote_registry"),
             ("--provider-registry-state-dir", "provider_registry_state_dir"),
         ):
             value = paths.get(key)

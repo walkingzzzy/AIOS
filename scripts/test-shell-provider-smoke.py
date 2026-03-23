@@ -9,11 +9,11 @@ import signal
 import socket
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 
 from aios_cargo_bins import default_aios_bin_dir, resolve_binary_path
+from shell_test_temp import make_temp_dir, restore_session_temp_root, set_session_temp_root
 
 
 def parse_args() -> argparse.Namespace:
@@ -187,7 +187,8 @@ def main() -> int:
     }
     ensure_paths(binaries)
 
-    temp_root = Path(tempfile.mkdtemp(prefix="aios-shell-provider-", dir="/tmp" if Path("/tmp").exists() else None))
+    previous_temp_root = set_session_temp_root()
+    temp_root = make_temp_dir("aios-shell-provider-")
     runtime_root = temp_root / "run"
     state_root = temp_root / "state"
     runtime_root.mkdir(parents=True, exist_ok=True)
@@ -206,6 +207,7 @@ def main() -> int:
     compat_observability_log = state_root / "compat" / "compat-observability.jsonl"
     browser_remote_registry = state_root / "compat" / "browser-remote-registry.json"
     office_remote_registry = state_root / "compat" / "office-remote-registry.json"
+    mcp_remote_registry = state_root / "compat" / "mcp-remote-registry.json"
     provider_registry_state_dir = state_root / "registry"
 
     backend_evidence_dir.mkdir(parents=True, exist_ok=True)
@@ -399,7 +401,7 @@ def main() -> int:
                     "endpoint": "https://browser.remote.example/bridge",
                     "control_plane_provider_id": "compat.browser.remote.worker",
                     "registration_status": "active",
-                    "last_heartbeat_at": "2026-03-09T00:05:00Z",
+                    "last_heartbeat_at": "2030-01-01T00:00:00Z",
                     "heartbeat_ttl_seconds": 3600,
                     "attestation": {"mode": "verified", "status": "trusted", "expires_at": "2030-01-01T00:00:00Z"},
                     "governance": {"fleet_id": "fleet-browser", "governance_group": "operator-audit"}
@@ -426,6 +428,24 @@ def main() -> int:
         },
     )
     write_fixture(
+        mcp_remote_registry,
+        {
+            "schema_version": "1.0.0",
+            "entries": [
+                {
+                    "provider_ref": "mcp.remote.worker",
+                    "endpoint": "https://mcp.remote.example/bridge",
+                    "control_plane_provider_id": "compat.mcp.bridge.remote",
+                    "registration_status": "active",
+                    "last_heartbeat_at": "2030-01-01T00:00:00Z",
+                    "heartbeat_ttl_seconds": 3600,
+                    "attestation": {"mode": "verified", "status": "trusted", "expires_at": "2030-01-01T00:00:00Z"},
+                    "governance": {"fleet_id": "fleet-mcp", "governance_group": "operator-audit"}
+                }
+            ],
+        },
+    )
+    write_fixture(
         provider_registry_state_dir / "descriptors" / "compat.browser.remote.worker.json",
         {
             "provider_id": "compat.browser.remote.worker",
@@ -437,7 +457,7 @@ def main() -> int:
                 "provider_ref": "browser.remote.worker",
                 "endpoint": "https://browser.remote.example/bridge",
                 "registration_status": "active",
-                "last_heartbeat_at": "2026-03-09T00:05:00Z",
+                "last_heartbeat_at": "2030-01-01T00:00:00Z",
                 "heartbeat_ttl_seconds": 3600,
                 "attestation": {"mode": "verified", "status": "trusted", "expires_at": "2030-01-01T00:00:00Z"},
                 "governance": {"fleet_id": "fleet-browser", "governance_group": "operator-audit"}
@@ -460,7 +480,7 @@ def main() -> int:
                 "provider_ref": "office.remote.worker",
                 "endpoint": "https://office.remote.example/bridge",
                 "registration_status": "active",
-                "last_heartbeat_at": "2026-03-09T00:00:00Z",
+                "last_heartbeat_at": "2030-01-01T00:00:00Z",
                 "heartbeat_ttl_seconds": 3600,
                 "attestation": {"mode": "verified", "status": "trusted", "expires_at": "2030-01-01T00:00:00Z"},
                 "governance": {"fleet_id": "fleet-office", "governance_group": "operator-audit"}
@@ -470,6 +490,30 @@ def main() -> int:
     write_fixture(
         provider_registry_state_dir / "health" / "compat.office.remote.worker.json",
         {"provider_id": "compat.office.remote.worker", "status": "unavailable", "disabled": False, "last_error": "bridge offline"},
+    )
+
+    write_fixture(
+        provider_registry_state_dir / "descriptors" / "compat.mcp.bridge.remote.json",
+        {
+            "provider_id": "compat.mcp.bridge.remote",
+            "display_name": "MCP Remote Worker",
+            "kind": "compat-provider",
+            "execution_location": "attested_remote",
+            "remote_registration": {
+                "source_provider_id": "compat.mcp.bridge.local",
+                "provider_ref": "mcp.remote.worker",
+                "endpoint": "https://mcp.remote.example/bridge",
+                "registration_status": "active",
+                "last_heartbeat_at": "2030-01-01T00:00:00Z",
+                "heartbeat_ttl_seconds": 3600,
+                "attestation": {"mode": "verified", "status": "trusted", "expires_at": "2030-01-01T00:00:00Z"},
+                "governance": {"fleet_id": "fleet-mcp", "governance_group": "operator-audit"}
+            },
+        },
+    )
+    write_fixture(
+        provider_registry_state_dir / "health" / "compat.mcp.bridge.remote.json",
+        {"provider_id": "compat.mcp.bridge.remote", "status": "available", "disabled": False},
     )
 
     policyd_env = os.environ.copy()
@@ -505,6 +549,7 @@ def main() -> int:
             "AIOS_SHELL_PROVIDER_COMPAT_OBSERVABILITY_LOG": str(compat_observability_log),
             "AIOS_SHELL_PROVIDER_BROWSER_REMOTE_REGISTRY": str(browser_remote_registry),
             "AIOS_SHELL_PROVIDER_OFFICE_REMOTE_REGISTRY": str(office_remote_registry),
+            "AIOS_SHELL_PROVIDER_MCP_REMOTE_REGISTRY": str(mcp_remote_registry),
             "AIOS_SHELL_PROVIDER_PROVIDER_REGISTRY_STATE_DIR": str(provider_registry_state_dir),
         }
     )
@@ -564,6 +609,14 @@ def main() -> int:
             "shell.notification.open did not include remote governance summary",
         )
         require(
+            ((notification_result.get("model") or {}).get("meta") or {}).get("remote_governance_matched_entry_count") == 3,
+            "shell.notification.open did not include mcp remote governance entries",
+        )
+        require(
+            ((((notification_result.get("model") or {}).get("meta") or {}).get("remote_governance_source_counts") or {}).get("mcp") == 1),
+            "shell.notification.open did not expose mcp governance source coverage",
+        )
+        require(
             "panel_action_log=" in "\n".join(provider_health.get("notes", [])),
             "shell provider health missing panel action log note",
         )
@@ -593,7 +646,7 @@ def main() -> int:
         )
         require(operator_audit_result.get("status") == "opened", "shell.operator-audit.open did not succeed")
         require(operator_audit_result.get("issue_count") == 1, "shell.operator-audit.open issue count mismatch")
-        require(operator_audit_result.get("record_count") == 6, "shell.operator-audit.open record count mismatch")
+        require(operator_audit_result.get("record_count") == 7, "shell.operator-audit.open record count mismatch")
         require(
             operator_audit_result.get("matched_record_count") == 1,
             "shell.operator-audit.open matched record count mismatch",
@@ -691,7 +744,7 @@ def main() -> int:
             timeout=args.timeout,
         )
         require(remote_governance_result.get("status") == "opened", "shell.remote-governance.open did not succeed")
-        require(remote_governance_result.get("entry_count") == 2, "shell.remote-governance.open entry count mismatch")
+        require(remote_governance_result.get("entry_count") == 3, "shell.remote-governance.open entry count mismatch")
         require(
             remote_governance_result.get("matched_entry_count") == 1,
             "shell.remote-governance.open matched entry count mismatch",
@@ -805,6 +858,7 @@ def main() -> int:
         print(f"shell provider smoke failed: {exc}", file=sys.stderr)
         return 1
     finally:
+        restore_session_temp_root(previous_temp_root)
         terminate(list(processes.values()))
         if failed:
             print_logs(processes)

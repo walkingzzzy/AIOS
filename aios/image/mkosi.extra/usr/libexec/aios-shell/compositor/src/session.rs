@@ -41,6 +41,7 @@ pub struct OutputLayoutSummary {
     pub layout_height: i32,
     pub primary: bool,
     pub active: bool,
+    pub renderable: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -98,6 +99,9 @@ pub struct SessionState {
     pub output_layout_mode: String,
     pub active_output_id: Option<String>,
     pub outputs: Vec<OutputLayoutSummary>,
+    pub renderable_output_count: u32,
+    pub non_renderable_output_count: u32,
+    pub release_grade_output_status: String,
     pub window_manager_status: String,
     pub window_state_path: Option<String>,
     pub workspace_count: u32,
@@ -216,6 +220,9 @@ impl SessionState {
             output_layout_mode: config.output_layout_mode.clone(),
             active_output_id: None,
             outputs: Vec::new(),
+            renderable_output_count: 0,
+            non_renderable_output_count: 0,
+            release_grade_output_status: "uninitialized".to_string(),
             window_manager_status: if config.window_state_path.is_some() {
                 "persistent".to_string()
             } else {
@@ -463,6 +470,31 @@ impl SessionState {
                 .or_else(|| outputs.first().map(|output| output.output_id.clone()))
         });
         self.outputs = outputs;
+        self.renderable_output_count =
+            self.outputs.iter().filter(|output| output.renderable).count() as u32;
+        self.non_renderable_output_count =
+            self.outputs.len() as u32 - self.renderable_output_count;
+        self.release_grade_output_status = if self.outputs.is_empty() {
+            "uninitialized".to_string()
+        } else if self.outputs.len() == 1 {
+            format!(
+                "single-output(renderable={}/{})",
+                self.renderable_output_count,
+                self.outputs.len()
+            )
+        } else if self.non_renderable_output_count == 0 {
+            format!(
+                "multi-output(renderable={}/{})",
+                self.renderable_output_count,
+                self.outputs.len()
+            )
+        } else {
+            format!(
+                "multi-output(partial-renderable={}/{})",
+                self.renderable_output_count,
+                self.outputs.len()
+            )
+        };
         self.workspace_count = workspace_count.max(1);
         self.active_workspace_index =
             active_workspace_index.min(self.workspace_count.saturating_sub(1));

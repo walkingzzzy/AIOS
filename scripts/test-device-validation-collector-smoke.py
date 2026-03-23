@@ -89,7 +89,21 @@ def main() -> int:
                 "backend_summary": {
                     "overall_status": "ready",
                 },
-                "notes": [],
+                "notes": [
+                    "hardware_profile_id=framework-laptop-13-amd-7040",
+                    "hardware_profile_path=/usr/share/aios/hardware/profiles/framework-laptop-13-amd-7040.yaml",
+                    "hardware_profile_canonical_id=generic-x86_64-uefi",
+                    "hardware_profile_platform_media_id=generic-x86_64-uefi",
+                    "hardware_profile_platform_tier=tier1",
+                    "hardware_profile_bringup_status=nominated-formal-tier1",
+                    "hardware_profile_validation_status=matched",
+                    "hardware_profile_required_modalities=audio,screen,ui_tree",
+                    "hardware_profile_conditional_modalities=",
+                    "hardware_profile_available_expected_modalities=audio,screen,ui_tree",
+                    "hardware_profile_missing_required_modalities=",
+                    "hardware_profile_missing_conditional_modalities=",
+                    "hardware_profile_release_track_intent=developer-preview,product-preview",
+                ],
                 "entries": [
                     {"modality": "audio", "available": True},
                     {"modality": "screen", "available": True},
@@ -168,6 +182,7 @@ def main() -> int:
     require(all(str(output_dir / "backend-evidence") in item.get("artifact_path", "") for item in evidence_artifacts), "backend evidence not localized")
     vendor_runtime_files = sorted(vendor_runtime_dir.glob("*.json"))
     require(vendor_runtime_files, "vendor runtime evidence was not localized")
+    require("--device-metadata-artifact" in renderer_args, "renderer args missing device metadata artifact")
     require("--device-backend-state-artifact" in renderer_args, "renderer args missing backend-state artifact")
     require("--device-release-grade-backend-ids" in renderer_args, "renderer args missing release-grade backend ids")
     require("pipewire,xdg-desktop-portal-screencast" in renderer_args, "renderer args missing aggregated backend ids")

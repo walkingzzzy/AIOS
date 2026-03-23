@@ -12,7 +12,9 @@ use serde_json::Value;
 
 use aios_contracts::{TraceEventRecord, TraceQueryRequest, TraceQueryResponse};
 
-use crate::{events_persistence::EventLog, observability::ObservabilitySink};
+use crate::{
+    events_persistence::EventLog, observability::ObservabilitySink, trace_query::matches_request,
+};
 
 const DEFAULT_EVENT_CAPACITY: usize = 128;
 
@@ -154,28 +156,9 @@ impl EventStore {
     }
 }
 
-fn matches_request(entry: &TraceEventRecord, request: &TraceQueryRequest) -> bool {
-    if let Some(session_id) = &request.session_id {
-        if entry.session_id.as_deref() != Some(session_id.as_str()) {
-            return false;
-        }
-    }
-    if let Some(task_id) = &request.task_id {
-        if entry.task_id.as_deref() != Some(task_id.as_str()) {
-            return false;
-        }
-    }
-    if let Some(kind) = &request.kind {
-        if &entry.kind != kind {
-            return false;
-        }
-    }
-
-    true
-}
-
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::fs;
 
     use super::*;
@@ -206,6 +189,52 @@ mod tests {
         });
         assert_eq!(response.entries.len(), 1);
         assert_eq!(response.entries[0].kind, "runtime.infer.fallback");
+    }
+
+    #[test]
+    fn event_store_filters_by_payload_fields_and_substring() {
+        let store = EventStore::default();
+        store.record(
+            "runtime.backend.health",
+            None,
+            None,
+            json!({
+                "backend_id": "local-gpu",
+                "health_state": "unavailable",
+                "detail": {
+                    "route_state": "backend-fallback-local-cpu"
+                }
+            }),
+        );
+        store.record(
+            "runtime.backend.health",
+            None,
+            None,
+            json!({
+                "backend_id": "local-npu",
+                "health_state": "ready",
+                "detail": {
+                    "route_state": "local-npu-worker-v1"
+                }
+            }),
+        );
+
+        let response = store.query(&TraceQueryRequest {
+            source: Some("aios-runtimed".to_string()),
+            payload_equals: BTreeMap::from([
+                ("backend_id".to_string(), json!("local-gpu")),
+                (
+                    "detail.route_state".to_string(),
+                    json!("backend-fallback-local-cpu"),
+                ),
+            ]),
+            payload_contains: Some("FALLBACK-LOCAL-CPU".to_string()),
+            limit: 10,
+            ..TraceQueryRequest::default()
+        });
+
+        assert_eq!(response.entries.len(), 1);
+        assert_eq!(response.entries[0].payload["backend_id"], "local-gpu");
     }
 
     #[test]

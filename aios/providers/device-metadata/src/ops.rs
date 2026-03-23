@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use chrono::Utc;
@@ -13,7 +13,10 @@ use aios_contracts::{
     DeviceMetadataReadinessSummary, DeviceStateGetResponse, UiTreeSupportMatrixEntry,
 };
 
-use crate::AppState;
+use crate::{config::Config, AppState};
+
+const UI_TREE_MODALITY: &str = "ui_tree";
+const UI_TREE_DEFAULT_BACKEND: &str = "at-spi";
 
 pub fn get_device_metadata(
     state: &AppState,
@@ -30,7 +33,12 @@ fn build_device_metadata_response(
     request: &DeviceMetadataGetRequest,
     device_state: &DeviceStateGetResponse,
 ) -> DeviceMetadataGetResponse {
-    let view = build_view(device_state, request);
+    let mut view = build_view(device_state, request);
+    let all_entries = build_entries(device_state, &[]);
+    let hardware_profile = load_hardware_profile_context(&state.config, &all_entries);
+    if let Ok(Some(profile_context)) = &hardware_profile {
+        apply_hardware_profile_context(&mut view.entries, profile_context);
+    }
 
     let mut notes = vec![
         format!("deviced_socket={}", state.config.deviced_socket.display()),
@@ -76,6 +84,7 @@ fn build_device_metadata_response(
         notes.extend(device_state.notes.clone());
     }
     append_release_grade_summary_notes(&mut notes, &view.entries);
+    append_hardware_profile_notes(&mut notes, &state.config, &hardware_profile);
 
     DeviceMetadataGetResponse {
         provider_id: state.config.provider_id.clone(),
@@ -110,6 +119,18 @@ fn build_unavailable_response(
         ui_tree_available: false,
         ui_tree_snapshot_attached: false,
     };
+    let mut notes = vec![
+        format!("deviced_socket={}", state.config.deviced_socket.display()),
+        format!(
+            "requested_modalities={}",
+            format_modalities_note(&requested_modalities)
+        ),
+        "overall_status=unavailable".to_string(),
+        "backend_overall_status=unavailable".to_string(),
+        "device_state_source=unavailable".to_string(),
+        format!("device_state_error={}", compact_note_value(error)),
+    ];
+    append_hardware_profile_unavailable_notes(&mut notes, &state.config);
 
     DeviceMetadataGetResponse {
         provider_id: state.config.provider_id.clone(),
@@ -124,17 +145,7 @@ fn build_unavailable_response(
             ..DeviceBackendSummary::default()
         },
         ui_tree_support_matrix: Vec::new(),
-        notes: vec![
-            format!("deviced_socket={}", state.config.deviced_socket.display()),
-            format!(
-                "requested_modalities={}",
-                format_modalities_note(&requested_modalities)
-            ),
-            "overall_status=unavailable".to_string(),
-            "backend_overall_status=unavailable".to_string(),
-            "device_state_source=unavailable".to_string(),
-            format!("device_state_error={}", compact_note_value(error)),
-        ],
+        notes,
     }
 }
 
@@ -143,11 +154,7 @@ fn build_view(
     request: &DeviceMetadataGetRequest,
 ) -> DeviceMetadataView {
     let requested_modalities = normalize_requested_modalities(request);
-    let known_modalities = device_state
-        .capabilities
-        .iter()
-        .map(|capability| capability.modality.to_ascii_lowercase())
-        .collect::<BTreeSet<_>>();
+    let known_modalities = known_modalities(device_state);
 
     let unknown_modalities = requested_modalities
         .iter()
@@ -225,6 +232,19 @@ fn build_entries(
         })
         .collect::<Vec<_>>();
 
+    if supports_ui_tree_metadata(device_state)
+        && (requested_modalities.is_empty() || requested_modalities.contains(UI_TREE_MODALITY))
+        && !entries
+            .iter()
+            .any(|entry| entry.modality == UI_TREE_MODALITY)
+    {
+        entries.push(build_ui_tree_entry(
+            device_state,
+            backend_map.get(UI_TREE_MODALITY).copied(),
+            adapter_map.get(UI_TREE_MODALITY).copied(),
+        ));
+    }
+
     entries.sort_by(|left, right| left.modality.cmp(&right.modality));
     entries
 }
@@ -262,6 +282,69 @@ fn build_entry(
         available: capability.available && backend_available,
         conditional: capability.conditional,
         readiness: backend_readiness,
+        backend_details,
+        adapter_id: adapter.map(|item| item.adapter_id.clone()),
+        adapter_execution_path: adapter.map(|item| item.execution_path.clone()),
+        notes,
+    }
+}
+
+fn build_ui_tree_entry(
+    device_state: &DeviceStateGetResponse,
+    backend: Option<&aios_contracts::DeviceBackendStatus>,
+    adapter: Option<&DeviceCaptureAdapterPlan>,
+) -> DeviceMetadataEntry {
+    let current_support = preferred_ui_tree_support(&device_state.ui_tree_support_matrix);
+    let available = current_support
+        .map(|entry| entry.available)
+        .or_else(|| backend.map(|status| status.available))
+        .unwrap_or_else(|| current_ui_tree_available(&device_state.ui_tree_support_matrix));
+    let readiness = current_support
+        .map(|entry| entry.readiness.clone())
+        .or_else(|| backend.map(|status| status.readiness.clone()))
+        .unwrap_or_else(|| "unsupported".to_string());
+    let source_backend = backend
+        .map(|status| status.backend.clone())
+        .or_else(|| adapter.map(|plan| plan.backend.clone()))
+        .unwrap_or_else(|| UI_TREE_DEFAULT_BACKEND.to_string());
+    let mut backend_details = backend
+        .map(|status| status.details.clone())
+        .unwrap_or_default();
+    if let Some(evidence) = read_backend_evidence_metadata(backend_details.as_slice()) {
+        evidence.append_backend_details(&mut backend_details);
+    }
+    append_ui_tree_support_matrix_details(
+        &mut backend_details,
+        &device_state.ui_tree_support_matrix,
+        current_support,
+    );
+
+    let mut notes = vec![format!(
+        "ui_tree_snapshot_attached={}",
+        device_state.ui_tree_snapshot.is_some()
+    )];
+    if let Some(capture_mode) = &device_state.backend_summary.ui_tree_capture_mode {
+        notes.push(format!("ui_tree_capture_mode={capture_mode}"));
+    }
+    if let Some(adapter) = adapter {
+        notes.push(format!("adapter_backend={}", adapter.backend));
+    }
+    if let Some(current_support) = current_support {
+        notes.push(format!(
+            "ui_tree_current_environment_id={}",
+            current_support.environment_id
+        ));
+        if let Some(stability) = current_support.stability.as_deref() {
+            notes.push(format!("ui_tree_current_stability={stability}"));
+        }
+    }
+
+    DeviceMetadataEntry {
+        modality: UI_TREE_MODALITY.to_string(),
+        source_backend,
+        available,
+        conditional: true,
+        readiness,
         backend_details,
         adapter_id: adapter.map(|item| item.adapter_id.clone()),
         adapter_execution_path: adapter.map(|item| item.execution_path.clone()),
@@ -324,6 +407,118 @@ fn current_ui_tree_available(matrix: &[UiTreeSupportMatrixEntry]) -> bool {
         .unwrap_or_else(|| matrix.iter().any(|entry| entry.available))
 }
 
+fn known_modalities(device_state: &DeviceStateGetResponse) -> BTreeSet<String> {
+    let mut known_modalities = device_state
+        .capabilities
+        .iter()
+        .map(|capability| capability.modality.to_ascii_lowercase())
+        .collect::<BTreeSet<_>>();
+    if supports_ui_tree_metadata(device_state) {
+        known_modalities.insert(UI_TREE_MODALITY.to_string());
+    }
+    known_modalities
+}
+
+fn supports_ui_tree_metadata(device_state: &DeviceStateGetResponse) -> bool {
+    device_state
+        .backend_statuses
+        .iter()
+        .any(|status| status.modality == UI_TREE_MODALITY)
+        || device_state
+            .capture_adapters
+            .iter()
+            .any(|adapter| adapter.modality == UI_TREE_MODALITY)
+        || !device_state.ui_tree_support_matrix.is_empty()
+        || device_state.ui_tree_snapshot.is_some()
+}
+
+fn preferred_ui_tree_support<'a>(
+    matrix: &'a [UiTreeSupportMatrixEntry],
+) -> Option<&'a UiTreeSupportMatrixEntry> {
+    matrix
+        .iter()
+        .find(|entry| entry.current)
+        .or_else(|| matrix.iter().find(|entry| entry.available))
+        .or_else(|| matrix.first())
+}
+
+fn append_ui_tree_support_matrix_details(
+    backend_details: &mut Vec<String>,
+    matrix: &[UiTreeSupportMatrixEntry],
+    current_support: Option<&UiTreeSupportMatrixEntry>,
+) {
+    push_unique_detail(
+        backend_details,
+        format!("ui_tree_support_route_count={}", matrix.len()),
+    );
+    push_unique_detail(
+        backend_details,
+        format!(
+            "ui_tree_support_ready_count={}",
+            matrix.iter().filter(|entry| entry.available).count()
+        ),
+    );
+
+    let Some(current_support) = current_support else {
+        return;
+    };
+
+    push_unique_detail(
+        backend_details,
+        format!(
+            "ui_tree_current_environment_id={}",
+            current_support.environment_id
+        ),
+    );
+    push_unique_detail(
+        backend_details,
+        format!("ui_tree_current_available={}", current_support.available),
+    );
+    push_unique_detail(
+        backend_details,
+        format!("ui_tree_current_readiness={}", current_support.readiness),
+    );
+    if let Some(value) = current_support.desktop_environment.as_deref() {
+        push_unique_detail(
+            backend_details,
+            format!("ui_tree_current_desktop_environment={value}"),
+        );
+    }
+    if let Some(value) = current_support.session_type.as_deref() {
+        push_unique_detail(
+            backend_details,
+            format!("ui_tree_current_session_type={value}"),
+        );
+    }
+    if let Some(value) = current_support.adapter_id.as_deref() {
+        push_unique_detail(
+            backend_details,
+            format!("ui_tree_current_adapter_id={value}"),
+        );
+    }
+    if let Some(value) = current_support.execution_path.as_deref() {
+        push_unique_detail(
+            backend_details,
+            format!("ui_tree_current_execution_path={value}"),
+        );
+    }
+    if let Some(value) = current_support.stability.as_deref() {
+        push_unique_detail(
+            backend_details,
+            format!("ui_tree_current_stability={value}"),
+        );
+    }
+    for limitation in &current_support.limitations {
+        push_unique_detail(backend_details, format!("ui_tree_limitation={limitation}"));
+    }
+    for evidence in &current_support.evidence {
+        push_unique_detail(backend_details, format!("ui_tree_evidence={evidence}"));
+    }
+    for detail in &current_support.details {
+        push_unique_detail(backend_details, format!("ui_tree_detail={detail}"));
+    }
+}
+
 fn normalize_requested_modalities(request: &DeviceMetadataGetRequest) -> Vec<String> {
     request
         .modalities
@@ -356,6 +551,487 @@ struct DeviceMetadataView {
     entries: Vec<DeviceMetadataEntry>,
     available_modalities: Vec<String>,
     summary: DeviceMetadataReadinessSummary,
+}
+
+#[derive(Debug, Clone)]
+struct LoadedHardwareProfile {
+    path: PathBuf,
+    profile: HardwareProfile,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct HardwareProfile {
+    id: String,
+    #[serde(default)]
+    platform_tier: String,
+    #[serde(default)]
+    gpu: String,
+    #[serde(default)]
+    audio: String,
+    #[serde(default)]
+    camera: String,
+    #[serde(default)]
+    canonical_hardware_profile_id: String,
+    #[serde(default)]
+    platform_media_id: String,
+    #[serde(default)]
+    runtime_profile: String,
+    #[serde(default)]
+    bringup_status: String,
+    #[serde(default)]
+    hardware_evidence_required: bool,
+    #[serde(default)]
+    release_track_intent: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ModalityExpectation {
+    Required,
+    Conditional,
+}
+
+impl ModalityExpectation {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Required => "required",
+            Self::Conditional => "conditional",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct HardwareProfileContext {
+    loaded: LoadedHardwareProfile,
+    expectations: BTreeMap<String, ModalityExpectation>,
+    required_modalities: Vec<String>,
+    conditional_modalities: Vec<String>,
+    available_expected_modalities: Vec<String>,
+    missing_required_modalities: Vec<String>,
+    missing_conditional_modalities: Vec<String>,
+    validation_status: String,
+}
+
+impl HardwareProfileContext {
+    fn from_loaded_profile(loaded: LoadedHardwareProfile, entries: &[DeviceMetadataEntry]) -> Self {
+        let expectations = build_hardware_profile_expectations(&loaded.profile);
+        let available_map = entries
+            .iter()
+            .map(|entry| (entry.modality.to_ascii_lowercase(), entry.available))
+            .collect::<BTreeMap<_, _>>();
+        let required_modalities = expected_modalities(&expectations, ModalityExpectation::Required);
+        let conditional_modalities =
+            expected_modalities(&expectations, ModalityExpectation::Conditional);
+        let mut available_expected_modalities = Vec::new();
+        let mut missing_required_modalities = Vec::new();
+        let mut missing_conditional_modalities = Vec::new();
+
+        for (modality, expectation) in &expectations {
+            if available_map.get(modality).copied().unwrap_or(false) {
+                available_expected_modalities.push(modality.clone());
+            } else if *expectation == ModalityExpectation::Required {
+                missing_required_modalities.push(modality.clone());
+            } else {
+                missing_conditional_modalities.push(modality.clone());
+            }
+        }
+
+        let validation_status = if !missing_required_modalities.is_empty() {
+            "missing-required-modalities".to_string()
+        } else if !missing_conditional_modalities.is_empty() {
+            "conditional-gap".to_string()
+        } else {
+            "matched".to_string()
+        };
+
+        Self {
+            loaded,
+            expectations,
+            required_modalities,
+            conditional_modalities,
+            available_expected_modalities,
+            missing_required_modalities,
+            missing_conditional_modalities,
+            validation_status,
+        }
+    }
+
+    fn append_notes(&self, notes: &mut Vec<String>) {
+        push_unique_note(
+            notes,
+            format!("hardware_profile_path={}", self.loaded.path.display()),
+        );
+        push_unique_note(notes, "hardware_profile_status=loaded".to_string());
+        push_unique_note(
+            notes,
+            format!("hardware_profile_id={}", self.loaded.profile.id),
+        );
+        if !self.loaded.profile.platform_tier.is_empty() {
+            push_unique_note(
+                notes,
+                format!(
+                    "hardware_profile_platform_tier={}",
+                    self.loaded.profile.platform_tier
+                ),
+            );
+        }
+        if !self.loaded.profile.bringup_status.is_empty() {
+            push_unique_note(
+                notes,
+                format!(
+                    "hardware_profile_bringup_status={}",
+                    self.loaded.profile.bringup_status
+                ),
+            );
+        }
+        push_unique_note(
+            notes,
+            format!(
+                "hardware_profile_canonical_id={}",
+                if self.loaded.profile.canonical_hardware_profile_id.is_empty() {
+                    self.loaded.profile.id.as_str()
+                } else {
+                    self.loaded.profile.canonical_hardware_profile_id.as_str()
+                }
+            ),
+        );
+        if !self.loaded.profile.platform_media_id.is_empty() {
+            push_unique_note(
+                notes,
+                format!(
+                    "hardware_profile_platform_media_id={}",
+                    self.loaded.profile.platform_media_id
+                ),
+            );
+        }
+        if !self.loaded.profile.runtime_profile.is_empty() {
+            push_unique_note(
+                notes,
+                format!(
+                    "hardware_profile_runtime_profile={}",
+                    self.loaded.profile.runtime_profile
+                ),
+            );
+        }
+        push_unique_note(
+            notes,
+            format!(
+                "hardware_profile_hardware_evidence_required={}",
+                self.loaded.profile.hardware_evidence_required
+            ),
+        );
+        push_unique_note(
+            notes,
+            format!(
+                "hardware_profile_release_track_intent={}",
+                self.loaded.profile.release_track_intent.join(",")
+            ),
+        );
+        push_unique_note(
+            notes,
+            format!(
+                "hardware_profile_expected_modalities={}",
+                self.expectations
+                    .keys()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ),
+        );
+        push_unique_note(
+            notes,
+            format!(
+                "hardware_profile_required_modalities={}",
+                self.required_modalities.join(",")
+            ),
+        );
+        push_unique_note(
+            notes,
+            format!(
+                "hardware_profile_conditional_modalities={}",
+                self.conditional_modalities.join(",")
+            ),
+        );
+        push_unique_note(
+            notes,
+            format!(
+                "hardware_profile_available_expected_modalities={}",
+                self.available_expected_modalities.join(",")
+            ),
+        );
+        push_unique_note(
+            notes,
+            format!(
+                "hardware_profile_missing_required_modalities={}",
+                self.missing_required_modalities.join(",")
+            ),
+        );
+        push_unique_note(
+            notes,
+            format!(
+                "hardware_profile_missing_conditional_modalities={}",
+                self.missing_conditional_modalities.join(",")
+            ),
+        );
+        push_unique_note(
+            notes,
+            format!(
+                "hardware_profile_validation_status={}",
+                self.validation_status
+            ),
+        );
+    }
+}
+
+fn load_hardware_profile_context(
+    config: &Config,
+    entries: &[DeviceMetadataEntry],
+) -> Result<Option<HardwareProfileContext>, String> {
+    Ok(load_hardware_profile(config)?
+        .map(|loaded| HardwareProfileContext::from_loaded_profile(loaded, entries)))
+}
+
+fn load_hardware_profile(config: &Config) -> Result<Option<LoadedHardwareProfile>, String> {
+    let Some(path) = config.hardware_profile_path.as_ref() else {
+        return Ok(None);
+    };
+    let payload =
+        fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    let profile = serde_yaml::from_str::<HardwareProfile>(&payload)
+        .map_err(|error| format!("{}: {error}", path.display()))?;
+    if profile.id.trim().is_empty() {
+        return Err(format!("{}: hardware profile id is empty", path.display()));
+    }
+
+    Ok(Some(LoadedHardwareProfile {
+        path: path.clone(),
+        profile,
+    }))
+}
+
+fn append_hardware_profile_notes(
+    notes: &mut Vec<String>,
+    config: &Config,
+    result: &Result<Option<HardwareProfileContext>, String>,
+) {
+    match result {
+        Ok(Some(context)) => context.append_notes(notes),
+        Ok(None) => {}
+        Err(error) => append_hardware_profile_error_notes(notes, config, error),
+    }
+}
+
+fn append_hardware_profile_unavailable_notes(notes: &mut Vec<String>, config: &Config) {
+    match load_hardware_profile(config) {
+        Ok(Some(loaded)) => {
+            let expectations = build_hardware_profile_expectations(&loaded.profile);
+            push_unique_note(
+                notes,
+                format!("hardware_profile_path={}", loaded.path.display()),
+            );
+            push_unique_note(notes, "hardware_profile_status=loaded".to_string());
+            push_unique_note(notes, format!("hardware_profile_id={}", loaded.profile.id));
+            if !loaded.profile.platform_tier.is_empty() {
+                push_unique_note(
+                    notes,
+                    format!(
+                        "hardware_profile_platform_tier={}",
+                        loaded.profile.platform_tier
+                    ),
+                );
+            }
+            if !loaded.profile.bringup_status.is_empty() {
+                push_unique_note(
+                    notes,
+                    format!(
+                        "hardware_profile_bringup_status={}",
+                        loaded.profile.bringup_status
+                    ),
+                );
+            }
+            push_unique_note(
+                notes,
+                format!(
+                    "hardware_profile_canonical_id={}",
+                    if loaded.profile.canonical_hardware_profile_id.is_empty() {
+                        loaded.profile.id.as_str()
+                    } else {
+                        loaded.profile.canonical_hardware_profile_id.as_str()
+                    }
+                ),
+            );
+            if !loaded.profile.platform_media_id.is_empty() {
+                push_unique_note(
+                    notes,
+                    format!(
+                        "hardware_profile_platform_media_id={}",
+                        loaded.profile.platform_media_id
+                    ),
+                );
+            }
+            if !loaded.profile.runtime_profile.is_empty() {
+                push_unique_note(
+                    notes,
+                    format!(
+                        "hardware_profile_runtime_profile={}",
+                        loaded.profile.runtime_profile
+                    ),
+                );
+            }
+            push_unique_note(
+                notes,
+                format!(
+                    "hardware_profile_hardware_evidence_required={}",
+                    loaded.profile.hardware_evidence_required
+                ),
+            );
+            push_unique_note(
+                notes,
+                format!(
+                    "hardware_profile_release_track_intent={}",
+                    loaded.profile.release_track_intent.join(",")
+                ),
+            );
+            push_unique_note(
+                notes,
+                format!(
+                    "hardware_profile_expected_modalities={}",
+                    expectations.keys().cloned().collect::<Vec<_>>().join(",")
+                ),
+            );
+            push_unique_note(
+                notes,
+                format!(
+                    "hardware_profile_required_modalities={}",
+                    expected_modalities(&expectations, ModalityExpectation::Required).join(",")
+                ),
+            );
+            push_unique_note(
+                notes,
+                format!(
+                    "hardware_profile_conditional_modalities={}",
+                    expected_modalities(&expectations, ModalityExpectation::Conditional).join(",")
+                ),
+            );
+            push_unique_note(
+                notes,
+                "hardware_profile_available_expected_modalities=".to_string(),
+            );
+            push_unique_note(
+                notes,
+                "hardware_profile_missing_required_modalities=".to_string(),
+            );
+            push_unique_note(
+                notes,
+                "hardware_profile_missing_conditional_modalities=".to_string(),
+            );
+            push_unique_note(
+                notes,
+                "hardware_profile_validation_status=device-state-unavailable".to_string(),
+            );
+        }
+        Ok(None) => {}
+        Err(error) => append_hardware_profile_error_notes(notes, config, &error),
+    }
+}
+
+fn append_hardware_profile_error_notes(notes: &mut Vec<String>, config: &Config, error: &str) {
+    let Some(path) = config.hardware_profile_path.as_ref() else {
+        return;
+    };
+    push_unique_note(notes, format!("hardware_profile_path={}", path.display()));
+    push_unique_note(notes, "hardware_profile_status=error".to_string());
+    push_unique_note(
+        notes,
+        format!("hardware_profile_error={}", compact_note_value(error)),
+    );
+}
+
+fn build_hardware_profile_expectations(
+    profile: &HardwareProfile,
+) -> BTreeMap<String, ModalityExpectation> {
+    let mut expectations = BTreeMap::new();
+    if let Some(display_expectation) = classify_profile_requirement(&profile.gpu) {
+        expectations.insert("screen".to_string(), display_expectation);
+        expectations.insert("input".to_string(), display_expectation);
+        expectations.insert(UI_TREE_MODALITY.to_string(), display_expectation);
+    }
+    if let Some(expectation) = classify_profile_requirement(&profile.audio) {
+        expectations.insert("audio".to_string(), expectation);
+    }
+    if let Some(expectation) = classify_profile_requirement(&profile.camera) {
+        expectations.insert("camera".to_string(), expectation);
+    }
+    expectations
+}
+
+fn classify_profile_requirement(value: &str) -> Option<ModalityExpectation> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "" | "none" | "absent" | "disabled" | "unsupported" | "headless" | "false" => None,
+        "required" | "integrated" | "builtin" | "dedicated" | "discrete" | "present" | "yes"
+        | "true" => Some(ModalityExpectation::Required),
+        _ => Some(ModalityExpectation::Conditional),
+    }
+}
+
+fn expected_modalities(
+    expectations: &BTreeMap<String, ModalityExpectation>,
+    expected_kind: ModalityExpectation,
+) -> Vec<String> {
+    expectations
+        .iter()
+        .filter_map(|(modality, expectation)| {
+            (*expectation == expected_kind).then_some(modality.clone())
+        })
+        .collect()
+}
+
+fn apply_hardware_profile_context(
+    entries: &mut [DeviceMetadataEntry],
+    context: &HardwareProfileContext,
+) {
+    for entry in entries {
+        let modality = entry.modality.to_ascii_lowercase();
+        let Some(expectation) = context.expectations.get(&modality) else {
+            continue;
+        };
+        push_unique_detail(
+            &mut entry.backend_details,
+            format!("hardware_profile_id={}", context.loaded.profile.id),
+        );
+        push_unique_detail(
+            &mut entry.backend_details,
+            format!("hardware_profile_expectation={}", expectation.as_str()),
+        );
+        if !context.loaded.profile.platform_tier.is_empty() {
+            push_unique_detail(
+                &mut entry.backend_details,
+                format!(
+                    "hardware_profile_platform_tier={}",
+                    context.loaded.profile.platform_tier
+                ),
+            );
+        }
+        push_unique_note(
+            &mut entry.notes,
+            format!("hardware_profile_path={}", context.loaded.path.display()),
+        );
+        push_unique_note(
+            &mut entry.notes,
+            format!(
+                "hardware_profile_validation_status={}",
+                context.validation_status
+            ),
+        );
+        if !context.loaded.profile.bringup_status.is_empty() {
+            push_unique_note(
+                &mut entry.notes,
+                format!(
+                    "hardware_profile_bringup_status={}",
+                    context.loaded.profile.bringup_status
+                ),
+            );
+        }
+    }
 }
 
 fn append_release_grade_summary_notes(notes: &mut Vec<String>, entries: &[DeviceMetadataEntry]) {
@@ -451,6 +1127,12 @@ fn entry_detail_value<'a>(entry: &'a DeviceMetadataEntry, prefix: &str) -> Optio
 fn push_unique_note(notes: &mut Vec<String>, note: String) {
     if !notes.iter().any(|item| item == &note) {
         notes.push(note);
+    }
+}
+
+fn push_unique_detail(details: &mut Vec<String>, detail: String) {
+    if !details.iter().any(|item| item == &detail) {
+        details.push(detail);
     }
 }
 
@@ -590,6 +1272,7 @@ mod tests {
             agentd_socket: root.join("agentd.sock"),
             descriptor_path: root.join("device.metadata.local.json"),
             observability_log_path: observability_log_path.clone(),
+            hardware_profile_path: None,
         };
         AppState {
             config,
@@ -731,6 +1414,28 @@ mod tests {
         }
     }
 
+    fn state_with_ui_tree_backend() -> DeviceStateGetResponse {
+        let mut device_state = state();
+        device_state.backend_statuses.push(DeviceBackendStatus {
+            modality: "ui_tree".to_string(),
+            backend: "at-spi".to_string(),
+            available: true,
+            readiness: "native-live".to_string(),
+            details: vec!["probe_source=builtin-probe".to_string()],
+        });
+        device_state
+            .capture_adapters
+            .push(DeviceCaptureAdapterPlan {
+                modality: "ui_tree".to_string(),
+                backend: "at-spi".to_string(),
+                adapter_id: "ui_tree.atspi-native".to_string(),
+                execution_path: "native-live".to_string(),
+                preview_object_kind: "ui_tree_snapshot".to_string(),
+                notes: vec![],
+            });
+        device_state
+    }
+
     fn write_backend_evidence(
         root: &std::path::Path,
         modality: &str,
@@ -746,9 +1451,20 @@ mod tests {
         path
     }
 
+    fn write_hardware_profile(
+        root: &std::path::Path,
+        file_name: &str,
+        content: &str,
+    ) -> std::path::PathBuf {
+        fs::create_dir_all(root).expect("create hardware profile dir");
+        let path = root.join(file_name);
+        fs::write(&path, content).expect("write hardware profile");
+        path
+    }
+
     #[test]
     fn build_entries_combines_capability_backend_and_adapter_state() {
-        let entries = build_entries(&state(), &[]);
+        let entries = build_entries(&state(), &["screen".to_string(), "camera".to_string()]);
 
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].modality, "camera");
@@ -776,6 +1492,56 @@ mod tests {
 
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].modality, "screen");
+    }
+
+    #[test]
+    fn build_entries_adds_ui_tree_entry_from_support_matrix() {
+        let entries = build_entries(&state_with_ui_tree_backend(), &["ui_tree".to_string()]);
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].modality, "ui_tree");
+        assert_eq!(entries[0].source_backend, "at-spi");
+        assert!(entries[0].available);
+        assert!(entries[0].conditional);
+        assert_eq!(entries[0].readiness, "native-live");
+        assert_eq!(
+            entries[0].adapter_id.as_deref(),
+            Some("ui_tree.atspi-native")
+        );
+        assert!(
+            entries[0]
+                .backend_details
+                .iter()
+                .any(|item| item == "ui_tree_current_environment_id=atspi-live"),
+            "ui_tree metadata entry should expose current support row"
+        );
+        assert!(
+            entries[0]
+                .notes
+                .iter()
+                .any(|item| item == "ui_tree_snapshot_attached=true"),
+            "ui_tree metadata entry should expose snapshot attachment state"
+        );
+    }
+
+    #[test]
+    fn build_view_treats_requested_ui_tree_as_known_modality() {
+        let view = build_view(
+            &state_with_ui_tree_backend(),
+            &DeviceMetadataGetRequest {
+                modalities: vec!["ui_tree".to_string()],
+                only_available: false,
+                include_state_notes: false,
+            },
+        );
+
+        assert!(view.summary.unknown_modalities.is_empty());
+        assert_eq!(
+            view.summary.available_modalities,
+            vec!["ui_tree".to_string()]
+        );
+        assert_eq!(view.entries.len(), 1);
+        assert_eq!(view.entries[0].modality, "ui_tree");
     }
 
     #[test]
@@ -954,6 +1720,147 @@ mod tests {
                 .iter()
                 .any(|note| note == "release_grade_contract_kinds=release-grade-runtime-helper"),
             "metadata response should expose aggregated release-grade contract kinds"
+        );
+    }
+
+    #[test]
+    fn build_device_metadata_response_adds_hardware_profile_notes_and_entry_details() {
+        let mut app = app_state();
+        let profile_root = app
+            .config
+            .deviced_socket
+            .parent()
+            .expect("deviced socket parent");
+        let profile_path = write_hardware_profile(
+            profile_root,
+            "framework-laptop-13-amd-7040.yaml",
+            r#"id: framework-laptop-13-amd-7040
+platform_tier: tier1
+gpu: integrated
+audio: required
+camera: required
+canonical_hardware_profile_id: generic-x86_64-uefi
+platform_media_id: generic-x86_64-uefi
+runtime_profile: /etc/aios/runtime/default-runtime-profile.yaml
+bringup_status: nominated-formal-tier1
+hardware_evidence_required: true
+release_track_intent:
+  - developer-preview
+  - product-preview
+"#,
+        );
+        app.config.hardware_profile_path = Some(profile_path.clone());
+
+        let mut device_state = state_with_ui_tree_backend();
+        device_state.capabilities.push(DeviceCapabilityDescriptor {
+            modality: "input".to_string(),
+            available: true,
+            conditional: false,
+            source_backend: "libinput".to_string(),
+            notes: vec!["input-capability".to_string()],
+        });
+        device_state.backend_statuses.push(DeviceBackendStatus {
+            modality: "input".to_string(),
+            backend: "libinput".to_string(),
+            available: true,
+            readiness: "native-live".to_string(),
+            details: vec!["devices=keyboard,mouse".to_string()],
+        });
+        device_state
+            .capture_adapters
+            .push(DeviceCaptureAdapterPlan {
+                modality: "input".to_string(),
+                backend: "libinput".to_string(),
+                adapter_id: "input.libinput-native".to_string(),
+                execution_path: "native-live".to_string(),
+                preview_object_kind: "input_event".to_string(),
+                notes: vec![],
+            });
+
+        let response = build_device_metadata_response(
+            &app,
+            &DeviceMetadataGetRequest {
+                modalities: vec![
+                    "screen".to_string(),
+                    "input".to_string(),
+                    "camera".to_string(),
+                    "ui_tree".to_string(),
+                ],
+                only_available: false,
+                include_state_notes: false,
+            },
+            &device_state,
+        );
+
+        let screen_entry = response
+            .entries
+            .iter()
+            .find(|entry| entry.modality == "screen")
+            .expect("screen entry");
+        let ui_tree_entry = response
+            .entries
+            .iter()
+            .find(|entry| entry.modality == "ui_tree")
+            .expect("ui_tree entry");
+
+        assert!(
+            screen_entry
+                .backend_details
+                .iter()
+                .any(|item| item == "hardware_profile_id=framework-laptop-13-amd-7040"),
+            "screen entry should expose hardware profile id"
+        );
+        assert!(
+            screen_entry
+                .backend_details
+                .iter()
+                .any(|item| item == "hardware_profile_expectation=required"),
+            "screen entry should expose hardware profile expectation"
+        );
+        assert!(
+            screen_entry.notes.iter().any(
+                |item| item == "hardware_profile_validation_status=missing-required-modalities"
+            ),
+            "screen entry should expose hardware profile validation status"
+        );
+        assert!(
+            ui_tree_entry
+                .backend_details
+                .iter()
+                .any(|item| item == "hardware_profile_expectation=required"),
+            "ui_tree entry should expose required expectation from the hardware profile"
+        );
+        assert!(
+            response
+                .notes
+                .iter()
+                .any(|note| note == &format!("hardware_profile_path={}", profile_path.display())),
+            "metadata response should expose hardware profile path"
+        );
+        assert!(
+            response
+                .notes
+                .iter()
+                .any(|note| note == "hardware_profile_id=framework-laptop-13-amd-7040"),
+            "metadata response should expose hardware profile id"
+        );
+        assert!(
+            response.notes.iter().any(|note| note
+                == "hardware_profile_required_modalities=audio,camera,input,screen,ui_tree"),
+            "metadata response should expose required hardware profile modalities"
+        );
+        assert!(
+            response
+                .notes
+                .iter()
+                .any(|note| note == "hardware_profile_missing_required_modalities=audio,camera"),
+            "metadata response should expose missing required modalities"
+        );
+        assert!(
+            response.notes.iter().any(
+                |note| note == "hardware_profile_validation_status=missing-required-modalities"
+            ),
+            "metadata response should expose hardware profile validation status"
         );
     }
 

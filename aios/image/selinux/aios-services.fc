@@ -1,0 +1,11 @@
+/usr/lib/aios/agentd              -- gen_context(system_u:object_r:aios_agentd_exec_t,s0)
+/usr/lib/aios/sessiond            -- gen_context(system_u:object_r:aios_sessiond_exec_t,s0)
+/usr/lib/aios/policyd             -- gen_context(system_u:object_r:aios_policyd_exec_t,s0)
+/usr/lib/aios/runtimed            -- gen_context(system_u:object_r:aios_runtimed_exec_t,s0)
+/usr/lib/aios/deviced             -- gen_context(system_u:object_r:aios_deviced_exec_t,s0)
+/usr/lib/aios/updated             -- gen_context(system_u:object_r:aios_updated_exec_t,s0)
+
+/var/lib/aios(/.*)?                   gen_context(system_u:object_r:aios_var_lib_t,s0)
+/run/aios(/.*)?                       gen_context(system_u:object_r:aios_runtime_t,s0)
+/var/log/aios(/.*)?                   gen_context(system_u:object_r:aios_log_t,s0)
+/run/aios/.*\.sock                    gen_context(system_u:object_r:aios_socket_t,s0)

@@ -794,7 +794,7 @@ impl Database {
             "SELECT recovery_id, session_id, payload_json FROM recovery_refs WHERE session_id = ?1 ORDER BY created_at DESC LIMIT 1",
         )?;
 
-        if let Some((recovery_id, payload_json)) = statement
+        let mut recovery = if let Some((recovery_id, payload_json)) = statement
             .query_row(params![session_id], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(2)?))
             })
@@ -802,26 +802,128 @@ impl Database {
         {
             let mut recovery: RecoveryRef = serde_json::from_str(&payload_json)?;
             recovery.recovery_id = recovery_id;
-            return Ok(recovery);
-        }
+            recovery
+        } else {
+            let recovery = RecoveryRef {
+                recovery_id: format!("recovery-{}", Uuid::new_v4()),
+                session_id: session_id.to_string(),
+                status: "not-generated".to_string(),
+                updated_at: None,
+                latest_task_id: None,
+                latest_task_state: None,
+                resumable_task_ids: Vec::new(),
+                pending_task_ids: Vec::new(),
+                approved_task_ids: Vec::new(),
+                portal_handle_ids: Vec::new(),
+                working_memory_refs: Vec::new(),
+                notes: Vec::new(),
+            };
 
-        let recovery = RecoveryRef {
-            recovery_id: format!("recovery-{}", Uuid::new_v4()),
-            session_id: session_id.to_string(),
-            status: "not-generated".to_string(),
+            connection.execute(
+                "INSERT INTO recovery_refs (recovery_id, session_id, payload_json, created_at) VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    &recovery.recovery_id,
+                    &recovery.session_id,
+                    serde_json::to_string(&recovery)?,
+                    Utc::now().to_rfc3339(),
+                ],
+            )?;
+
+            recovery
         };
 
-        connection.execute(
-            "INSERT INTO recovery_refs (recovery_id, session_id, payload_json, created_at) VALUES (?1, ?2, ?3, ?4)",
-            params![
-                &recovery.recovery_id,
-                &recovery.session_id,
-                serde_json::to_string(&recovery)?,
-                Utc::now().to_rfc3339(),
-            ],
-        )?;
-
+        self.enrich_recovery_ref(&connection, &mut recovery)?;
         Ok(recovery)
+    }
+
+    fn enrich_recovery_ref(
+        &self,
+        connection: &Connection,
+        recovery: &mut RecoveryRef,
+    ) -> anyhow::Result<()> {
+        let mut task_statement = connection.prepare(
+            "SELECT task_id, session_id, state, title, created_at FROM tasks WHERE session_id = ?1 ORDER BY created_at DESC LIMIT ?2",
+        )?;
+        let task_rows = task_statement.query_map(
+            params![&recovery.session_id, sanitize_limit(Some(50))],
+            map_task_row,
+        )?;
+        let tasks = task_rows.collect::<Result<Vec<_>, _>>()?;
+
+        let mut handle_statement = connection.prepare(
+            "SELECT handle_id FROM portal_handles WHERE session_id = ?1 ORDER BY expiry DESC",
+        )?;
+        let handle_rows = handle_statement
+            .query_map(params![&recovery.session_id], |row| row.get::<_, String>(0))?;
+        let portal_handle_ids = handle_rows.collect::<Result<Vec<_>, _>>()?;
+        let working_memory_refs =
+            self.list_working_memory_ref_ids(connection, &recovery.session_id, 20)?;
+
+        let latest_task = tasks.first();
+        let resumable_task_ids = tasks
+            .iter()
+            .filter(|task| matches!(task.state.as_str(), "planned" | "approved" | "failed"))
+            .map(|task| task.task_id.clone())
+            .collect::<Vec<_>>();
+        let pending_task_ids = tasks
+            .iter()
+            .filter(|task| matches!(task.state.as_str(), "planned" | "replanned"))
+            .map(|task| task.task_id.clone())
+            .collect::<Vec<_>>();
+        let approved_task_ids = tasks
+            .iter()
+            .filter(|task| task.state == "approved")
+            .map(|task| task.task_id.clone())
+            .collect::<Vec<_>>();
+
+        recovery.updated_at = Some(Utc::now().to_rfc3339());
+        recovery.latest_task_id = latest_task.map(|task| task.task_id.clone());
+        recovery.latest_task_state = latest_task.map(|task| task.state.clone());
+        recovery.resumable_task_ids = resumable_task_ids.clone();
+        recovery.pending_task_ids = pending_task_ids.clone();
+        recovery.approved_task_ids = approved_task_ids.clone();
+        recovery.portal_handle_ids = portal_handle_ids.clone();
+        recovery.working_memory_refs = working_memory_refs.clone();
+        recovery.status = if latest_task.is_none() && portal_handle_ids.is_empty() {
+            "not-generated".to_string()
+        } else if !resumable_task_ids.is_empty() && !portal_handle_ids.is_empty() {
+            "resume-ready".to_string()
+        } else if !approved_task_ids.is_empty() {
+            "approval-granted".to_string()
+        } else if !pending_task_ids.is_empty() {
+            "task-pending".to_string()
+        } else {
+            "idle".to_string()
+        };
+
+        let mut notes = recovery.notes.clone();
+        notes.push(format!("resumable_tasks={}", resumable_task_ids.len()));
+        notes.push(format!("portal_handles={}", portal_handle_ids.len()));
+        notes.push(format!("working_memory_refs={}", working_memory_refs.len()));
+        if let Some(task) = latest_task {
+            notes.push(format!("latest_task={}:{}", task.task_id, task.state));
+        }
+        notes.sort();
+        notes.dedup();
+        recovery.notes = notes;
+
+        Ok(())
+    }
+
+    fn list_working_memory_ref_ids(
+        &self,
+        connection: &Connection,
+        session_id: &str,
+        limit: u32,
+    ) -> anyhow::Result<Vec<String>> {
+        let mut statement = connection.prepare(
+            "SELECT ref_id FROM memory_working_refs WHERE session_id = ?1 ORDER BY created_at DESC LIMIT ?2",
+        )?;
+        let rows = statement
+            .query_map(params![session_id, sanitize_limit(Some(limit))], |row| {
+                row.get::<_, String>(0)
+            })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
     pub fn memory_summary(&self) -> anyhow::Result<MemorySummary> {

@@ -682,6 +682,8 @@ mod mode {
         render_all_outputs: bool,
         dirty: bool,
         pointer_operation: Option<PointerOperation>,
+        state_last_modified: Option<SystemTime>,
+        state_last_size: Option<u64>,
         persisted: PersistedWindowManagerState,
     }
 
@@ -710,6 +712,8 @@ mod mode {
                 render_all_outputs: config.virtual_outputs.len() > 1,
                 dirty: false,
                 pointer_operation: None,
+                state_last_modified: None,
+                state_last_size: None,
                 persisted: PersistedWindowManagerState::default(),
             };
             manager.load_state();
@@ -717,12 +721,19 @@ mod mode {
         }
 
         fn load_state(&mut self) {
+            self.load_state_from_disk(false);
+        }
+
+        fn load_state_from_disk(&mut self, reloaded: bool) {
             let Some(path) = self.state_path.as_ref() else {
+                self.state_last_modified = None;
+                self.state_last_size = None;
                 self.status = "ephemeral".to_string();
                 return;
             };
             match fs::read_to_string(path) {
                 Ok(contents) => {
+                    self.observe_state_file();
                     match serde_json::from_str::<PersistedWindowManagerState>(&contents) {
                         Ok(state) => {
                             self.active_workspace_index = state
@@ -730,24 +741,82 @@ mod mode {
                                 .min(self.workspace_count.saturating_sub(1));
                             self.active_output_id = state.active_output_id.clone();
                             self.persisted = state;
-                            self.status =
-                                format!("persistent(loaded={})", self.persisted.windows.len());
+                            self.status = format!(
+                                "persistent({}={})",
+                                if reloaded { "reloaded" } else { "loaded" },
+                                self.persisted.windows.len()
+                            );
                         }
                         Err(error) => {
                             self.persisted = PersistedWindowManagerState::default();
-                            self.status = format!("persistent(load-error:{error})");
+                            self.status = format!(
+                                "persistent({}-error:{error})",
+                                if reloaded { "reload" } else { "load" }
+                            );
                         }
                     }
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    self.state_last_modified = None;
+                    self.state_last_size = None;
                     self.persisted = PersistedWindowManagerState::default();
-                    self.status = "persistent(empty)".to_string();
+                    self.status = if reloaded {
+                        "persistent(reload-empty)".to_string()
+                    } else {
+                        "persistent(empty)".to_string()
+                    };
                 }
                 Err(error) => {
                     self.persisted = PersistedWindowManagerState::default();
-                    self.status = format!("persistent(load-error:{error})");
+                    self.status = format!(
+                        "persistent({}-error:{error})",
+                        if reloaded { "reload" } else { "load" }
+                    );
                 }
             }
+        }
+
+        fn observe_state_file(&mut self) {
+            let Some(path) = self.state_path.as_ref() else {
+                self.state_last_modified = None;
+                self.state_last_size = None;
+                return;
+            };
+            match fs::metadata(path) {
+                Ok(metadata) => {
+                    self.state_last_modified = metadata.modified().ok();
+                    self.state_last_size = Some(metadata.len());
+                }
+                Err(_) => {
+                    self.state_last_modified = None;
+                    self.state_last_size = None;
+                }
+            }
+        }
+
+        fn reload_state_if_changed(&mut self) -> bool {
+            let Some(path) = self.state_path.as_ref() else {
+                return false;
+            };
+            let changed = match fs::metadata(path) {
+                Ok(metadata) => {
+                    let modified = metadata.modified().ok();
+                    let size = Some(metadata.len());
+                    self.state_last_modified != modified || self.state_last_size != size
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    self.state_last_modified.is_some() || self.state_last_size.is_some()
+                }
+                Err(error) => {
+                    self.status = format!("persistent(reload-metadata-error:{error})");
+                    return false;
+                }
+            };
+            if !changed {
+                return false;
+            }
+            self.load_state_from_disk(true);
+            true
         }
 
         fn state_path_string(&self) -> Option<String> {
@@ -1009,6 +1078,7 @@ mod mode {
                     layout_height: output.frame.height,
                     primary: output.primary,
                     active: Some(output.output_id.as_str()) == self.active_output_id.as_deref(),
+                    renderable: output.renderable,
                 })
                 .collect()
         }
@@ -1294,6 +1364,7 @@ mod mode {
 ",
             )
             .map_err(|error| error.to_string())?;
+            self.observe_state_file();
             self.status = format!("persistent(saved={})", self.persisted.windows.len());
             self.dirty = false;
             Ok(())
@@ -3443,6 +3514,9 @@ mod mode {
             window_size: Size<i32, Physical>,
         ) -> Vec<ToplevelPlacement> {
             self.window_manager.sync_outputs(window_size);
+            if self.window_manager.reload_state_if_changed() {
+                self.window_manager.sync_outputs(window_size);
+            }
             self.session
                 .sync_surface_layouts(window_size.w, window_size.h);
             self.session.clear_surface_embeddings();

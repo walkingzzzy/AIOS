@@ -1,0 +1,89 @@
+schema_version: "1.0.0"
+description: "AIOS system-level sandbox policy for worker and compat processes"
+updated_at: "2026-03-23"
+
+profiles:
+  runtime-worker:
+    description: "Sandbox profile for runtime inference workers"
+    isolation: bubblewrap
+    capabilities_drop:
+      - CAP_NET_ADMIN
+      - CAP_SYS_ADMIN
+      - CAP_SYS_PTRACE
+      - CAP_MKNOD
+    namespaces:
+      user: true
+      network: false
+      pid: true
+      ipc: true
+    filesystem:
+      ro_bind:
+        - /usr
+        - /lib
+        - /lib64
+        - /etc/alternatives
+        - /etc/ld.so.cache
+      bind:
+        - "${AIOS_MODEL_DIR}:/models:ro"
+        - "${AIOS_STATE_DIR}/runtimed:/state"
+      tmpfs:
+        - /tmp
+      dev: /dev/null,/dev/zero,/dev/urandom
+    resource_limits:
+      max_memory_mb: 4096
+      max_cpu_seconds: 300
+      max_file_descriptors: 1024
+      max_processes: 32
+    seccomp: default-with-gpu
+
+  compat-browser:
+    description: "Sandbox for compatibility browser worker"
+    isolation: bubblewrap
+    capabilities_drop: all
+    namespaces:
+      user: true
+      network: true
+      pid: true
+      ipc: true
+    filesystem:
+      ro_bind:
+        - /usr
+        - /lib
+        - /lib64
+      bind:
+        - "${AIOS_STATE_DIR}/compat/browser:/state"
+      tmpfs:
+        - /tmp
+      dev: /dev/null,/dev/zero,/dev/urandom
+    resource_limits:
+      max_memory_mb: 1024
+      max_cpu_seconds: 60
+      max_file_descriptors: 256
+      max_processes: 8
+    seccomp: strict
+
+  compat-code-sandbox:
+    description: "Sandbox for dynamic code execution"
+    isolation: bubblewrap
+    capabilities_drop: all
+    namespaces:
+      user: true
+      network: false
+      pid: true
+      ipc: true
+    filesystem:
+      ro_bind:
+        - /usr
+        - /lib
+        - /lib64
+      bind:
+        - "${AIOS_STATE_DIR}/compat/code-sandbox:/state"
+      tmpfs:
+        - /tmp:size=128M
+      dev: /dev/null,/dev/zero,/dev/urandom
+    resource_limits:
+      max_memory_mb: 512
+      max_cpu_seconds: 30
+      max_file_descriptors: 128
+      max_processes: 4
+    seccomp: strict-no-network

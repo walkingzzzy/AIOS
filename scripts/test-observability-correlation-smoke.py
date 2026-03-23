@@ -53,6 +53,82 @@ def write_jsonl(path: Path, records: list[dict[str, object]]) -> None:
     path.write_text(payload + ("\n" if payload else ""), encoding="utf-8")
 
 
+def write_runtime_export_bundle(
+    state_root: Path,
+    runtime_events: list[dict[str, object]],
+    remote_audits: list[dict[str, object]],
+    observability_records: list[dict[str, object]],
+) -> Path:
+    export_root = state_root / "runtimed" / "exports" / "runtime-observability-synthetic"
+    runtime_events_path = export_root / "runtime-events.jsonl"
+    remote_audit_path = export_root / "attested-remote-audit.jsonl"
+    observability_path = export_root / "observability.jsonl"
+    manifest_path = export_root / "manifest.json"
+    write_jsonl(runtime_events_path, runtime_events)
+    write_jsonl(remote_audit_path, remote_audits)
+    write_jsonl(observability_path, observability_records)
+
+    task_ids = sorted(
+        {
+            str(item.get("task_id"))
+            for item in [*runtime_events, *remote_audits, *observability_records]
+            if isinstance(item.get("task_id"), str) and item.get("task_id")
+        }
+    )
+    backend_ids = sorted(
+        {
+            str(item.get("backend_id"))
+            for item in [*runtime_events, *remote_audits, *observability_records]
+            if isinstance(item.get("backend_id"), str) and item.get("backend_id")
+        }
+    )
+    artifact_paths = sorted(
+        {
+            str(item.get("artifact_path"))
+            for item in [*runtime_events, *remote_audits, *observability_records]
+            if isinstance(item.get("artifact_path"), str) and item.get("artifact_path")
+        }
+    )
+    manifest = {
+        "export_id": "runtime-observability-synthetic",
+        "created_at": "2026-03-16T00:03:00+00:00",
+        "service_id": "aios-runtimed",
+        "counts": {
+            "runtime_event_count": len(runtime_events),
+            "observability_count": len(observability_records),
+            "remote_audit_count": len(remote_audits),
+            "backend_count": len(backend_ids),
+            "correlated_task_count": len(task_ids),
+            "artifact_count": len(artifact_paths),
+        },
+        "correlation": {
+            "task_ids": task_ids,
+            "backend_ids": backend_ids,
+            "artifact_paths": artifact_paths,
+        },
+        "exported_artifacts": {
+            "manifest_path": str(manifest_path),
+            "runtime_events_path": str(runtime_events_path),
+            "remote_audit_path": str(remote_audit_path),
+            "observability_path": str(observability_path),
+        },
+        "runtime_events": runtime_events,
+        "remote_audit": remote_audits,
+        "observability": observability_records,
+    }
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return manifest_path
+
+
+def find_runtime_export_manifest(state_root: Path) -> Path | None:
+    export_root = state_root / "runtimed" / "exports"
+    if not export_root.exists():
+        return None
+    manifests = sorted(export_root.glob("*/manifest.json"), key=lambda item: item.stat().st_mtime, reverse=True)
+    return manifests[0] if manifests else None
+
+
 def create_session_db(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(path)
@@ -150,7 +226,7 @@ def create_session_db(path: Path) -> None:
         connection.close()
 
 
-def build_report(report_prefix: Path, state_root: Path) -> dict:
+def build_report(report_prefix: Path, state_root: Path, runtime_export: Path | None = None) -> dict:
     build_cmd = [
         sys.executable,
         str(ROOT / "scripts" / "build-observability-correlation-report.py"),
@@ -158,15 +234,25 @@ def build_report(report_prefix: Path, state_root: Path) -> dict:
         str(state_root / "sessiond.sqlite3"),
         "--policy-audit-log",
         str(state_root / "audit.jsonl"),
-        "--runtime-events-log",
-        str(state_root / "runtime-events.jsonl"),
-        "--remote-audit-log",
-        str(state_root / "remote-audit.jsonl"),
-        "--observability-log",
-        str(state_root / "observability.jsonl"),
+    ]
+    if runtime_export is not None:
+        build_cmd.extend([
+            "--runtime-observability-export",
+            str(runtime_export),
+        ])
+    else:
+        build_cmd.extend([
+            "--runtime-events-log",
+            str(state_root / "runtime-events.jsonl"),
+            "--remote-audit-log",
+            str(state_root / "remote-audit.jsonl"),
+            "--observability-log",
+            str(state_root / "observability.jsonl"),
+        ])
+    build_cmd.extend([
         "--output-prefix",
         str(report_prefix),
-    ]
+    ])
     build_completed = subprocess.run(build_cmd, cwd=ROOT, text=True, capture_output=True, check=False)
     if build_completed.returncode != 0:
         sys.stdout.write(build_completed.stdout)
@@ -194,6 +280,10 @@ def assert_baseline_report(payload: dict) -> None:
     require(
         isinstance(payload["summary"].get("artifact_paths"), list),
         "correlation report summary missing artifact_paths list",
+    )
+    require(
+        isinstance(payload["summary"].get("backend_ids"), list),
+        "correlation report summary missing backend_ids list",
     )
 
     correlations = {item["task_id"]: item for item in payload["correlations"]}
@@ -233,6 +323,10 @@ def assert_vendor_metadata(payload: dict, vendor_evidence: Path) -> None:
         str(vendor_evidence) in payload["summary"].get("artifact_paths", []),
         "correlation report summary missing vendor evidence artifact",
     )
+    require(
+        "local-gpu" in payload["summary"].get("backend_ids", []),
+        "correlation report summary missing backend id",
+    )
     runtime_task = correlations.get("task-runtime")
     require(runtime_task is not None, "correlation report missing task-runtime entry")
     require(
@@ -250,6 +344,10 @@ def assert_vendor_metadata(payload: dict, vendor_evidence: Path) -> None:
     require(
         str(vendor_evidence) in runtime_task.get("artifact_paths", []),
         "task-runtime correlation missing vendor evidence artifact",
+    )
+    require(
+        "local-gpu" in runtime_task.get("backend_ids", []),
+        "task-runtime correlation missing backend id",
     )
 
 
@@ -304,61 +402,63 @@ def run_synthetic_fallback(keep_state: bool) -> int:
                 },
             ],
         )
-        write_jsonl(
-            state_root / "runtime-events.jsonl",
-            [
-                {
-                    "timestamp": "2026-03-16T00:01:20+00:00",
-                    "session_id": "session-correlation",
-                    "task_id": "task-runtime",
-                    "kind": "runtime.infer.completed",
-                    "backend_id": "local-gpu",
-                    "provider_id": "nvidia.jetson.tensorrt",
-                    "runtime_service_id": "aios-runtimed.jetson-vendor-helper",
-                    "provider_status": "available",
-                    "artifact_path": str(vendor_evidence),
-                }
-            ],
-        )
-        write_jsonl(
-            state_root / "remote-audit.jsonl",
-            [
-                {
-                    "timestamp": "2026-03-16T00:01:21+00:00",
-                    "session_id": "session-correlation",
-                    "task_id": "task-runtime",
-                    "status": "completed",
-                    "provider_id": "nvidia.jetson.tensorrt",
-                    "runtime_service_id": "aios-runtimed.jetson-vendor-helper",
-                    "provider_status": "available",
-                    "artifact_path": str(vendor_evidence),
-                }
-            ],
-        )
-        write_jsonl(
-            state_root / "observability.jsonl",
-            [
-                {
-                    "timestamp": "2026-03-16T00:01:25+00:00",
-                    "session_id": "session-correlation",
-                    "task_id": "task-runtime",
-                    "kind": "task.state.updated",
-                    "provider_id": "nvidia.jetson.tensorrt",
-                    "runtime_service_id": "aios-runtimed.jetson-vendor-helper",
-                    "provider_status": "available",
-                    "artifact_path": str(vendor_evidence),
-                },
-                {
-                    "timestamp": "2026-03-16T00:02:05+00:00",
-                    "session_id": "session-correlation",
-                    "task_id": "task-approval",
-                    "kind": "task.state.updated",
-                },
-            ],
+        runtime_event_records = [
+            {
+                "timestamp": "2026-03-16T00:01:20+00:00",
+                "session_id": "session-correlation",
+                "task_id": "task-runtime",
+                "kind": "runtime.infer.completed",
+                "backend_id": "local-gpu",
+                "provider_id": "nvidia.jetson.tensorrt",
+                "runtime_service_id": "aios-runtimed.jetson-vendor-helper",
+                "provider_status": "available",
+                "artifact_path": str(vendor_evidence),
+            }
+        ]
+        remote_audit_records = [
+            {
+                "timestamp": "2026-03-16T00:01:21+00:00",
+                "session_id": "session-correlation",
+                "task_id": "task-runtime",
+                "status": "completed",
+                "backend_id": "local-gpu",
+                "provider_id": "nvidia.jetson.tensorrt",
+                "runtime_service_id": "aios-runtimed.jetson-vendor-helper",
+                "provider_status": "available",
+                "artifact_path": str(vendor_evidence),
+            }
+        ]
+        observability_records = [
+            {
+                "timestamp": "2026-03-16T00:01:25+00:00",
+                "session_id": "session-correlation",
+                "task_id": "task-runtime",
+                "kind": "task.state.updated",
+                "backend_id": "local-gpu",
+                "provider_id": "nvidia.jetson.tensorrt",
+                "runtime_service_id": "aios-runtimed.jetson-vendor-helper",
+                "provider_status": "available",
+                "artifact_path": str(vendor_evidence),
+            },
+            {
+                "timestamp": "2026-03-16T00:02:05+00:00",
+                "session_id": "session-correlation",
+                "task_id": "task-approval",
+                "kind": "task.state.updated",
+            },
+        ]
+        write_jsonl(state_root / "runtime-events.jsonl", runtime_event_records)
+        write_jsonl(state_root / "remote-audit.jsonl", remote_audit_records)
+        write_jsonl(state_root / "observability.jsonl", observability_records)
+        runtime_export = write_runtime_export_bundle(
+            state_root,
+            runtime_event_records,
+            remote_audit_records,
+            observability_records,
         )
 
         report_prefix = temp_root / "out" / "cross-service-correlation-report"
-        payload = build_report(report_prefix, state_root)
+        payload = build_report(report_prefix, state_root, runtime_export=runtime_export)
         assert_baseline_report(payload)
         assert_vendor_metadata(payload, vendor_evidence)
         print(
@@ -371,6 +471,8 @@ def run_synthetic_fallback(keep_state: bool) -> int:
                     "task_count": payload["summary"]["task_count"],
                     "provider_ids": payload["summary"]["provider_ids"],
                     "runtime_service_ids": payload["summary"]["runtime_service_ids"],
+                    "backend_ids": payload["summary"].get("backend_ids", []),
+                    "runtime_export": str(runtime_export),
                 },
                 indent=2,
                 ensure_ascii=False,
@@ -402,8 +504,10 @@ def main() -> int:
         return run_synthetic_fallback(args.keep_state)
 
     state_root = extract_state_root(completed.stdout)
+    runtime_export = find_runtime_export_manifest(state_root / "state")
+    require(runtime_export is not None, "team-b control-plane smoke did not leave a runtime export manifest")
     report_prefix = ROOT / "out" / "validation" / "cross-service-correlation-report"
-    payload = build_report(report_prefix, state_root / "state")
+    payload = build_report(report_prefix, state_root / "state", runtime_export=runtime_export)
     assert_baseline_report(payload)
 
     print(
@@ -418,6 +522,8 @@ def main() -> int:
                 "runtime_event_count": payload["summary"]["runtime_event_count"],
                 "provider_ids": payload["summary"]["provider_ids"],
                 "runtime_service_ids": payload["summary"]["runtime_service_ids"],
+                "backend_ids": payload["summary"].get("backend_ids", []),
+                "runtime_export": str(runtime_export),
             },
             indent=2,
             ensure_ascii=False,
@@ -431,3 +537,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+

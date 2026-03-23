@@ -54,6 +54,15 @@ def default_office_remote_registry() -> Path:
     )
 
 
+def default_mcp_remote_registry() -> Path:
+    return Path(
+        os.environ.get(
+            "AIOS_MCP_BRIDGE_REMOTE_REGISTRY",
+            str(Path.home() / ".local" / "state" / "aios" / "compat-mcp-bridge" / "remote-registry.json"),
+        )
+    )
+
+
 def default_provider_registry_state_dir() -> Path:
     return Path(
         os.environ.get(
@@ -144,6 +153,8 @@ def infer_source(remote_registration: dict, provider_id: str | None) -> str:
         return "office"
     if "browser" in haystack:
         return "browser"
+    if "mcp" in haystack or "a2a" in haystack or "bridge" in haystack:
+        return "mcp"
     return "compat"
 
 
@@ -630,6 +641,7 @@ def write_report(path: Path, payload: dict) -> None:
 def load_remote_governance(
     browser_remote_registry: Path,
     office_remote_registry: Path,
+    mcp_remote_registry: Path | None,
     provider_registry_state_dir: Path,
     *,
     limit: int = 10,
@@ -647,6 +659,7 @@ def load_remote_governance(
     raw_entries = [
         *load_remote_registry(browser_remote_registry, "browser"),
         *load_remote_registry(office_remote_registry, "office"),
+        *(load_remote_registry(mcp_remote_registry, "mcp") if mcp_remote_registry is not None else []),
     ]
     entries: list[dict] = []
     matched_provider_ids: set[str] = set()
@@ -764,6 +777,7 @@ def load_remote_governance(
         "artifact_paths": {
             "browser_remote_registry": str(browser_remote_registry),
             "office_remote_registry": str(office_remote_registry),
+            "mcp_remote_registry": str(mcp_remote_registry) if mcp_remote_registry is not None else None,
             "provider_registry_state_dir": str(provider_registry_state_dir),
         },
         "query": {
@@ -816,6 +830,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="AIOS compat remote governance prototype")
     parser.add_argument("--browser-remote-registry", type=Path, default=default_browser_remote_registry())
     parser.add_argument("--office-remote-registry", type=Path, default=default_office_remote_registry())
+    parser.add_argument("--mcp-remote-registry", type=Path, default=default_mcp_remote_registry())
     parser.add_argument("--provider-registry-state-dir", type=Path, default=default_provider_registry_state_dir())
     parser.add_argument("--limit", type=int, default=8)
     parser.add_argument("--source")
@@ -850,6 +865,7 @@ if __name__ == "__main__":
     payload = load_remote_governance(
         args.browser_remote_registry,
         args.office_remote_registry,
+        args.mcp_remote_registry,
         args.provider_registry_state_dir,
         limit=args.limit,
         filters=filters,

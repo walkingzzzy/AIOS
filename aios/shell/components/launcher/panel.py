@@ -353,7 +353,15 @@ def load_state(agent_socket_path: Path, fixture: Path | None, session_id: str | 
     return load_live_state(agent_socket_path, session_id)
 
 
-def build_model(state: dict, requested_session_id: str | None, user_id: str, intent: str, title: str | None, task_state: str) -> dict:
+def build_model(
+    state: dict,
+    requested_session_id: str | None,
+    user_id: str,
+    intent: str,
+    title: str | None,
+    task_state: str,
+    compositor_summary: dict,
+) -> dict:
     sessions = list(state.get("sessions", []))
     tasks = list(state.get("tasks", []))
     all_tasks = list(state.get("all_tasks", tasks))
@@ -412,6 +420,17 @@ def build_model(state: dict, requested_session_id: str | None, user_id: str, int
             }
         )
 
+    active_workspace_id = compositor_summary.get("active_workspace_id")
+    active_output_id = compositor_summary.get("active_output_id")
+    active_workspace_windows = [
+        item
+        for item in compositor_summary.get("managed_windows", [])
+        if item.get("workspace_id") == active_workspace_id and not item.get("minimized")
+    ]
+    minimized_windows = [
+        item for item in compositor_summary.get("managed_windows", []) if item.get("minimized")
+    ]
+
     actions = [
         {
             "action_id": "create-session",
@@ -435,6 +454,113 @@ def build_model(state: dict, requested_session_id: str | None, user_id: str, int
             "target_state": task_state,
         },
     ]
+    if compositor_summary.get("window_state_path"):
+        actions.extend(
+            [
+                {
+                    "action_id": "restore-recent-window",
+                    "label": "Restore Window",
+                    "enabled": compositor_summary.get("minimized_window_count", 0) > 0,
+                    "tone": "positive",
+                    "workspace_id": active_workspace_id,
+                    "output_id": active_output_id,
+                },
+                {
+                    "action_id": "activate-next-workspace",
+                    "label": "Next Workspace",
+                    "enabled": compositor_summary.get("workspace_count", 1) > 1,
+                    "tone": "neutral",
+                    "workspace_id": active_workspace_id,
+                    "output_id": active_output_id,
+                },
+            ]
+        )
+
+    active_workspace_window_items = [
+        {
+            "label": item.get("title") or item.get("app_id") or item.get("window_key") or "window",
+            "value": " · ".join(
+                part
+                for part in (
+                    item.get("window_policy") or "workspace-window",
+                    item.get("output_id") or "display-1",
+                    item.get("window_key") or "",
+                )
+                if part
+            ),
+            "tone": "neutral",
+            "action": {
+                "action_id": "focus-window",
+                "label": "Focus",
+                "enabled": bool(item.get("window_key")) and bool(compositor_summary.get("window_state_path")),
+                "window_key": item.get("window_key"),
+                "workspace_id": item.get("workspace_id"),
+                "output_id": item.get("output_id"),
+            },
+        }
+        for item in active_workspace_windows
+    ]
+    minimized_window_items = [
+        {
+            "label": item.get("title") or item.get("app_id") or item.get("window_key") or "window",
+            "value": " · ".join(
+                part
+                for part in (
+                    item.get("workspace_id") or "workspace-1",
+                    item.get("output_id") or "display-1",
+                    item.get("window_key") or "",
+                )
+                if part
+            ),
+            "tone": "warning",
+            "action": {
+                "action_id": "restore-window",
+                "label": "Restore",
+                "enabled": bool(item.get("window_key")) and bool(compositor_summary.get("window_state_path")),
+                "window_key": item.get("window_key"),
+                "workspace_id": item.get("workspace_id") or active_workspace_id,
+                "output_id": active_output_id or item.get("output_id"),
+            },
+        }
+        for item in minimized_windows
+    ]
+    window_overview_items = [
+        {
+            "label": "window_manager_status",
+            "value": compositor_summary.get("window_manager_status") or compositor_summary.get("data_status") or "unavailable",
+            "tone": "warning" if compositor_summary.get("data_status") != "ready" else "neutral",
+        },
+        {
+            "label": "active_workspace",
+            "value": active_workspace_id or "workspace-1",
+            "tone": "positive" if active_workspace_id else "neutral",
+        },
+        {
+            "label": "active_output",
+            "value": active_output_id or "-",
+            "tone": "neutral",
+        },
+        {
+            "label": "renderable_outputs",
+            "value": compositor_summary.get("renderable_output_count", 0),
+            "tone": "positive" if compositor_summary.get("renderable_output_count", 0) else "neutral",
+        },
+        {
+            "label": "output_status",
+            "value": compositor_summary.get("release_grade_output_status") or "uninitialized",
+            "tone": "neutral",
+        },
+        {
+            "label": "managed_windows",
+            "value": compositor_summary.get("managed_window_count", 0),
+            "tone": "neutral",
+        },
+        {
+            "label": "minimized_windows",
+            "value": compositor_summary.get("minimized_window_count", 0),
+            "tone": "warning" if compositor_summary.get("minimized_window_count", 0) else "neutral",
+        },
+    ]
 
     return {
         "component_id": "launcher",
@@ -450,6 +576,8 @@ def build_model(state: dict, requested_session_id: str | None, user_id: str, int
             {"label": "Sessions", "value": state.get("session_count", len(sessions)), "tone": "neutral"},
             {"label": "Tasks", "value": len(tasks), "tone": "neutral"},
             {"label": "Focus", "value": resolved_session_id or "none", "tone": tone_for((focus_session or {}).get("status"))},
+            {"label": "Workspace", "value": active_workspace_id or "-", "tone": "positive" if active_workspace_id else "neutral"},
+            {"label": "Minimized", "value": compositor_summary.get("minimized_window_count", 0), "tone": "warning" if compositor_summary.get("minimized_window_count", 0) else "neutral"},
         ],
         "actions": actions,
         "sections": [
@@ -516,7 +644,7 @@ def build_model(state: dict, requested_session_id: str | None, user_id: str, int
                     {"label": "session_id", "value": focus_session.get("session_id"), "tone": "neutral"},
                     {"label": "user_id", "value": focus_session.get("user_id"), "tone": "neutral"},
                     {"label": "status", "value": focus_session.get("status"), "tone": tone_for(focus_session.get("status"))},
-                    {"label": "created_at", "value": focus_session.get("created_at", "-"), "tone": "neutral"},
+                    {"label": "created_at", "value": focus_session.get("created_at", "-") , "tone": "neutral"},
                 ],
                 "empty_state": "No active session selected",
             },
@@ -543,6 +671,24 @@ def build_model(state: dict, requested_session_id: str | None, user_id: str, int
                 ],
                 "empty_state": "No tasks in session",
             },
+            {
+                "section_id": "window-overview",
+                "title": "Window Restore",
+                "items": window_overview_items,
+                "empty_state": "No compositor window manager summary",
+            },
+            {
+                "section_id": "active-workspace-windows",
+                "title": "Active Workspace Windows",
+                "items": active_workspace_window_items,
+                "empty_state": "No visible windows in the active workspace",
+            },
+            {
+                "section_id": "minimized-windows",
+                "title": "Minimized Windows",
+                "items": minimized_window_items,
+                "empty_state": "No minimized windows",
+            },
         ],
         "meta": {
             "requested_session_id": requested_session_id,
@@ -564,6 +710,32 @@ def build_model(state: dict, requested_session_id: str | None, user_id: str, int
             "focus_session_last_resumed_at": (focus_session or {}).get("last_resumed_at"),
             "data_source_status": state.get("data_source_status", "ready"),
             "data_source_error": state.get("data_source_error"),
+            "compositor_data_status": compositor_summary.get("data_status"),
+            "compositor_data_error": compositor_summary.get("data_error"),
+            "compositor_runtime_phase": compositor_summary.get("runtime_phase"),
+            "compositor_runtime_state_status": compositor_summary.get("runtime_state_status"),
+            "compositor_runtime_state_path": compositor_summary.get("runtime_state_path"),
+            "compositor_window_state_path": compositor_summary.get("window_state_path"),
+            "compositor_window_manager_status": compositor_summary.get("window_manager_status"),
+            "workspace_count": compositor_summary.get("workspace_count", 1),
+            "active_workspace_index": compositor_summary.get("active_workspace_index", 0),
+            "active_workspace_id": active_workspace_id,
+            "active_output_id": active_output_id,
+            "output_count": compositor_summary.get("output_count", 0),
+            "renderable_output_count": compositor_summary.get("renderable_output_count", 0),
+            "non_renderable_output_count": compositor_summary.get("non_renderable_output_count", 0),
+            "release_grade_output_status": compositor_summary.get("release_grade_output_status"),
+            "managed_window_count": compositor_summary.get("managed_window_count", 0),
+            "visible_window_count": compositor_summary.get("visible_window_count", 0),
+            "floating_window_count": compositor_summary.get("floating_window_count", 0),
+            "minimized_window_count": compositor_summary.get("minimized_window_count", 0),
+            "window_move_count": compositor_summary.get("window_move_count", 0),
+            "window_resize_count": compositor_summary.get("window_resize_count", 0),
+            "window_minimize_count": compositor_summary.get("window_minimize_count", 0),
+            "window_restore_count": compositor_summary.get("window_restore_count", 0),
+            "last_minimized_window_key": compositor_summary.get("last_minimized_window_key"),
+            "last_restored_window_key": compositor_summary.get("last_restored_window_key"),
+            "workspace_window_counts": compositor_summary.get("workspace_window_counts", {}),
         },
     }
 
@@ -613,7 +785,27 @@ def resolve_action_session_id(args: argparse.Namespace) -> str | None:
     return None
 
 
+
+def dispatch_window_action(args: argparse.Namespace) -> dict:
+    command = [sys.executable, str(TASK_SURFACE_PANEL), "action", "--action", args.action]
+    if args.compositor_runtime_state is not None:
+        command.extend(["--compositor-runtime-state", str(args.compositor_runtime_state)])
+    if args.compositor_window_state is not None:
+        command.extend(["--compositor-window-state", str(args.compositor_window_state)])
+    if args.window_key:
+        command.extend(["--window-key", args.window_key])
+    if args.workspace_id:
+        command.extend(["--workspace-id", args.workspace_id])
+    if args.output_id:
+        command.extend(["--output-id", args.output_id])
+    completed = subprocess.run(command, check=True, text=True, capture_output=True)
+    return json.loads(completed.stdout.strip() or "{}")
+
+
 def run_action(args: argparse.Namespace) -> dict:
+    if args.action in WINDOW_ACTION_IDS:
+        return dispatch_window_action(args)
+
     if args.action == "create-session":
         action_args = argparse.Namespace(
             user_id=args.user_id,
@@ -683,6 +875,11 @@ def main() -> int:
     parser.add_argument("--title")
     parser.add_argument("--state", default="planned")
     parser.add_argument("--action")
+    parser.add_argument("--window-key")
+    parser.add_argument("--workspace-id")
+    parser.add_argument("--output-id")
+    parser.add_argument("--compositor-runtime-state", type=Path, default=default_compositor_runtime_state())
+    parser.add_argument("--compositor-window-state", type=Path, default=default_compositor_window_state())
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--interval", type=float, default=2.0)
     parser.add_argument("--iterations", type=int, default=1)
@@ -699,7 +896,19 @@ def main() -> int:
         iterations = max(1, args.iterations)
         for index in range(iterations):
             state = load_state(args.agent_socket, args.fixture, args.session_id)
-            model = build_model(state, args.session_id, args.user_id, args.intent, args.title, args.state)
+            compositor_summary = load_compositor_summary(
+                args.compositor_runtime_state,
+                args.compositor_window_state,
+            )
+            model = build_model(
+                state,
+                args.session_id,
+                args.user_id,
+                args.intent,
+                args.title,
+                args.state,
+                compositor_summary,
+            )
             if args.json:
                 print(json.dumps(model, indent=2, ensure_ascii=False))
             else:
@@ -711,7 +920,19 @@ def main() -> int:
         return 0
 
     state = load_state(args.agent_socket, args.fixture, args.session_id)
-    model = build_model(state, args.session_id, args.user_id, args.intent, args.title, args.state)
+    compositor_summary = load_compositor_summary(
+        args.compositor_runtime_state,
+        args.compositor_window_state,
+    )
+    model = build_model(
+        state,
+        args.session_id,
+        args.user_id,
+        args.intent,
+        args.title,
+        args.state,
+        compositor_summary,
+    )
     if args.command == "model" or args.json:
         print(json.dumps(model, indent=2, ensure_ascii=False))
     else:

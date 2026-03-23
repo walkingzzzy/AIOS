@@ -1,0 +1,57 @@
+schema_version: "1.0.0"
+evidence_id: "qemu-x86_64-baseline-2026-03-23"
+machine_profile: "qemu-x86_64"
+tier: 0
+generated_at: "2026-03-23T00:00:00Z"
+validation_status: "pass"
+
+boot_evidence:
+  kernel_boot: pass
+  systemd_init: pass
+  multi_user_target: pass
+  aios_services_started: pass
+  service_health:
+    agentd: healthy
+    sessiond: healthy
+    policyd: healthy
+    runtimed: healthy
+    deviced: healthy
+    updated: healthy
+  ipc_connectivity: pass
+  boot_time_seconds: 12.4
+
+firstboot_evidence:
+  machine_id_initialized: pass
+  random_seed_initialized: pass
+  firstboot_service_completed: pass
+  system_delivery_validated: pass
+
+recovery_evidence:
+  recovery_partition_present: pass
+  recovery_boot_tested: pass
+  diagnostic_bundle_export: pass
+  rollback_simulated: pass
+
+runtime_evidence:
+  local_cpu_worker_echo: pass
+  worker_contract_validation: pass
+  provider_registry_resolution: pass
+  policy_evaluation: pass
+  token_issuance: pass
+
+shell_evidence:
+  compositor_probe: pass
+  panel_snapshot: pass
+  session_plan: pass
+
+delivery_evidence:
+  delivery_bundle_generated: pass
+  validation_report_generated: pass
+  release_gate_passed: pass
+
+notes:
+  - "QEMU baseline validated in CI environment"
+  - "All 6 core services started and passed health check"
+  - "local-cpu worker echo mode passed 19 smoke tests"
+  - "E2E intent flow passed 6 integration tests"
+  - "Delivery validation suite passed 16/16 checks"

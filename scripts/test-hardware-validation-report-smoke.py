@@ -43,6 +43,7 @@ def main() -> int:
     evidence_index_out = temp_root / "hardware-validation-evidence.json"
     support_matrix_path = temp_root / "support-matrix.md"
     known_limitations_path = temp_root / "known-limitations.md"
+    device_metadata_path = temp_root / "device-metadata.json"
     vendor_runtime_evidence = temp_root / "vendor-runtime-evidence.json"
 
     profile_path.write_text(
@@ -130,6 +131,33 @@ def main() -> int:
         )
         + "\n"
     )
+    device_metadata_path.write_text(
+        json.dumps(
+            {
+                "provider_id": "device.metadata.local",
+                "notes": [
+                    "hardware_profile_id=framework-laptop-13-amd-7040",
+                    "hardware_profile_path=/usr/share/aios/hardware/profiles/framework-laptop-13-amd-7040.yaml",
+                    "hardware_profile_canonical_id=generic-x86_64-uefi",
+                    "hardware_profile_platform_media_id=generic-x86_64-uefi",
+                    "hardware_profile_platform_tier=tier1",
+                    "hardware_profile_bringup_status=nominated-formal-tier1",
+                    "hardware_profile_runtime_profile=/etc/aios/runtime/default-runtime-profile.yaml",
+                    "hardware_profile_hardware_evidence_required=true",
+                    "hardware_profile_validation_status=matched",
+                    "hardware_profile_required_modalities=audio,camera,input,screen,ui_tree",
+                    "hardware_profile_conditional_modalities=",
+                    "hardware_profile_available_expected_modalities=audio,camera,input,screen,ui_tree",
+                    "hardware_profile_missing_required_modalities=",
+                    "hardware_profile_missing_conditional_modalities=",
+                    "hardware_profile_release_track_intent=developer-preview,product-preview",
+                ],
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
+        + "\n"
+    )
     evaluator_path.write_text(
         json.dumps(
             {
@@ -208,6 +236,8 @@ def main() -> int:
             "ready",
             "--device-available-modalities",
             "audio,camera,input,screen,ui_tree",
+            "--device-metadata-artifact",
+            str(device_metadata_path),
             "--device-backend-state-artifact",
             str(backend_state_path),
             "--vendor-runtime-evidence",
@@ -247,6 +277,10 @@ def main() -> int:
         "report device metadata modalities mismatch",
     )
     require(
+        f"- device.metadata artifact attached: {device_metadata_path}" in report_text,
+        "report device metadata artifact mismatch",
+    )
+    require(
         "- release-grade backend ids: pipewire,xdg-desktop-portal-screencast" in report_text,
         "report release-grade backend ids mismatch",
     )
@@ -282,6 +316,27 @@ def main() -> int:
         f"- vendor runtime evidence attached: {vendor_runtime_evidence}" in report_text,
         "report vendor runtime evidence path mismatch",
     )
+    require("## Device Profile Alignment" in report_text, "report device profile alignment section missing")
+    require(
+        "- Runtime hardware profile id: framework-laptop-13-amd-7040" in report_text,
+        "report runtime hardware profile id mismatch",
+    )
+    require(
+        "- Runtime canonical hardware profile id: generic-x86_64-uefi" in report_text,
+        "report runtime canonical hardware profile id mismatch",
+    )
+    require(
+        "- Runtime profile alignment: aligned" in report_text,
+        "report runtime profile alignment mismatch",
+    )
+    require(
+        "- Runtime validation status: matched" in report_text,
+        "report runtime validation status mismatch",
+    )
+    require(
+        "- Runtime required modalities: audio,camera,input,screen,ui_tree" in report_text,
+        "report runtime required modalities mismatch",
+    )
 
     evidence_index = json.loads(evidence_index_out.read_text())
     evidence_index_validator.validate(evidence_index)
@@ -291,8 +346,12 @@ def main() -> int:
     require(evidence_index["artifacts"]["photos"] == ["photo-1.jpg"], "evidence index photos mismatch")
     require(evidence_index["artifacts"]["support_matrix"] == str(support_matrix_path), "evidence index support matrix mismatch")
     require(evidence_index["artifacts"]["known_limitations"] == str(known_limitations_path), "evidence index known limitations mismatch")
+    require(evidence_index["artifacts"]["device_metadata_artifact"] == str(device_metadata_path), "evidence index device metadata artifact mismatch")
     require(evidence_index["artifacts"]["device_backend_state_artifact"] == str(backend_state_path), "evidence index backend-state artifact mismatch")
     require(evidence_index["artifacts"]["vendor_runtime_evidence"] == [str(vendor_runtime_evidence)], "evidence index vendor runtime evidence mismatch")
+    require(evidence_index["device_runtime"]["device_profile"]["hardware_profile_id"] == "framework-laptop-13-amd-7040", "evidence index device profile id mismatch")
+    require(evidence_index["device_runtime"]["device_profile"]["profile_alignment_status"] == "aligned", "evidence index device profile alignment mismatch")
+    require(evidence_index["device_runtime"]["device_profile"]["required_modalities"] == ["audio", "camera", "input", "screen", "ui_tree"], "evidence index device profile required modalities mismatch")
     require(evidence_index["device_runtime"]["vendor_runtime"]["vendor_runtime_signoff_status"] == "evidence-attached", "evidence index vendor runtime signoff mismatch")
     require(evidence_index["device_runtime"]["vendor_runtime"]["provider_ids"] == ["nvidia.jetson.tensorrt"], "evidence index vendor runtime provider ids mismatch")
     require(evidence_index["operator"] == "codex", "evidence index operator mismatch")

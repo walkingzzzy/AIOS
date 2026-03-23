@@ -40,6 +40,8 @@ def main() -> int:
     )
     parser.add_argument("--socket", type=Path, default=default_socket())
     parser.add_argument("--agent-socket", type=Path, default=default_agent_socket())
+    parser.add_argument("--compositor-runtime-state", type=Path)
+    parser.add_argument("--compositor-window-state", type=Path)
     parser.add_argument("--fixture", type=Path)
     parser.add_argument("--user-id", default="local-user")
     parser.add_argument("--intent", default="shell-launcher")

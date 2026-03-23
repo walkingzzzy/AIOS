@@ -96,6 +96,16 @@ def build_action_command(
     elif component == "device-backend-status" and action_id == "focus-attention":
         command.append("--attention-only")
 
+    if component in {"launcher", "task-surface"}:
+        for flag, keys in (
+            ("--window-key", ("window_key",)),
+            ("--workspace-id", ("workspace_id", "active_workspace_id")),
+            ("--output-id", ("output_id", "active_output_id")),
+        ):
+            value = action_value(surface, action, *keys)
+            if value not in (None, ""):
+                command.extend([flag, str(value)])
+
     if component not in shellctl.COMPONENT_PANELS:
         raise ValueError(f"unsupported panel action target: {component}")
     return command
@@ -163,12 +173,33 @@ def summarize_action_result(component: str, action: dict[str, Any], result: dict
             return f"{label}: {task['task_id']} [{task.get('state', 'unknown')}]"
 
     if component == "task-surface":
+        if result.get("window_action"):
+            window_key = result.get("window_key") or result.get("restored_window_key") or "window"
+            workspace_id = result.get("workspace_id") or result.get("active_workspace_id")
+            output_id = result.get("output_id") or result.get("active_output_id")
+            details = [window_key]
+            if workspace_id:
+                details.append(str(workspace_id))
+            if output_id:
+                details.append(str(output_id))
+            return f"{label}: {' · '.join(details)} [{result.get('window_action')}]"
         task_id = result.get("task_id") or (result.get("task") or {}).get("task_id")
         if task_id:
             state = result.get("state") or result.get("new_state")
             if state:
                 return f"{label}: {task_id} -> {state}"
             return f"{label}: updated {task_id}"
+
+    if component == "launcher" and result.get("window_action"):
+        window_key = result.get("window_key") or result.get("restored_window_key") or "window"
+        workspace_id = result.get("workspace_id") or result.get("active_workspace_id")
+        output_id = result.get("output_id") or result.get("active_output_id")
+        details = [window_key]
+        if workspace_id:
+            details.append(str(workspace_id))
+        if output_id:
+            details.append(str(output_id))
+        return f"{label}: {' · '.join(details)} [{result.get('window_action')}]"
 
     if component == "approval-panel":
         approval_ref = result.get("approval_ref")

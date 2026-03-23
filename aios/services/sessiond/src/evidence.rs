@@ -91,6 +91,8 @@ struct SessionEvidenceExportCounts {
     semantic_memory_count: u32,
     procedural_memory_count: u32,
     portal_handle_count: u32,
+    resumable_task_count: u32,
+    pending_task_count: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -123,6 +125,7 @@ pub fn export_bundle(
     if let Some(reason) = request.reason.as_deref() {
         notes.push(format!("reason={reason}"));
     }
+    notes.push(format!("recovery_status={}", evidence.recovery.status));
 
     let bundle = SessionEvidenceExportBundle {
         export_id: export_id.clone(),
@@ -147,6 +150,7 @@ pub fn export_bundle(
         export_path: export_path.display().to_string(),
         created_at,
         recovery_id: Some(evidence.recovery.recovery_id.clone()),
+        recovery_status: Some(evidence.recovery.status.clone()),
         task_count: counts.task_count,
         task_event_count: counts.task_event_count,
         working_memory_count: counts.working_memory_count,
@@ -154,6 +158,8 @@ pub fn export_bundle(
         semantic_memory_count: counts.semantic_memory_count,
         procedural_memory_count: counts.procedural_memory_count,
         portal_handle_count: counts.portal_handle_count,
+        resumable_task_count: counts.resumable_task_count,
+        pending_task_count: counts.pending_task_count,
         notes,
     })
 }
@@ -167,6 +173,8 @@ fn evidence_counts(evidence: &SessionEvidenceResponse) -> SessionEvidenceExportC
         semantic_memory_count: count_u32(evidence.semantic_memory.len()),
         procedural_memory_count: count_u32(evidence.procedural_memory.len()),
         portal_handle_count: count_u32(evidence.portal_handles.len()),
+        resumable_task_count: count_u32(evidence.recovery.resumable_task_ids.len()),
+        pending_task_count: count_u32(evidence.recovery.pending_task_ids.len()),
     }
 }
 
@@ -268,7 +276,16 @@ mod tests {
             recovery: RecoveryRef {
                 recovery_id: "rec-1".to_string(),
                 session_id: "session-1".to_string(),
-                status: "baseline".to_string(),
+                status: "resume-ready".to_string(),
+                updated_at: Some("2026-03-15T00:02:00Z".to_string()),
+                latest_task_id: Some("task-1".to_string()),
+                latest_task_state: Some("completed".to_string()),
+                resumable_task_ids: vec!["task-1".to_string()],
+                pending_task_ids: Vec::new(),
+                approved_task_ids: Vec::new(),
+                portal_handle_ids: vec!["hdl-1".to_string()],
+                working_memory_refs: vec!["wm-1".to_string()],
+                notes: vec!["resumable_tasks=1".to_string()],
             },
         }
     }
@@ -293,9 +310,12 @@ mod tests {
         let payload: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&response.export_path)?)?;
         assert_eq!(payload["counts"]["task_count"], 1);
+        assert_eq!(payload["counts"]["resumable_task_count"], 1);
         assert_eq!(payload["evidence"]["session"]["session_id"], "session-1");
         assert_eq!(payload["reason"], "operator-export");
         assert_eq!(response.recovery_id.as_deref(), Some("rec-1"));
+        assert_eq!(response.recovery_status.as_deref(), Some("resume-ready"));
+        assert_eq!(response.resumable_task_count, 1);
 
         std::fs::remove_dir_all(root).ok();
         Ok(())

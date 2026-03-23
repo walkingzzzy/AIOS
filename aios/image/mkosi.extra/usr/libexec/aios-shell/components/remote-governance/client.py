@@ -8,6 +8,7 @@ from pathlib import Path
 from prototype import (
     default_browser_remote_registry,
     default_office_remote_registry,
+    default_mcp_remote_registry,
     default_provider_registry_state_dir,
     load_remote_governance,
 )
@@ -35,6 +36,7 @@ def main() -> int:
     parser.add_argument("command", nargs="?", default="list", choices=["list", "summary", "issues"])
     parser.add_argument("--browser-remote-registry", type=Path, default=default_browser_remote_registry())
     parser.add_argument("--office-remote-registry", type=Path, default=default_office_remote_registry())
+    parser.add_argument("--mcp-remote-registry", type=Path, default=default_mcp_remote_registry())
     parser.add_argument("--provider-registry-state-dir", type=Path, default=default_provider_registry_state_dir())
     parser.add_argument("--limit", type=int, default=8)
     parser.add_argument("--source")
@@ -69,6 +71,7 @@ def main() -> int:
     governance = load_remote_governance(
         args.browser_remote_registry,
         args.office_remote_registry,
+        args.mcp_remote_registry,
         args.provider_registry_state_dir,
         limit=args.limit,
         filters=filters,

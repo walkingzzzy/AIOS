@@ -499,6 +499,7 @@ def build_renderer_args(
     device_state: dict[str, Any] | None,
     metadata_health: dict[str, Any] | None,
     metadata: dict[str, Any] | None,
+    metadata_path: Path | None,
     backend_state_path: Path | None,
     evidence_payloads: list[dict[str, Any]],
     vendor_runtime_paths: list[Path],
@@ -523,6 +524,9 @@ def build_renderer_args(
         if isinstance(backend_summary, dict):
             append_arg(arguments, "device-metadata-backend-status", backend_summary.get("overall_status"))
         append_arg(arguments, "device-available-modalities", available_modalities(metadata))
+
+    if metadata_path is not None:
+        append_arg(arguments, "device-metadata-artifact", str(metadata_path))
 
     release_grade_summary = derive_release_grade_summary(metadata, metadata_health, evidence_payloads)
     append_arg(arguments, "device-release-grade-backend-ids", release_grade_summary["backend_ids"])
@@ -604,11 +608,13 @@ def materialize_snapshot(snapshot: dict[str, Any], output_dir: Path) -> dict[str
         if payload is not None:
             write_json(output_dir / f"{name}.json", payload)
 
+    metadata_path = None if metadata is None else output_dir / "device_metadata.json"
     renderer_args = build_renderer_args(
         deviced_health,
         device_state,
         metadata_health,
         metadata,
+        metadata_path,
         backend_state_path,
         evidence_payloads,
         vendor_runtime_paths,

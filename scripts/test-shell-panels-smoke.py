@@ -599,7 +599,7 @@ def main() -> int:
                             "registered_at": "2026-03-09T00:00:00Z",
                             "control_plane_provider_id": "compat.browser.remote.worker",
                             "registration_status": "active",
-                            "last_heartbeat_at": "2026-03-09T00:05:00Z",
+                            "last_heartbeat_at": "2030-01-01T00:00:00Z",
                             "heartbeat_ttl_seconds": 3600,
                             "attestation": {"mode": "verified", "status": "trusted", "expires_at": "2030-01-01T00:00:00Z"},
                             "governance": {
@@ -651,6 +651,40 @@ def main() -> int:
                 ensure_ascii=False,
             )
         )
+        mcp_remote_registry = temp_root / "mcp-remote-registry.json"
+        mcp_remote_registry.write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0.0",
+                    "entries": [
+                        {
+                            "provider_ref": "mcp.remote.worker",
+                            "endpoint": "https://mcp.remote.example/bridge",
+                            "capabilities": ["compat.mcp.call"],
+                            "auth_mode": "bearer",
+                            "auth_secret_env": "MCP_REMOTE_SECRET",
+                            "target_hash": "sha256:mcp",
+                            "registered_at": "2026-03-09T00:00:00Z",
+                            "control_plane_provider_id": "compat.mcp.bridge.remote",
+                            "registration_status": "active",
+                            "last_heartbeat_at": "2030-01-01T00:00:00Z",
+                            "heartbeat_ttl_seconds": 3600,
+                            "attestation": {"mode": "verified", "status": "trusted", "expires_at": "2030-01-01T00:00:00Z"},
+                            "governance": {
+                                "fleet_id": "fleet-mcp",
+                                "governance_group": "operator-audit",
+                                "policy_group": "compat-mcp-remote",
+                                "approval_ref": "approval-mcp-1",
+                                "registered_by": "panel-smoke",
+                                "allow_lateral_movement": False
+                            }
+                        }
+                    ]
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
         provider_registry_state_dir = temp_root / "provider-registry"
         descriptor_dir = provider_registry_state_dir / "descriptors"
         health_dir = provider_registry_state_dir / "health"
@@ -668,7 +702,7 @@ def main() -> int:
                         "provider_ref": "browser.remote.worker",
                         "endpoint": "https://browser.remote.example/bridge",
                         "registration_status": "active",
-                        "last_heartbeat_at": "2026-03-09T00:05:00Z",
+                        "last_heartbeat_at": "2030-01-01T00:00:00Z",
                         "heartbeat_ttl_seconds": 3600,
                         "attestation": {"mode": "verified", "status": "trusted", "expires_at": "2030-01-01T00:00:00Z"},
                         "governance": {"fleet_id": "fleet-browser", "governance_group": "operator-audit"}
@@ -701,7 +735,7 @@ def main() -> int:
                         "provider_ref": "office.remote.worker",
                         "endpoint": "https://office.remote.example/bridge",
                         "registration_status": "active",
-                        "last_heartbeat_at": "2026-03-09T00:00:00Z",
+                        "last_heartbeat_at": "2030-01-01T00:00:00Z",
                         "heartbeat_ttl_seconds": 3600,
                         "attestation": {"mode": "verified", "status": "trusted", "expires_at": "2030-01-01T00:00:00Z"},
                         "governance": {"fleet_id": "fleet-office", "governance_group": "operator-audit"}
@@ -724,6 +758,39 @@ def main() -> int:
             )
         )
 
+        (descriptor_dir / "compat.mcp.bridge.remote.json").write_text(
+            json.dumps(
+                {
+                    "provider_id": "compat.mcp.bridge.remote",
+                    "display_name": "MCP Remote Worker",
+                    "kind": "compat-provider",
+                    "execution_location": "attested_remote",
+                    "remote_registration": {
+                        "source_provider_id": "compat.mcp.bridge.local",
+                        "provider_ref": "mcp.remote.worker",
+                        "endpoint": "https://mcp.remote.example/bridge",
+                        "registration_status": "active",
+                        "last_heartbeat_at": "2030-01-01T00:00:00Z",
+                        "heartbeat_ttl_seconds": 3600,
+                        "attestation": {"mode": "verified", "status": "trusted", "expires_at": "2030-01-01T00:00:00Z"},
+                        "governance": {"fleet_id": "fleet-mcp", "governance_group": "operator-audit"}
+                    }
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        (health_dir / "compat.mcp.bridge.remote.json").write_text(
+            json.dumps(
+                {
+                    "provider_id": "compat.mcp.bridge.remote",
+                    "status": "available",
+                    "disabled": False,
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
         output = run_python(ROOT / "aios/shell/components/recovery-surface/panel.py", "model", "--surface", str(recovery_surface))
         recovery_model = json.loads(output)
         require(recovery_model["panel_id"] == "recovery-panel", "recovery panel id mismatch")
@@ -831,14 +898,18 @@ def main() -> int:
         require(task_model["meta"]["active_workspace_id"] == "workspace-2", "task panel workspace id mismatch")
         require(task_model["meta"]["managed_window_count"] == 2, "task panel managed window count mismatch")
         require(task_model["meta"]["minimized_window_count"] == 1, "task panel minimized window count mismatch")
+        require(task_model["meta"]["renderable_output_count"] == 0, "task panel renderable output count mismatch")
+        require(task_model["meta"]["release_grade_output_status"] == "uninitialized", "task panel output status mismatch")
         workspace_section = next(
             section for section in task_model["sections"] if section["section_id"] == "workspace-windows"
         )
         require(len(workspace_section["items"]) == 2, "task panel workspace window section mismatch")
+        require(workspace_section["items"][0]["action"]["action_id"] == "minimize-window", "task panel workspace action mismatch")
         minimized_section = next(
             section for section in task_model["sections"] if section["section_id"] == "minimized-windows"
         )
         require(len(minimized_section["items"]) == 1, "task panel minimized section mismatch")
+        require(minimized_section["items"][0]["action"]["action_id"] == "restore-window", "task panel minimized action mismatch")
         require(
             "approved" in task_model["meta"]["recent_task_event_states"],
             "task panel recent event states mismatch",
@@ -924,6 +995,8 @@ def main() -> int:
             str(browser_remote_registry),
             "--office-remote-registry",
             str(office_remote_registry),
+            "--mcp-remote-registry",
+            str(mcp_remote_registry),
             "--provider-registry-state-dir",
             str(provider_registry_state_dir),
             "--approval-fixture",
@@ -956,8 +1029,16 @@ def main() -> int:
             "notification panel remote governance issue mismatch",
         )
         require(
-            notification_model["meta"]["remote_governance_matched_entry_count"] == 2,
+            notification_model["meta"]["remote_governance_matched_entry_count"] == 3,
             "notification panel remote governance matched count mismatch",
+        )
+        require(
+            notification_model["meta"]["remote_governance_fleet_count"] == 3,
+            "notification panel remote governance fleet count mismatch",
+        )
+        require(
+            notification_model["meta"]["remote_governance_source_counts"].get("mcp") == 1,
+            "notification panel remote governance mcp source mismatch",
         )
         remote_governance_section = next(
             section for section in notification_model["sections"] if section["section_id"] == "remote-governance"
@@ -980,8 +1061,10 @@ def main() -> int:
         window_manager_section = next(
             section for section in notification_model["sections"] if section["section_id"] == "window-manager"
         )
-        require(window_manager_section["items"][2]["value"] == "workspace-2", "notification panel workspace section mismatch")
-        require(window_manager_section["items"][5]["value"] == 1, "notification panel minimized section mismatch")
+        window_manager_items = {item["label"]: item["value"] for item in window_manager_section["items"]}
+        require(window_manager_items["Workspace"] == "workspace-2", "notification panel workspace section mismatch")
+        require(window_manager_items["Minimized"] == 1, "notification panel minimized section mismatch")
+        require(window_manager_items["Output Status"] == "uninitialized", "notification panel output status mismatch")
 
         output = run_python(
             ROOT / "aios/shell/components/notification-center/panel.py",
@@ -1004,6 +1087,8 @@ def main() -> int:
             str(browser_remote_registry),
             "--office-remote-registry",
             str(office_remote_registry),
+            "--mcp-remote-registry",
+            str(mcp_remote_registry),
             "--provider-registry-state-dir",
             str(provider_registry_state_dir),
             "--approval-fixture",
@@ -1043,6 +1128,8 @@ def main() -> int:
             str(browser_remote_registry),
             "--office-remote-registry",
             str(office_remote_registry),
+            "--mcp-remote-registry",
+            str(mcp_remote_registry),
             "--provider-registry-state-dir",
             str(provider_registry_state_dir),
             "--approval-fixture",
@@ -1124,6 +1211,8 @@ def main() -> int:
             str(browser_remote_registry),
             "--office-remote-registry",
             str(office_remote_registry),
+            "--mcp-remote-registry",
+            str(mcp_remote_registry),
             "--provider-registry-state-dir",
             str(provider_registry_state_dir),
             "--issue-only",
@@ -1163,6 +1252,8 @@ def main() -> int:
             str(browser_remote_registry),
             "--office-remote-registry",
             str(office_remote_registry),
+            "--mcp-remote-registry",
+            str(mcp_remote_registry),
             "--provider-registry-state-dir",
             str(provider_registry_state_dir),
             "--fleet-id",
@@ -1361,6 +1452,8 @@ def main() -> int:
             str(browser_remote_registry),
             "--office-remote-registry",
             str(office_remote_registry),
+            "--mcp-remote-registry",
+            str(mcp_remote_registry),
             "--provider-registry-state-dir",
             str(provider_registry_state_dir),
             "--issue-only",
@@ -1402,6 +1495,10 @@ def main() -> int:
             "user-1",
             "--intent",
             "open docs",
+            "--compositor-runtime-state",
+            str(compositor_runtime_state),
+            "--compositor-window-state",
+            str(compositor_window_state),
         )
         launcher_model = json.loads(output)
         require(launcher_model["panel_id"] == "launcher-panel", "launcher panel id mismatch")
@@ -1427,6 +1524,60 @@ def main() -> int:
             section for section in launcher_model["sections"] if section["section_id"] == "restore"
         )
         require(restore_section["items"][1]["value"] == "ready", "launcher restore section readiness mismatch")
+        active_windows_section = next(
+            section for section in launcher_model["sections"] if section["section_id"] == "active-workspace-windows"
+        )
+        require(len(active_windows_section["items"]) == 1, "launcher active workspace section mismatch")
+        require(active_windows_section["items"][0]["action"]["action_id"] == "focus-window", "launcher focus action mismatch")
+        launcher_minimized_section = next(
+            section for section in launcher_model["sections"] if section["section_id"] == "minimized-windows"
+        )
+        require(len(launcher_minimized_section["items"]) == 1, "launcher minimized windows section mismatch")
+        require(launcher_minimized_section["items"][0]["action"]["action_id"] == "restore-window", "launcher restore window action mismatch")
+
+        output = run_python(
+            ROOT / "aios/shell/components/launcher/panel.py",
+            "action",
+            "--action",
+            "restore-window",
+            "--window-key",
+            "window-beta",
+            "--workspace-id",
+            "workspace-2",
+            "--output-id",
+            "display-2",
+            "--compositor-runtime-state",
+            str(compositor_runtime_state),
+            "--compositor-window-state",
+            str(compositor_window_state),
+        )
+        launcher_window_action = json.loads(output)
+        require(launcher_window_action["target_component"] == "task-surface", "launcher window action target mismatch")
+        require(launcher_window_action["window_action"] == "restore-window", "launcher window action id mismatch")
+        require(launcher_window_action["minimized_window_count"] == 0, "launcher window action minimized count mismatch")
+
+        output = run_python(
+            ROOT / "aios/shell/components/launcher/panel.py",
+            "model",
+            "--fixture",
+            str(session_fixture),
+            "--session-id",
+            "session-1",
+            "--user-id",
+            "user-1",
+            "--intent",
+            "open docs",
+            "--compositor-runtime-state",
+            str(compositor_runtime_state),
+            "--compositor-window-state",
+            str(compositor_window_state),
+        )
+        launcher_model_after_restore = json.loads(output)
+        require(launcher_model_after_restore["meta"]["minimized_window_count"] == 0, "launcher restore result mismatch")
+        active_windows_after_restore = next(
+            section for section in launcher_model_after_restore["sections"] if section["section_id"] == "active-workspace-windows"
+        )
+        require(len(active_windows_after_restore["items"]) == 2, "launcher restored workspace window count mismatch")
 
         output = run_python(
             ROOT / "aios/shell/components/launcher/panel.py",
@@ -1473,6 +1624,8 @@ def main() -> int:
             str(browser_remote_registry),
             "--office-remote-registry",
             str(office_remote_registry),
+            "--mcp-remote-registry",
+            str(mcp_remote_registry),
             "--provider-registry-state-dir",
             str(provider_registry_state_dir),
             "--approval-fixture",
@@ -1497,6 +1650,8 @@ def main() -> int:
             str(browser_remote_registry),
             "--office-remote-registry",
             str(office_remote_registry),
+            "--mcp-remote-registry",
+            str(mcp_remote_registry),
             "--provider-registry-state-dir",
             str(provider_registry_state_dir),
         )
@@ -1511,6 +1666,8 @@ def main() -> int:
             str(browser_remote_registry),
             "--office-remote-registry",
             str(office_remote_registry),
+            "--mcp-remote-registry",
+            str(mcp_remote_registry),
             "--provider-registry-state-dir",
             str(provider_registry_state_dir),
             "--issue-only",
@@ -1530,9 +1687,14 @@ def main() -> int:
             "user-1",
             "--intent",
             "open docs",
+            "--compositor-runtime-state",
+            str(compositor_runtime_state),
+            "--compositor-window-state",
+            str(compositor_window_state),
         )
         require("Launcher Panel [active]" in output, "launcher panel render missing header")
         require("[Recent Sessions]" in output, "launcher panel render missing recent sessions section")
+        require("[Window Restore]" in output, "launcher panel render missing window restore section")
         require("task-1: open docs [planned]" in output, "launcher panel render missing task")
 
         print("shell panels smoke passed")

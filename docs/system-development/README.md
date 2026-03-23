@@ -81,6 +81,8 @@
 | [37-阶段运行手册与阻塞清单索引](37-阶段运行手册与阻塞清单索引.md) | 统一各阶段 runbook、验证入口与当前阻塞索引 |
 | [38-GPU backend 首选支持矩阵评估](38-GPU-backend-首选支持矩阵评估.md) | 冻结 `local-cpu` / `local-gpu` 的平台优先级、证据与声明边界 |
 | [39-Tier1 正式机器冻结清单](39-Tier1-正式机器冻结清单.md) | 冻结正式 Tier 1 机器名单、平台绑定与后续 bring-up 优先顺位 |
+| [40-Framework Laptop 13 AMD 7040 Bring-up 报告](40-Framework-Laptop-13-AMD-7040-Bring-up报告.md) | 固定第一台正式 Tier 1 x86_64 机器的 bring-up 报告入口 |
+| [41-NVIDIA Jetson Orin AGX Bring-up 报告](41-NVIDIA-Jetson-Orin-AGX-Bring-up报告.md) | 固定第二台正式 Tier 1 Jetson 机器的 bring-up 报告入口 |
 
 ## 统一结论
 
@@ -125,12 +127,14 @@
 29. [阶段运行手册与阻塞清单索引](37-阶段运行手册与阻塞清单索引.md)
 30. [GPU backend 首选支持矩阵评估](38-GPU-backend-首选支持矩阵评估.md)
 31. [Tier1 正式机器冻结清单](39-Tier1-正式机器冻结清单.md)
-32. [镜像、安装、更新与恢复规范](09-镜像-安装-更新-恢复规范.md)
-33. [应用、兼容层与沙箱模型](11-应用-兼容层-沙箱模型.md)
-34. [硬件目标与 Bring-up 矩阵](12-硬件目标与Bring-up矩阵.md)
-35. [仓库重构方案](03-仓库重构方案.md)
-36. [阶段路线图](04-阶段路线图.md)
-37. [优先级 Backlog](05-优先级-Backlog.md)
+32. [Framework Laptop 13 AMD 7040 Bring-up 报告](40-Framework-Laptop-13-AMD-7040-Bring-up报告.md)
+33. [NVIDIA Jetson Orin AGX Bring-up 报告](41-NVIDIA-Jetson-Orin-AGX-Bring-up报告.md)
+34. [镜像、安装、更新与恢复规范](09-镜像-安装-更新-恢复规范.md)
+35. [应用、兼容层与沙箱模型](11-应用-兼容层-沙箱模型.md)
+36. [硬件目标与 Bring-up 矩阵](12-硬件目标与Bring-up矩阵.md)
+37. [仓库重构方案](03-仓库重构方案.md)
+38. [阶段路线图](04-阶段路线图.md)
+39. [优先级 Backlog](05-优先级-Backlog.md)
 
 ## 本轮修订吸收的关键研究结论
 

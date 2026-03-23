@@ -103,6 +103,20 @@ impl AppState {
                     .unwrap_or("<none>")
             ),
             format!(
+                "failure_injection_stage={}",
+                self.config
+                    .failure_injection_stage
+                    .as_deref()
+                    .unwrap_or("<none>")
+            ),
+            format!(
+                "failure_injection_reason={}",
+                self.config
+                    .failure_injection_reason
+                    .as_deref()
+                    .unwrap_or("<none>")
+            ),
+            format!(
                 "health_probe_command_configured={}",
                 self.config.health_probe_command.is_some()
             ),
@@ -223,6 +237,8 @@ async fn main() -> anyhow::Result<()> {
         current_channel: config.current_channel.clone(),
         current_version: config.current_version.clone(),
         target_version_hint: config.target_version_hint.clone(),
+        failure_injection_stage: config.failure_injection_stage.clone(),
+        failure_injection_reason: config.failure_injection_reason.clone(),
         sysupdate_check_command: config.sysupdate_check_command.clone(),
         sysupdate_apply_command: config.sysupdate_apply_command.clone(),
         rollback_command: config.rollback_command.clone(),

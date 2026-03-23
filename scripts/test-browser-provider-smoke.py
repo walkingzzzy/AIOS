@@ -257,9 +257,6 @@ def run_json_command(*args: str, check: bool = True, env: dict[str, str] | None 
 
 def main() -> int:
     args = parse_args()
-    if not unix_rpc_supported():
-        print("browser provider smoke skipped: unix rpc transport unsupported on this platform")
-        return 0
     server = ThreadingHTTPServer(("127.0.0.1", 0), BrowserHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -278,11 +275,13 @@ def main() -> int:
     try:
         audit_log = temp_root / "browser-audit.jsonl"
         remote_registry = temp_root / "browser-remote-registry.json"
+        session_store = temp_root / "browser-session-store.json"
         env = {
             "AIOS_COMPAT_BROWSER_AUDIT_LOG": str(audit_log),
             "AIOS_BROWSER_TRUST_MODE": "allowlist",
             "AIOS_BROWSER_ALLOWLIST": "127.0.0.1,localhost",
             "AIOS_BROWSER_REMOTE_REGISTRY": str(remote_registry),
+            "AIOS_BROWSER_SESSION_STORE": str(session_store),
             "BROWSER_REMOTE_SECRET": "browser-secret",
         }
         fixture_path = temp_root / "fixture.html"
@@ -318,8 +317,18 @@ def main() -> int:
                 "audit-jsonl",
                 "remote-register",
                 "remote-list",
+                "remote-heartbeat",
+                "remote-revoke",
+                "remote-unregister",
                 "remote-control-plane-register",
                 "remote-browser-bridge",
+                "session-list",
+                "session-open",
+                "session-close",
+                "window-open",
+                "window-close",
+                "tab-open",
+                "tab-close",
             }.issubset(
                 set(manifest["implemented_methods"])
             ),
@@ -334,10 +343,12 @@ def main() -> int:
             == "compat.browser.automation.local",
             "manifest compat permission manifest mismatch",
         )
+        require((manifest.get("session_store") or {}).get("path") == str(session_store), "manifest session store path mismatch")
+        require((manifest.get("session_store") or {}).get("active_session_count") == 0, "manifest session count should start empty")
 
         _, health = run_json_command("health", env=env)
         require(health["status"] == "available", "health status should be available")
-        require(health["engine"] == "html-fetch+remote-browser-bridge", "unexpected browser engine")
+        require(health["engine"] == "html-fetch+session-store+remote-browser-bridge", "unexpected browser engine")
         require(health["worker_contract"] == "compat-browser-fetch-v1", "health worker contract mismatch")
         require(
             health["result_protocol_schema_ref"] == "aios/compat-browser-result.schema.json",
@@ -347,6 +358,8 @@ def main() -> int:
         require(health["audit_log_path"] == str(audit_log), "health audit log path mismatch")
         require((health.get("trust_policy") or {}).get("mode") == "allowlist", "browser trust mode mismatch")
         require(health["registered_remote_count"] == 0, "browser remote registry should start empty")
+        require(health["session_store_path"] == str(session_store), "health session store path mismatch")
+        require(health["active_session_count"] == 0, "health session count should start empty")
         _, permissions = run_json_command("permissions", env=env)
         require(
             permissions["required_permissions"] == ["browser.compat"],
@@ -433,7 +446,7 @@ def main() -> int:
         control_plane_provider_id = None
         control_plane_mode = "skipped"
         control_plane_skip_reason = None
-        if agentd_binary.exists():
+        if agentd_binary.exists() and unix_rpc_supported():
             control_plane_env, agentd_socket = build_agentd_env(temp_root)
             agentd_process = launch(agentd_binary, control_plane_env)
             try:
@@ -520,6 +533,8 @@ def main() -> int:
                     control_plane_mode = "skipped"
                 else:
                     raise
+        elif agentd_binary.exists():
+            control_plane_skip_reason = "unix rpc transport unsupported on this platform"
         else:
             control_plane_skip_reason = "agentd binary missing"
 
@@ -699,6 +714,7 @@ def main() -> int:
                     "control_plane_skip_reason": control_plane_skip_reason,
                     "missing_selector_status": extract_missing["status"],
                     "timeout_error": timeout_payload["error"]["error_code"],
+                    "session_store": str(session_store),
                     "audit_log": str(audit_log),
                 },
                 indent=2,

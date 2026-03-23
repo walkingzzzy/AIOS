@@ -701,10 +701,27 @@ fn default_health_state(provider_id: &str) -> ProviderHealthState {
 
 fn load_or_default_health(path: &Path, provider_id: &str) -> anyhow::Result<ProviderHealthState> {
     if path.exists() {
-        let content = fs::read_to_string(path)?;
-        let state = serde_json::from_str::<ProviderHealthState>(&content)
-            .with_context(|| format!("invalid provider health file {}", path.display()))?;
-        return Ok(state);
+        let mut last_error = None;
+        for attempt in 0..5 {
+            match fs::read_to_string(path) {
+                Ok(content) => match serde_json::from_str::<ProviderHealthState>(&content) {
+                    Ok(state) => return Ok(state),
+                    Err(error) => last_error = Some(anyhow::Error::new(error)),
+                },
+                Err(error) => last_error = Some(anyhow::Error::new(error)),
+            }
+
+            if attempt < 4 {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
+
+        if !path.exists() {
+            return Ok(default_health_state(provider_id));
+        }
+
+        return Err(last_error.expect("health read error should be captured"))
+            .with_context(|| format!("invalid provider health file {}", path.display()));
     }
 
     Ok(default_health_state(provider_id))
@@ -1043,6 +1060,38 @@ mod tests {
     }
 
     #[test]
+    fn load_or_default_health_retries_transient_invalid_json() -> anyhow::Result<()> {
+        let root = temp_root();
+        let path = root
+            .join("state")
+            .join("registry")
+            .join("health")
+            .join("system.files.local.json");
+        fs::create_dir_all(path.parent().expect("health dir"))?;
+        fs::write(&path, "{")?;
+
+        let writer_path = path.clone();
+        let writer = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(15));
+            fs::write(
+                &writer_path,
+                serde_json::to_vec_pretty(&default_health_state("system.files.local"))
+                    .expect("serialize health"),
+            )
+            .expect("rewrite health");
+        });
+
+        let health = load_or_default_health(&path, "system.files.local")?;
+        writer.join().expect("writer thread");
+
+        assert_eq!(health.provider_id, "system.files.local");
+        assert_eq!(health.status, "available");
+
+        fs::remove_dir_all(&root)?;
+        Ok(())
+    }
+
+    #[test]
     fn register_rejects_expired_attested_remote_descriptor() {
         let root = temp_root();
         let registry = ProviderRegistry::new(RegistryConfig {
@@ -1128,3 +1177,4 @@ mod tests {
         Ok(())
     }
 }
+

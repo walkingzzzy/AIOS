@@ -5,10 +5,10 @@ import json
 import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 from shell_evidence_manifest import write_shell_evidence_manifest
+from shell_test_temp import make_temp_dir, restore_session_temp_root, set_session_temp_root
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -62,7 +62,8 @@ def run_compositor(config_path: Path) -> dict:
 
 
 def main() -> int:
-    temp_root = Path(tempfile.mkdtemp(prefix="aios-shell-compositor-acceptance-"))
+    previous_temp_root = set_session_temp_root()
+    temp_root = make_temp_dir("aios-shell-compositor-acceptance-")
     failed = False
     try:
         launcher_fixture = temp_root / "launcher-fixture.json"
@@ -658,6 +659,7 @@ def main() -> int:
         print(f"shell compositor acceptance smoke failed: {error}")
         return 1
     finally:
+        restore_session_temp_root(previous_temp_root)
         if failed:
             print(f"state kept at: {temp_root}")
         else:

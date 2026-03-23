@@ -84,9 +84,36 @@ pub struct DeploymentStoreConfig {
     pub current_channel: String,
     pub current_version: String,
     pub target_version_hint: Option<String>,
+    pub failure_injection_stage: Option<String>,
+    pub failure_injection_reason: Option<String>,
     pub sysupdate_check_command: Option<String>,
     pub sysupdate_apply_command: Option<String>,
     pub rollback_command: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct FailureInjectionRecord {
+    schema_version: String,
+    service_id: String,
+    operation: String,
+    stage: String,
+    reason: String,
+    triggered_at: String,
+    deployment_status: String,
+    current_version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rollback_target: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recovery_id: Option<String>,
+    boot_backend: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    boot_current_slot: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    boot_last_good_slot: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    notes: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -505,6 +532,97 @@ impl DeploymentStore {
         environment
     }
 
+    fn failure_injection_matches(&self, stage: &str) -> bool {
+        self.config
+            .failure_injection_stage
+            .as_deref()
+            .map(|configured| {
+                configured
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|item| !item.is_empty())
+                    .any(|item| item == stage)
+            })
+            .unwrap_or(false)
+    }
+
+    fn maybe_inject_failure(
+        &self,
+        state: &mut DeploymentState,
+        stage: &str,
+        operation: &str,
+        failure_status: &str,
+        notes: &mut Vec<String>,
+        recovery_id: Option<&str>,
+        target_version: Option<&str>,
+        rollback_target: Option<&str>,
+    ) -> anyhow::Result<Option<PathBuf>> {
+        if !self.failure_injection_matches(stage) {
+            return Ok(None);
+        }
+
+        let reason = self
+            .config
+            .failure_injection_reason
+            .clone()
+            .unwrap_or_else(|| "simulated failure injection".to_string());
+        let triggered_at = Utc::now().to_rfc3339();
+        let stage_slug = stage
+            .chars()
+            .map(|character| {
+                if character.is_ascii_alphanumeric() {
+                    character
+                } else {
+                    '-'
+                }
+            })
+            .collect::<String>();
+        let artifact_name = format!(
+            "failure-injection-{}-{}.json",
+            stage_slug.trim_matches('-'),
+            Utc::now().timestamp_millis()
+        );
+        let artifact_path = self.config.diagnostics_dir.join(artifact_name);
+        let boot_state = self.boot_state().ok();
+        let record = FailureInjectionRecord {
+            schema_version: "1.0.0".to_string(),
+            service_id: self.config.service_id.clone(),
+            operation: operation.to_string(),
+            stage: stage.to_string(),
+            reason: reason.clone(),
+            triggered_at,
+            deployment_status: failure_status.to_string(),
+            current_version: state.current_version.clone(),
+            target_version: target_version.map(ToOwned::to_owned),
+            rollback_target: rollback_target.map(ToOwned::to_owned),
+            recovery_id: recovery_id.map(ToOwned::to_owned),
+            boot_backend: self.config.boot_backend.clone(),
+            boot_current_slot: boot_state
+                .as_ref()
+                .map(|snapshot| snapshot.current_slot.clone()),
+            boot_last_good_slot: boot_state
+                .as_ref()
+                .map(|snapshot| snapshot.last_good_slot.clone()),
+            notes: notes.clone(),
+        };
+
+        if let Some(parent) = artifact_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&artifact_path, serde_json::to_vec_pretty(&record)?)?;
+
+        notes.push(format!("failure_injection_stage={stage}"));
+        notes.push(format!("failure_injection_reason={reason}"));
+        notes.push(format!(
+            "failure_injection_artifact={}",
+            artifact_path.display()
+        ));
+        state.status = failure_status.to_string();
+        state.notes = notes.clone();
+        self.persist(state)?;
+        Ok(Some(artifact_path))
+    }
+
     pub fn check(&self, request: &UpdateCheckRequest) -> anyhow::Result<UpdateCheckResponse> {
         let mut state = self.snapshot()?;
         if let Some(channel) = &request.channel {
@@ -689,6 +807,31 @@ impl DeploymentStore {
             });
         }
 
+        if self
+            .maybe_inject_failure(
+                &mut state,
+                "apply.preflight",
+                "apply",
+                "apply-failed",
+                &mut notes,
+                None,
+                target_version.as_deref(),
+                None,
+            )?
+            .is_some()
+        {
+            return Ok(UpdateApplyResponse {
+                service_id: self.config.service_id.clone(),
+                status: "failed".to_string(),
+                deployment_status: state.status,
+                dry_run: false,
+                target_version,
+                recovery_ref: None,
+                staged_artifacts,
+                notes,
+            });
+        }
+
         let command_environment = self.apply_command_environment(
             &state,
             request,
@@ -762,52 +905,6 @@ impl DeploymentStore {
         let staged_boot_state = self
             .boot_control()
             .stage_update(target_version.as_deref())?;
-        if let Some(target_slot) = staged_boot_state.staged_slot.clone() {
-            notes.push(format!("boot_staged_slot={target_slot}"));
-            if let Some(command) = &self.config.boot_switch_command {
-                let mut boot_switch_environment = command_environment.clone();
-                boot_switch_environment
-                    .push(("AIOS_UPDATED_TARGET_SLOT".to_string(), target_slot.clone()));
-                let execution = execute_command(command, &boot_switch_environment)?;
-                notes.extend(execution_notes("boot_switch", &execution));
-                if !execution.success {
-                    state.status = "boot-switch-failed".to_string();
-                    state.notes = notes.clone();
-                    self.persist(&state)?;
-                    return Ok(UpdateApplyResponse {
-                        service_id: self.config.service_id.clone(),
-                        status: "failed".to_string(),
-                        deployment_status: state.status,
-                        dry_run: false,
-                        target_version,
-                        recovery_ref: None,
-                        staged_artifacts,
-                        notes,
-                    });
-                }
-            } else {
-                match self.boot_control().switch_slot(&target_slot) {
-                    Ok(backend_notes) => notes.extend(backend_notes),
-                    Err(error) => {
-                        notes.push(format!("boot_switch_error={error}"));
-                        state.status = "boot-switch-failed".to_string();
-                        state.notes = notes.clone();
-                        self.persist(&state)?;
-                        return Ok(UpdateApplyResponse {
-                            service_id: self.config.service_id.clone(),
-                            status: "failed".to_string(),
-                            deployment_status: state.status,
-                            dry_run: false,
-                            target_version,
-                            recovery_ref: None,
-                            staged_artifacts,
-                            notes,
-                        });
-                    }
-                }
-            }
-        }
-
         let now = Utc::now().to_rfc3339();
         let recovery_point = RecoveryPointRecord {
             recovery_id: recovery_id.clone(),
@@ -826,6 +923,77 @@ impl DeploymentStore {
             fs::create_dir_all(parent)?;
         }
         fs::write(recovery_path, serde_json::to_vec_pretty(&recovery_point)?)?;
+        notes.push("recovery point recorded before boot switch".to_string());
+
+        if let Some(target_slot) = staged_boot_state.staged_slot.clone() {
+            notes.push(format!("boot_staged_slot={target_slot}"));
+            if self
+                .maybe_inject_failure(
+                    &mut state,
+                    "apply.boot-switch",
+                    "apply",
+                    "boot-switch-failed",
+                    &mut notes,
+                    Some(&recovery_id),
+                    target_version.as_deref(),
+                    None,
+                )?
+                .is_some()
+            {
+                return Ok(UpdateApplyResponse {
+                    service_id: self.config.service_id.clone(),
+                    status: "failed".to_string(),
+                    deployment_status: state.status,
+                    dry_run: false,
+                    target_version,
+                    recovery_ref: Some(recovery_id),
+                    staged_artifacts,
+                    notes,
+                });
+            }
+            if let Some(command) = &self.config.boot_switch_command {
+                let mut boot_switch_environment = command_environment.clone();
+                boot_switch_environment
+                    .push(("AIOS_UPDATED_TARGET_SLOT".to_string(), target_slot.clone()));
+                let execution = execute_command(command, &boot_switch_environment)?;
+                notes.extend(execution_notes("boot_switch", &execution));
+                if !execution.success {
+                    state.status = "boot-switch-failed".to_string();
+                    state.notes = notes.clone();
+                    self.persist(&state)?;
+                    return Ok(UpdateApplyResponse {
+                        service_id: self.config.service_id.clone(),
+                        status: "failed".to_string(),
+                        deployment_status: state.status,
+                        dry_run: false,
+                        target_version,
+                        recovery_ref: Some(recovery_id),
+                        staged_artifacts,
+                        notes,
+                    });
+                }
+            } else {
+                match self.boot_control().switch_slot(&target_slot) {
+                    Ok(backend_notes) => notes.extend(backend_notes),
+                    Err(error) => {
+                        notes.push(format!("boot_switch_error={error}"));
+                        state.status = "boot-switch-failed".to_string();
+                        state.notes = notes.clone();
+                        self.persist(&state)?;
+                        return Ok(UpdateApplyResponse {
+                            service_id: self.config.service_id.clone(),
+                            status: "failed".to_string(),
+                            deployment_status: state.status,
+                            dry_run: false,
+                            target_version,
+                            recovery_ref: Some(recovery_id),
+                            staged_artifacts,
+                            notes,
+                        });
+                    }
+                }
+            }
+        }
 
         state.next_version = target_version.clone();
         state.active_recovery_id = Some(recovery_id.clone());
@@ -837,7 +1005,6 @@ impl DeploymentStore {
         };
         state.rollback_ready = true;
         state.last_check_at = Some(now);
-        notes.push("recovery point recorded before staging update".to_string());
         state.notes = notes.clone();
         self.persist(&state)?;
 
@@ -917,6 +1084,29 @@ impl DeploymentStore {
             });
         }
 
+        if self
+            .maybe_inject_failure(
+                &mut state,
+                "rollback.preflight",
+                "rollback",
+                "rollback-failed",
+                &mut notes,
+                Some(&rollback_target),
+                None,
+                Some(&rollback_target),
+            )?
+            .is_some()
+        {
+            return Ok(UpdateRollbackResponse {
+                service_id: self.config.service_id.clone(),
+                status: "failed".to_string(),
+                deployment_status: state.status,
+                dry_run: false,
+                rollback_target: Some(rollback_target),
+                notes,
+            });
+        }
+
         let command_environment =
             self.rollback_command_environment(&state, request, &rollback_target, &recovery_points);
 
@@ -946,6 +1136,28 @@ impl DeploymentStore {
             .boot_control()
             .stage_rollback(boot_slot_target.as_deref())?;
         if let Some(target_slot) = rollback_boot_state.staged_slot.clone() {
+            if self
+                .maybe_inject_failure(
+                    &mut state,
+                    "rollback.boot-switch",
+                    "rollback",
+                    "boot-switch-failed",
+                    &mut notes,
+                    Some(&rollback_target),
+                    None,
+                    Some(&rollback_target),
+                )?
+                .is_some()
+            {
+                return Ok(UpdateRollbackResponse {
+                    service_id: self.config.service_id.clone(),
+                    status: "failed".to_string(),
+                    deployment_status: state.status,
+                    dry_run: false,
+                    rollback_target: Some(rollback_target),
+                    notes,
+                });
+            }
             if let Some(command) = &self.config.boot_switch_command {
                 let mut boot_switch_environment = command_environment.clone();
                 boot_switch_environment
@@ -1252,6 +1464,48 @@ mod tests {
             current_channel: "stable".to_string(),
             current_version: "0.1.0".to_string(),
             target_version_hint: Some("0.1.1".to_string()),
+            failure_injection_stage: None,
+            failure_injection_reason: None,
+            sysupdate_check_command: None,
+            sysupdate_apply_command: None,
+            rollback_command: None,
+        })
+        .expect("create deployment store")
+    }
+
+    fn store_with_failure(
+        root: &Path,
+        stage: Option<&str>,
+        reason: Option<&str>,
+    ) -> DeploymentStore {
+        DeploymentStore::new(DeploymentStoreConfig {
+            service_id: "aios-updated".to_string(),
+            state_path: root.join("state").join("deployment-state.json"),
+            sysupdate_dir: root.join("sysupdate"),
+            sysupdate_definitions_dir: root.join("sysupdate"),
+            sysupdate_root: None,
+            sysupdate_component: None,
+            sysupdate_extra_args: Vec::new(),
+            diagnostics_dir: root.join("diagnostics"),
+            recovery_dir: root.join("recovery"),
+            boot_state_path: root.join("state").join("boot-control.json"),
+            sysupdate_binary: "systemd-sysupdate".to_string(),
+            boot_current_slot: "a".to_string(),
+            boot_backend: "state-file".to_string(),
+            bootctl_binary: "bootctl".to_string(),
+            firmwarectl_binary: "firmwarectl".to_string(),
+            boot_cmdline_path: root.join("state").join("cmdline"),
+            boot_entry_state_dir: root.join("state").join("boot"),
+            boot_success_marker_path: root.join("state").join("boot-success"),
+            boot_slot_command: None,
+            boot_switch_command: None,
+            boot_success_command: None,
+            update_stack: "manual-stage".to_string(),
+            current_channel: "stable".to_string(),
+            current_version: "0.1.0".to_string(),
+            target_version_hint: Some("0.1.1".to_string()),
+            failure_injection_stage: stage.map(ToOwned::to_owned),
+            failure_injection_reason: reason.map(ToOwned::to_owned),
             sysupdate_check_command: None,
             sysupdate_apply_command: None,
             rollback_command: None,
@@ -1359,6 +1613,8 @@ mod tests {
             current_channel: "stable".to_string(),
             current_version: "0.1.0".to_string(),
             target_version_hint: Some("0.1.1".to_string()),
+            failure_injection_stage: None,
+            failure_injection_reason: None,
             sysupdate_check_command: Some("exit 7".to_string()),
             sysupdate_apply_command: None,
             rollback_command: None,
@@ -1480,6 +1736,8 @@ mod tests {
             current_channel: "stable".to_string(),
             current_version: "0.1.0".to_string(),
             target_version_hint: Some("0.1.1".to_string()),
+            failure_injection_stage: None,
+            failure_injection_reason: None,
             sysupdate_check_command: None,
             sysupdate_apply_command: Some(apply_context_command()),
             rollback_command: None,
@@ -1541,6 +1799,8 @@ mod tests {
             current_channel: "stable".to_string(),
             current_version: "0.1.0".to_string(),
             target_version_hint: Some("0.1.1".to_string()),
+            failure_injection_stage: None,
+            failure_injection_reason: None,
             sysupdate_check_command: None,
             sysupdate_apply_command: Some(apply_ok_command()),
             rollback_command: None,
@@ -1563,6 +1823,110 @@ mod tests {
 
         assert_eq!(response.status, "accepted");
         assert_eq!(response.deployment_status, "apply-triggered");
+
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn apply_failure_injection_writes_artifact_and_keeps_recovery_point() {
+        let root = test_root("apply-failure-injection");
+        let store = store_with_failure(
+            &root,
+            Some("apply.boot-switch"),
+            Some("simulate vendor hook failure"),
+        );
+        fs::create_dir_all(root.join("sysupdate")).expect("create sysupdate dir");
+        fs::write(
+            root.join("sysupdate").join("00-aios-root.transfer"),
+            b"transfer",
+        )
+        .expect("write transfer file");
+
+        let response = store
+            .apply(&UpdateApplyRequest {
+                target_version: Some("1.0.1".to_string()),
+                reason: Some("inject boot switch failure".to_string()),
+                dry_run: false,
+            })
+            .expect("apply update");
+
+        assert_eq!(response.status, "failed");
+        assert_eq!(response.deployment_status, "boot-switch-failed");
+        assert!(response.recovery_ref.is_some());
+        assert!(response
+            .notes
+            .iter()
+            .any(|note| note == "failure_injection_stage=apply.boot-switch"));
+
+        let artifact_path = response
+            .notes
+            .iter()
+            .find_map(|note| note.strip_prefix("failure_injection_artifact="))
+            .map(PathBuf::from)
+            .expect("failure artifact path");
+        assert!(artifact_path.exists());
+
+        let artifact: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&artifact_path).expect("read artifact"))
+                .expect("parse artifact");
+        assert_eq!(artifact["stage"], "apply.boot-switch");
+        assert_eq!(artifact["reason"], "simulate vendor hook failure");
+        assert_eq!(
+            artifact["recovery_id"],
+            response.recovery_ref.clone().unwrap()
+        );
+
+        let snapshot = store.snapshot().expect("snapshot");
+        assert_eq!(snapshot.status, "boot-switch-failed");
+        assert_eq!(store.recovery_points().expect("recovery points").len(), 1);
+
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn rollback_failure_injection_writes_artifact() {
+        let root = test_root("rollback-failure-injection");
+        let store = store_with_failure(
+            &root,
+            Some("rollback.preflight"),
+            Some("simulate rollback preflight failure"),
+        );
+        fs::create_dir_all(root.join("recovery")).expect("create recovery dir");
+        fs::write(root.join("recovery").join("recovery-200.json"), b"{}")
+            .expect("write recovery record");
+
+        let response = store
+            .rollback(&UpdateRollbackRequest {
+                recovery_id: Some("recovery-200".to_string()),
+                reason: Some("inject rollback failure".to_string()),
+                dry_run: false,
+            })
+            .expect("rollback update");
+
+        assert_eq!(response.status, "failed");
+        assert_eq!(response.deployment_status, "rollback-failed");
+        assert_eq!(response.rollback_target.as_deref(), Some("recovery-200"));
+        assert!(response
+            .notes
+            .iter()
+            .any(|note| note == "failure_injection_stage=rollback.preflight"));
+
+        let artifact_path = response
+            .notes
+            .iter()
+            .find_map(|note| note.strip_prefix("failure_injection_artifact="))
+            .map(PathBuf::from)
+            .expect("failure artifact path");
+        assert!(artifact_path.exists());
+
+        let artifact: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&artifact_path).expect("read artifact"))
+                .expect("parse artifact");
+        assert_eq!(artifact["stage"], "rollback.preflight");
+        assert_eq!(artifact["rollback_target"], "recovery-200");
+
+        let snapshot = store.snapshot().expect("snapshot");
+        assert_eq!(snapshot.status, "rollback-failed");
 
         fs::remove_dir_all(root).ok();
     }
