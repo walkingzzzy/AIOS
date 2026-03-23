@@ -113,7 +113,18 @@ jobs:
             aios/shell/components/portal-chooser/prototype.py \
             aios/shell/components/portal-chooser/client.py \
             aios/shell/components/portal-chooser/panel.py \
-            aios/shell/components/portal-chooser/standalone.py
+            aios/shell/components/portal-chooser/standalone.py \
+            aios/shell/runtime/shell_panel_gtk_renderer.py \
+            aios/shell/runtime/shell_panel_clients_integration.py \
+            aios/runtime/workers/local_cpu_worker.py \
+            aios/runtime/model_manager.py \
+            aios/services/deviced/runtime/backend_manager.py \
+            aios/services/deviced/runtime/media_capture.py \
+            scripts/test-local-cpu-worker-smoke.py \
+            scripts/test-model-manager-smoke.py \
+            scripts/test-e2e-intent-flow-smoke.py \
+            scripts/test-media-capture-smoke.py \
+            scripts/test-security-hardening-smoke.py
 
       - name: Cargo test
         working-directory: aios
@@ -313,6 +324,21 @@ jobs:
 
       - name: Boot preflight smoke
         run: python3 scripts/test-boot-qemu-smoke.py
+
+      - name: Local CPU worker smoke
+        run: python3 scripts/test-local-cpu-worker-smoke.py
+
+      - name: Model manager smoke
+        run: python3 scripts/test-model-manager-smoke.py
+
+      - name: E2E intent flow smoke
+        run: python3 scripts/test-e2e-intent-flow-smoke.py
+
+      - name: Media capture smoke
+        run: python3 scripts/test-media-capture-smoke.py
+
+      - name: Security hardening smoke
+        run: python3 scripts/test-security-hardening-smoke.py
 
       - name: Full regression suite smoke
         run: python3 scripts/test-full-regression-suite-smoke.py
