@@ -154,6 +154,8 @@ def start_gpu_worker(socket_path: Path) -> tuple[threading.Event, threading.Thre
                             "backend_id": "local-gpu",
                             "route_state": "local-wrapper",
                             "content": f"uds worker response from local-gpu for {request.get('task_id')}",
+                            "rejected": False,
+                            "degraded": False,
                             "reason": "mock backend uds worker",
                             "estimated_latency_ms": request.get("estimated_latency_ms", 0),
                         }
