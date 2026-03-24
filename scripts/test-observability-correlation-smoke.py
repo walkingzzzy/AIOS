@@ -7,11 +7,11 @@ import shutil
 import sqlite3
 import subprocess
 import sys
-import uuid
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_OUTPUT_PREFIX = ROOT / "out" / "validation" / "cross-service-correlation-report"
 SESSIOND_MIGRATIONS = [
     ROOT / "aios" / "services" / "sessiond" / "migrations" / "0001_init.sql",
     ROOT / "aios" / "services" / "sessiond" / "migrations" / "0002_task_events.sql",
@@ -227,13 +227,23 @@ def create_session_db(path: Path) -> None:
 
 
 def build_report(report_prefix: Path, state_root: Path, runtime_export: Path | None = None) -> dict:
+    session_db = resolve_state_path(
+        state_root,
+        "sessiond.sqlite3",
+        "sessiond/sessiond.sqlite3",
+    )
+    policy_audit_log = resolve_state_path(
+        state_root,
+        "audit.jsonl",
+        "policyd/audit.jsonl",
+    )
     build_cmd = [
         sys.executable,
         str(ROOT / "scripts" / "build-observability-correlation-report.py"),
         "--session-db",
-        str(state_root / "sessiond.sqlite3"),
+        str(session_db),
         "--policy-audit-log",
-        str(state_root / "audit.jsonl"),
+        str(policy_audit_log),
     ]
     if runtime_export is not None:
         build_cmd.extend([
@@ -243,11 +253,11 @@ def build_report(report_prefix: Path, state_root: Path, runtime_export: Path | N
     else:
         build_cmd.extend([
             "--runtime-events-log",
-            str(state_root / "runtime-events.jsonl"),
+            str(resolve_state_path(state_root, "runtime-events.jsonl", "runtimed/runtime-events.jsonl")),
             "--remote-audit-log",
-            str(state_root / "remote-audit.jsonl"),
+            str(resolve_state_path(state_root, "remote-audit.jsonl", "runtimed/remote-audit.jsonl")),
             "--observability-log",
-            str(state_root / "observability.jsonl"),
+            str(resolve_state_path(state_root, "observability.jsonl", "runtimed/observability.jsonl")),
         ])
     build_cmd.extend([
         "--output-prefix",
@@ -262,6 +272,14 @@ def build_report(report_prefix: Path, state_root: Path, runtime_export: Path | N
     json_report = report_prefix.with_suffix(".json")
     require(json_report.exists(), "correlation report json was not written")
     return json.loads(json_report.read_text(encoding="utf-8"))
+
+
+def resolve_state_path(state_root: Path, *relative_candidates: str) -> Path:
+    for relative in relative_candidates:
+        candidate = state_root / relative
+        if candidate.exists():
+            return candidate
+    return state_root / relative_candidates[0]
 
 
 def assert_baseline_report(payload: dict) -> None:
@@ -352,9 +370,9 @@ def assert_vendor_metadata(payload: dict, vendor_evidence: Path) -> None:
 
 
 def run_synthetic_fallback(keep_state: bool) -> int:
-    temp_parent = ROOT / "out" / "tmp"
-    temp_parent.mkdir(parents=True, exist_ok=True)
-    temp_root = temp_parent / f"aios-observability-correlation-{uuid.uuid4().hex}"
+    temp_root = DEFAULT_OUTPUT_PREFIX.parent / f"{DEFAULT_OUTPUT_PREFIX.name}-synthetic-state"
+    if temp_root.exists():
+        shutil.rmtree(temp_root, ignore_errors=True)
     temp_root.mkdir(parents=True, exist_ok=True)
     try:
         state_root = temp_root / "state"
@@ -457,7 +475,7 @@ def run_synthetic_fallback(keep_state: bool) -> int:
             observability_records,
         )
 
-        report_prefix = temp_root / "out" / "cross-service-correlation-report"
+        report_prefix = DEFAULT_OUTPUT_PREFIX
         payload = build_report(report_prefix, state_root, runtime_export=runtime_export)
         assert_baseline_report(payload)
         assert_vendor_metadata(payload, vendor_evidence)
@@ -480,10 +498,7 @@ def run_synthetic_fallback(keep_state: bool) -> int:
         )
         return 0
     finally:
-        if keep_state:
-            print(f"state retained at: {temp_root}")
-        else:
-            shutil.rmtree(temp_root, ignore_errors=True)
+        print(f"state retained at: {temp_root}")
 
 
 def main() -> int:
