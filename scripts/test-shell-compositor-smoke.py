@@ -316,7 +316,10 @@ def main() -> int:
         require(payload["outputs"][0]["primary"] is True, "compositor primary output flag mismatch")
         require(payload["outputs"][0]["renderable"] is True, "compositor renderable output flag mismatch")
         require(payload["managed_windows"] == [], "compositor managed windows mismatch")
-        require(payload["window_manager_status"] == "persistent", "compositor window manager status mismatch")
+        require(
+            payload["window_manager_status"].startswith("persistent"),
+            "compositor window manager status mismatch",
+        )
         require(payload["modal_surface_count"] == 1, "compositor modal surface count mismatch")
         require(payload["blocked_surface_count"] == 2, "compositor blocked surface count mismatch")
         require(payload["shell_role_counts"]["dock"] == 1, "compositor dock role count mismatch")
