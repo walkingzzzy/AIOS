@@ -156,6 +156,10 @@ pub struct SessionState {
     pub active_modal_surface_id: Option<String>,
     pub primary_attention_surface_id: Option<String>,
     pub host_focus_status: String,
+    pub pending_damage_regions: Vec<(i32, i32, i32, i32)>,
+    pub damage_tracking_enabled: bool,
+    pub total_damage_events: u64,
+    pub last_damage_at_ms: u64,
     pub smithay_status: String,
     pub renderer_backend: String,
     pub renderer_status: String,
@@ -301,6 +305,10 @@ impl SessionState {
             active_modal_surface_id: None,
             primary_attention_surface_id: None,
             host_focus_status: "pending".to_string(),
+            pending_damage_regions: Vec::new(),
+            damage_tracking_enabled: true,
+            total_damage_events: 0,
+            last_damage_at_ms: 0,
             smithay_status: "inactive".to_string(),
             renderer_backend: "inactive".to_string(),
             renderer_status: "inactive".to_string(),
@@ -902,6 +910,38 @@ impl SessionState {
 
     pub fn json_summary(&self) -> String {
         serde_json::to_string(self).unwrap_or_else(|_| "{}".to_string())
+    }
+
+    pub fn record_damage(&mut self, x: i32, y: i32, width: i32, height: i32) {
+        if self.damage_tracking_enabled {
+            self.pending_damage_regions.push((x, y, width, height));
+            self.total_damage_events += 1;
+            self.last_damage_at_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+        }
+    }
+
+    pub fn drain_damage(&mut self) -> Vec<(i32, i32, i32, i32)> {
+        std::mem::take(&mut self.pending_damage_regions)
+    }
+
+    pub fn merge_damage(&self) -> Option<(i32, i32, i32, i32)> {
+        if self.pending_damage_regions.is_empty() {
+            return None;
+        }
+        let mut min_x = i32::MAX;
+        let mut min_y = i32::MAX;
+        let mut max_x = i32::MIN;
+        let mut max_y = i32::MIN;
+        for &(x, y, w, h) in &self.pending_damage_regions {
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x + w);
+            max_y = max_y.max(y + h);
+        }
+        Some((min_x, min_y, max_x - min_x, max_y - min_y))
     }
 }
 
