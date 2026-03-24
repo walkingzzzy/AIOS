@@ -161,6 +161,8 @@ def plan_step(plan: dict, capability_id: str) -> dict | None:
 
 
 def smoke_temp_root() -> Path:
+    if os.name != "nt" and Path("/tmp").exists():
+        return Path(tempfile.mkdtemp(prefix="tb-", dir="/tmp"))
     base = repo_root() / ".tmp" / "team-b-smoke"
     base.mkdir(parents=True, exist_ok=True)
     return Path(tempfile.mkdtemp(prefix="tb-", dir=base))
