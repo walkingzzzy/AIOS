@@ -1,6 +1,6 @@
 use std::{
     path::{Path, PathBuf},
-    process::{Child, Command},
+    process::{Child, Command, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
@@ -431,6 +431,9 @@ fn spawn_managed_worker(
     command.env("AIOS_RUNTIME_WORKER_MODE", "unix");
     command.env("AIOS_RUNTIME_WORKER_SOCKET_PATH", socket_path);
     command.env("AIOS_RUNTIME_WORKER_BACKEND_ID", backend_id);
+    command.stdin(Stdio::null());
+    command.stdout(Stdio::null());
+    command.stderr(Stdio::null());
     if let Some(worker_contract) = worker_contract {
         command.env("AIOS_RUNTIME_WORKER_CONTRACT", worker_contract);
     }
