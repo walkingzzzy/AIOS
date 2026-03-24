@@ -40,6 +40,12 @@ def resolve_binary(name: str, explicit: Path | None, bin_dir: Path | None) -> Pa
     return resolve_binary_path(default_aios_bin_dir(repo_root()), name)
 
 
+def resolve_provider(explicit: Path | None) -> Path:
+    if explicit is not None:
+        return explicit
+    return repo_root() / "aios" / "shell" / "runtime" / "screen_capture_portal_provider.py"
+
+
 def unix_rpc_supported() -> bool:
     return hasattr(socket, "AF_UNIX") and os.name != "nt"
 
