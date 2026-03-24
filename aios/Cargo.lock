@@ -27,7 +27,7 @@ dependencies = [
 
 [[package]]
 name = "aios-agentd"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aios-contracts",
  "aios-core",
@@ -45,7 +45,7 @@ dependencies = [
 
 [[package]]
 name = "aios-contracts"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -53,7 +53,7 @@ dependencies = [
 
 [[package]]
 name = "aios-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -69,7 +69,7 @@ dependencies = [
 
 [[package]]
 name = "aios-device-metadata-provider"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aios-contracts",
  "aios-core",
@@ -85,7 +85,7 @@ dependencies = [
 
 [[package]]
 name = "aios-deviced"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aios-contracts",
  "aios-core",
@@ -102,7 +102,7 @@ dependencies = [
 
 [[package]]
 name = "aios-policyd"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aios-contracts",
  "aios-core",
@@ -121,7 +121,7 @@ dependencies = [
 
 [[package]]
 name = "aios-portal"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aios-contracts",
  "anyhow",
@@ -134,7 +134,7 @@ dependencies = [
 
 [[package]]
 name = "aios-provider-registry"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aios-contracts",
  "anyhow",
@@ -146,7 +146,7 @@ dependencies = [
 
 [[package]]
 name = "aios-rpc"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aios-core",
  "anyhow",
@@ -159,7 +159,7 @@ dependencies = [
 
 [[package]]
 name = "aios-runtime-local-inference-provider"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aios-contracts",
  "aios-core",
@@ -174,7 +174,7 @@ dependencies = [
 
 [[package]]
 name = "aios-runtimed"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aios-contracts",
  "aios-core",
@@ -192,7 +192,7 @@ dependencies = [
 
 [[package]]
 name = "aios-sessiond"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aios-contracts",
  "aios-core",
@@ -211,7 +211,7 @@ dependencies = [
 
 [[package]]
 name = "aios-system-files-provider"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aios-contracts",
  "aios-core",
@@ -228,7 +228,7 @@ dependencies = [
 
 [[package]]
 name = "aios-system-intent-provider"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aios-contracts",
  "aios-core",
@@ -243,7 +243,7 @@ dependencies = [
 
 [[package]]
 name = "aios-updated"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aios-contracts",
  "aios-core",
