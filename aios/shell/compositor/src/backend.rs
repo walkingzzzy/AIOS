@@ -530,7 +530,8 @@ mod mode {
         input::{
             AbsolutePositionEvent, Axis, ButtonState, Device as BackendDevice,
             Event as BackendEvent, InputBackend, InputEvent, KeyState, KeyboardKeyEvent,
-            PointerAxisEvent, PointerButtonEvent as BackendPointerButtonEvent, TouchEvent,
+            PointerAxisEvent, PointerButtonEvent as BackendPointerButtonEvent,
+            PointerMotionEvent as BackendPointerMotionEvent, TouchEvent,
         },
         libinput::{LibinputInputBackend, LibinputSessionInterface},
         renderer::{
