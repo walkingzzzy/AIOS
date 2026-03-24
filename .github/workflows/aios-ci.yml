@@ -184,6 +184,10 @@ jobs:
             -p aios-system-intent-provider \
             -p aios-system-files-provider
 
+      - name: Build shell compositor
+        working-directory: aios
+        run: cargo build --manifest-path shell/compositor/Cargo.toml
+
       - name: IPC smoke
         run: python3 scripts/test-ipc-smoke.py --bin-dir aios/target/debug
 
