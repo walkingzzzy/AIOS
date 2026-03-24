@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parent.parent
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="AIOS shell control clients live smoke")
     parser.add_argument("--bin-dir", type=Path, help="Directory containing sessiond/policyd binaries")
+    parser.add_argument("--agentd", type=Path, help="Path to agentd binary")
     parser.add_argument("--sessiond", type=Path, help="Path to sessiond binary")
     parser.add_argument("--policyd", type=Path, help="Path to policyd binary")
     parser.add_argument("--provider", type=Path, help="Path to shell control provider script")
@@ -102,9 +103,33 @@ def make_env(root: Path) -> dict[str, str]:
     runtime_root.mkdir(parents=True, exist_ok=True)
     state_root.mkdir(parents=True, exist_ok=True)
 
+    provider_dirs = [
+        ROOT / "aios" / "sdk" / "providers",
+        ROOT / "aios" / "runtime" / "providers",
+        ROOT / "aios" / "shell" / "providers",
+        ROOT / "aios" / "compat" / "browser" / "providers",
+        ROOT / "aios" / "compat" / "office" / "providers",
+        ROOT / "aios" / "compat" / "mcp-bridge" / "providers",
+        ROOT / "aios" / "compat" / "code-sandbox" / "providers",
+    ]
+
     env = os.environ.copy()
     env.update(
         {
+            "AIOS_AGENTD_RUNTIME_DIR": str(runtime_root / "agentd"),
+            "AIOS_AGENTD_STATE_DIR": str(state_root / "agentd"),
+            "AIOS_AGENTD_SOCKET_PATH": str(runtime_root / "agentd" / "agentd.sock"),
+            "AIOS_AGENTD_SESSIOND_SOCKET": str(runtime_root / "sessiond" / "sessiond.sock"),
+            "AIOS_AGENTD_POLICYD_SOCKET": str(runtime_root / "policyd" / "policyd.sock"),
+            "AIOS_AGENTD_RUNTIMED_SOCKET": str(runtime_root / "runtimed" / "runtimed.sock"),
+            "AIOS_AGENTD_PROVIDER_REGISTRY_STATE_DIR": str(state_root / "registry"),
+            "AIOS_AGENTD_PROVIDER_DESCRIPTOR_DIRS": os.pathsep.join(str(path) for path in provider_dirs),
+            "AIOS_AGENTD_SYSTEM_INTENT_PROVIDER_SOCKET": str(
+                runtime_root / "system-intent-provider" / "system-intent-provider.sock"
+            ),
+            "AIOS_AGENTD_SYSTEM_FILES_PROVIDER_SOCKET": str(
+                runtime_root / "system-files-provider" / "system-files-provider.sock"
+            ),
             "AIOS_SESSIOND_RUNTIME_DIR": str(runtime_root / "sessiond"),
             "AIOS_SESSIOND_STATE_DIR": str(state_root / "sessiond"),
             "AIOS_SESSIOND_SOCKET_PATH": str(runtime_root / "sessiond" / "sessiond.sock"),
@@ -181,6 +206,7 @@ def main() -> int:
         print("shell control clients live smoke skipped: unix rpc transport unsupported on this platform")
         return 0
     binaries = {
+        "agentd": resolve_binary("agentd", args.agentd, args.bin_dir),
         "sessiond": resolve_binary("sessiond", args.sessiond, args.bin_dir),
         "policyd": resolve_binary("policyd", args.policyd, args.bin_dir),
         "provider": resolve_provider(args.provider),
@@ -313,11 +339,13 @@ def main() -> int:
     )
 
     processes = {
+        "agentd": launch(binaries["agentd"], env),
         "sessiond": launch(binaries["sessiond"], env),
         "policyd": launch(binaries["policyd"], env),
     }
 
     try:
+        agentd_socket = Path(env["AIOS_AGENTD_SOCKET_PATH"])
         sessiond_socket = Path(env["AIOS_SESSIOND_SOCKET_PATH"])
         policyd_socket = Path(env["AIOS_POLICYD_SOCKET_PATH"])
         shell_profile.write_text(
@@ -330,6 +358,7 @@ def main() -> int:
                         "approval_panel": True,
                     },
                     "paths": {
+                        "agentd_socket": str(agentd_socket),
                         "sessiond_socket": str(sessiond_socket),
                         "policyd_socket": str(policyd_socket),
                         "shell_control_provider_socket": str(
@@ -345,8 +374,10 @@ def main() -> int:
                 ensure_ascii=False,
             )
         )
+        wait_for_socket(agentd_socket, args.timeout)
         wait_for_socket(sessiond_socket, args.timeout)
         wait_for_socket(policyd_socket, args.timeout)
+        wait_for_health(agentd_socket, args.timeout)
         wait_for_health(sessiond_socket, args.timeout)
         wait_for_health(policyd_socket, args.timeout)
 
