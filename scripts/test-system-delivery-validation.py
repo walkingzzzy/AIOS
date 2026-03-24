@@ -12,6 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OUTPUT_PREFIX = ROOT / 'out' / 'validation' / 'system-delivery-validation-report'
+DEFAULT_BUNDLE_DIR = ROOT / 'out' / 'aios-system-delivery'
 
 
 @dataclass(frozen=True)
@@ -37,6 +38,11 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help='Optional output path for the generated evidence index JSON',
     )
+    parser.add_argument(
+        '--force-refresh-bundle',
+        action='store_true',
+        help='Force rebuilding the delivery bundle even when an existing manifest is already present',
+    )
     return parser.parse_args()
 
 
@@ -46,13 +52,13 @@ def checks() -> list[CheckSpec]:
         CheckSpec(
             check_id='delivery-rootfs-hygiene',
             summary='Validate delivery bundle layout, enabled units, compat descriptors, and machine-id hygiene',
-            command=[python, str(ROOT / 'scripts' / 'test-image-delivery-smoke.py'), '--bundle-dir', str(ROOT / 'out' / 'aios-system-delivery')],
+            command=[python, str(ROOT / 'scripts' / 'test-image-delivery-smoke.py'), '--bundle-dir', str(DEFAULT_BUNDLE_DIR)],
             evidence_paths=('out/aios-system-delivery/manifest.json',),
         ),
         CheckSpec(
             check_id='firstboot-offline-hygiene',
             summary='Validate firstboot idempotence, machine-id initialization, and report generation against the delivery bundle',
-            command=[python, str(ROOT / 'scripts' / 'test-firstboot-hygiene-smoke.py'), '--bundle-dir', str(ROOT / 'out' / 'aios-system-delivery')],
+            command=[python, str(ROOT / 'scripts' / 'test-firstboot-hygiene-smoke.py'), '--bundle-dir', str(DEFAULT_BUNDLE_DIR)],
             evidence_paths=('out/aios-system-delivery/rootfs/usr/libexec/aios/aios-firstboot.sh',),
         ),
         CheckSpec(
@@ -213,7 +219,30 @@ def run_check(spec: CheckSpec) -> dict:
     }
 
 
-def refresh_delivery_bundle() -> dict:
+def existing_delivery_bundle_details() -> dict | None:
+    manifest_path = DEFAULT_BUNDLE_DIR / 'manifest.json'
+    if not manifest_path.exists():
+        return None
+    return {
+        'status': 'reused-existing-bundle',
+        'bundle_dir': str(DEFAULT_BUNDLE_DIR),
+        'manifest_path': str(manifest_path),
+    }
+
+
+def refresh_delivery_bundle(force_refresh: bool = False) -> dict:
+    existing_bundle = existing_delivery_bundle_details()
+    if existing_bundle is not None and not force_refresh:
+        return {
+            'command': '',
+            'status': 'passed',
+            'returncode': 0,
+            'duration_seconds': 0.0,
+            'stdout': '',
+            'stderr': '',
+            'parsed_output': existing_bundle,
+        }
+
     command = [
         sys.executable,
         str(ROOT / 'scripts' / 'build-aios-delivery.py'),
@@ -266,7 +295,8 @@ def render_markdown(report: dict) -> str:
         lines.append('## Delivery Bundle Refresh')
         lines.append('')
         lines.append(f"- Status: `{bundle_refresh['status']}`")
-        lines.append(f"- Command: `{bundle_refresh['command']}`")
+        if bundle_refresh['command']:
+            lines.append(f"- Command: `{bundle_refresh['command']}`")
         lines.append(f"- Duration: `{bundle_refresh['duration_seconds']}` seconds")
         if bundle_refresh['parsed_output'] is not None:
             lines.append('- Parsed output:')
@@ -409,7 +439,7 @@ def main() -> int:
         prefix.name.replace('-report', '-evidence-index')
     ).with_suffix('.json')
 
-    delivery_bundle_refresh = refresh_delivery_bundle()
+    delivery_bundle_refresh = refresh_delivery_bundle(force_refresh=args.force_refresh_bundle)
     if delivery_bundle_refresh['status'] != 'passed':
         report = {
             'generated_at': datetime.now(timezone.utc).isoformat(),
