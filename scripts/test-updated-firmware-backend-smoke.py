@@ -254,6 +254,7 @@ def main() -> int:
             "AIOS_UPDATED_BOOT_CMDLINE_PATH": str(cmdline_path),
             "AIOS_UPDATED_BOOT_ENTRY_STATE_DIR": str(boot_dir),
             "AIOS_UPDATED_BOOT_SUCCESS_MARKER_PATH": str(boot_success_marker_path),
+            "AIOS_UPDATED_CURRENT_VERSION": "0.1.0",
             "AIOS_UPDATED_CURRENT_SLOT": "a",
             "AIOS_UPDATED_HEALTH_PROBE_COMMAND": (
                 f"printf '%s' \"$AIOS_UPDATED_OPERATION|$AIOS_UPDATED_HEALTH_PROBE_PATH|$AIOS_UPDATED_DEPLOYMENT_STATUS\" > {shlex.quote(str(health_context_path))} && "
