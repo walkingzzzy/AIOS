@@ -149,10 +149,14 @@ def read_json(path: Path) -> dict:
 def wait_for_collectors(socket_path: Path, count: int, timeout: float) -> dict:
     deadline = time.time() + timeout
     while time.time() < deadline:
-        state = rpc_call(socket_path, "device.state.get", {}, timeout=1.0)
-        collectors = state.get("continuous_collectors", [])
-        if len(collectors) >= count and all(item.get("sample_count", 0) >= 1 for item in collectors):
-            return state
+        try:
+            remaining = max(1.0, deadline - time.time())
+            state = rpc_call(socket_path, "device.state.get", {}, timeout=min(timeout, remaining))
+            collectors = state.get("continuous_collectors", [])
+            if len(collectors) >= count and all(item.get("sample_count", 0) >= 1 for item in collectors):
+                return state
+        except Exception:
+            pass
         time.sleep(0.1)
     raise TimeoutError("Timed out waiting for continuous collectors to emit samples")
 
@@ -285,9 +289,13 @@ def main() -> int:
 
         deadline = time.time() + args.timeout
         while time.time() < deadline:
-            final_state = rpc_call(socket_path, "device.state.get", {}, timeout=1.0)
-            if final_state.get("continuous_collectors") == [] and final_state.get("active_captures") == []:
-                break
+            try:
+                remaining = max(1.0, deadline - time.time())
+                final_state = rpc_call(socket_path, "device.state.get", {}, timeout=min(args.timeout, remaining))
+                if final_state.get("continuous_collectors") == [] and final_state.get("active_captures") == []:
+                    break
+            except Exception:
+                pass
             time.sleep(0.1)
         else:
             raise TimeoutError("continuous collectors did not stop cleanly")
