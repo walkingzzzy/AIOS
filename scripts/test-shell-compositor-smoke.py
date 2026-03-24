@@ -291,9 +291,12 @@ def main() -> int:
         require(payload["active_workspace_id"] == "workspace-1", "compositor active workspace id mismatch")
         require(payload["workspace_switch_count"] == 0, "compositor workspace switch count mismatch")
         require(payload["output_layout_mode"] == "horizontal", "compositor output layout mode mismatch")
-        require(payload["renderable_output_count"] == 0, "compositor renderable output count mismatch")
+        require(payload["renderable_output_count"] == 1, "compositor renderable output count mismatch")
         require(payload["non_renderable_output_count"] == 0, "compositor non-renderable output count mismatch")
-        require(payload["release_grade_output_status"] == "uninitialized", "compositor release-grade output status mismatch")
+        require(
+            payload["release_grade_output_status"] == "single-output(renderable=1/1)",
+            "compositor release-grade output status mismatch",
+        )
         require(payload["window_state_path"] == str(window_state_path), "compositor window state path mismatch")
         require(payload["managed_window_count"] == 0, "compositor managed window count mismatch")
         require(payload["visible_window_count"] == 0, "compositor visible window count mismatch")
@@ -308,7 +311,10 @@ def main() -> int:
         require(payload["workspace_window_counts"] == {}, "compositor workspace window counts mismatch")
         require(payload["drag_state"] == "idle", "compositor drag state mismatch")
         require(payload["resize_state"] == "idle", "compositor resize state mismatch")
-        require(payload["outputs"] == [], "compositor outputs mismatch")
+        require(len(payload["outputs"]) == 1, "compositor outputs mismatch")
+        require(payload["outputs"][0]["output_id"] == "display-1", "compositor primary output id mismatch")
+        require(payload["outputs"][0]["primary"] is True, "compositor primary output flag mismatch")
+        require(payload["outputs"][0]["renderable"] is True, "compositor renderable output flag mismatch")
         require(payload["managed_windows"] == [], "compositor managed windows mismatch")
         require(payload["window_manager_status"] == "persistent", "compositor window manager status mismatch")
         require(payload["modal_surface_count"] == 1, "compositor modal surface count mismatch")
