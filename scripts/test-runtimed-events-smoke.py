@@ -99,13 +99,20 @@ def wait_for_health(socket_path: Path, timeout: float) -> dict:
 
 
 def launch(binary: Path, env: dict[str, str]) -> subprocess.Popen:
-    return subprocess.Popen(
+    log_dir = Path(env.get("AIOS_RUNTIMED_STATE_DIR") or env.get("AIOS_POLICYD_STATE_DIR") or tempfile.gettempdir())
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f"{binary.name}.log"
+    log_handle = open(log_path, "w", encoding="utf-8")
+    process = subprocess.Popen(
         [str(binary)],
         env=env,
-        stdout=subprocess.PIPE,
+        stdout=log_handle,
         stderr=subprocess.STDOUT,
         text=True,
     )
+    process._aios_log_handle = log_handle  # type: ignore[attr-defined]
+    process._aios_log_path = log_path  # type: ignore[attr-defined]
+    return process
 
 
 def terminate(process: subprocess.Popen | None) -> str:
@@ -118,7 +125,14 @@ def terminate(process: subprocess.Popen | None) -> str:
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait(timeout=2)
-    return process.stdout.read() if process.stdout else ""
+    log_handle = getattr(process, "_aios_log_handle", None)
+    if log_handle is not None:
+        log_handle.flush()
+        log_handle.close()
+    log_path = getattr(process, "_aios_log_path", None)
+    if log_path is None or not Path(log_path).exists():
+        return ""
+    return Path(log_path).read_text(encoding="utf-8")
 
 
 def require(condition: bool, message: str) -> None:
