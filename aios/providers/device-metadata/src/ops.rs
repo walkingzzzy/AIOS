@@ -220,15 +220,14 @@ fn build_entries(
                 || requested_modalities.contains(&capability.modality.to_ascii_lowercase())
         })
         .map(|capability| {
-            build_entry(
-                capability,
-                backend_map
-                    .get(&capability.modality.to_ascii_lowercase())
-                    .copied(),
-                adapter_map
-                    .get(&capability.modality.to_ascii_lowercase())
-                    .copied(),
-            )
+            let modality = capability.modality.to_ascii_lowercase();
+            let backend = backend_map.get(&modality).copied();
+            let adapter = adapter_map.get(&modality).copied();
+            if modality == UI_TREE_MODALITY {
+                build_ui_tree_entry(device_state, Some(capability), backend, adapter)
+            } else {
+                build_entry(capability, backend, adapter)
+            }
         })
         .collect::<Vec<_>>();
 
@@ -240,6 +239,7 @@ fn build_entries(
     {
         entries.push(build_ui_tree_entry(
             device_state,
+            None,
             backend_map.get(UI_TREE_MODALITY).copied(),
             adapter_map.get(UI_TREE_MODALITY).copied(),
         ));
@@ -291,6 +291,7 @@ fn build_entry(
 
 fn build_ui_tree_entry(
     device_state: &DeviceStateGetResponse,
+    capability: Option<&DeviceCapabilityDescriptor>,
     backend: Option<&aios_contracts::DeviceBackendStatus>,
     adapter: Option<&DeviceCaptureAdapterPlan>,
 ) -> DeviceMetadataEntry {
@@ -306,6 +307,7 @@ fn build_ui_tree_entry(
     let source_backend = backend
         .map(|status| status.backend.clone())
         .or_else(|| adapter.map(|plan| plan.backend.clone()))
+        .or_else(|| capability.map(|item| item.source_backend.clone()))
         .unwrap_or_else(|| UI_TREE_DEFAULT_BACKEND.to_string());
     let mut backend_details = backend
         .map(|status| status.details.clone())
@@ -319,23 +321,32 @@ fn build_ui_tree_entry(
         current_support,
     );
 
-    let mut notes = vec![format!(
-        "ui_tree_snapshot_attached={}",
-        device_state.ui_tree_snapshot.is_some()
-    )];
+    let mut notes = capability
+        .map(|item| item.notes.clone())
+        .unwrap_or_default();
+    push_unique_note(
+        &mut notes,
+        format!(
+            "ui_tree_snapshot_attached={}",
+            device_state.ui_tree_snapshot.is_some()
+        ),
+    );
     if let Some(capture_mode) = &device_state.backend_summary.ui_tree_capture_mode {
-        notes.push(format!("ui_tree_capture_mode={capture_mode}"));
+        push_unique_note(&mut notes, format!("ui_tree_capture_mode={capture_mode}"));
     }
     if let Some(adapter) = adapter {
-        notes.push(format!("adapter_backend={}", adapter.backend));
+        push_unique_note(&mut notes, format!("adapter_backend={}", adapter.backend));
     }
     if let Some(current_support) = current_support {
-        notes.push(format!(
-            "ui_tree_current_environment_id={}",
-            current_support.environment_id
-        ));
+        push_unique_note(
+            &mut notes,
+            format!(
+                "ui_tree_current_environment_id={}",
+                current_support.environment_id
+            ),
+        );
         if let Some(stability) = current_support.stability.as_deref() {
-            notes.push(format!("ui_tree_current_stability={stability}"));
+            push_unique_note(&mut notes, format!("ui_tree_current_stability={stability}"));
         }
     }
 
@@ -343,7 +354,7 @@ fn build_ui_tree_entry(
         modality: UI_TREE_MODALITY.to_string(),
         source_backend,
         available,
-        conditional: true,
+        conditional: capability.map(|item| item.conditional).unwrap_or(true),
         readiness,
         backend_details,
         adapter_id: adapter.map(|item| item.adapter_id.clone()),
@@ -1436,6 +1447,18 @@ mod tests {
         device_state
     }
 
+    fn state_with_ui_tree_capability() -> DeviceStateGetResponse {
+        let mut device_state = state_with_ui_tree_backend();
+        device_state.capabilities.push(DeviceCapabilityDescriptor {
+            modality: "ui_tree".to_string(),
+            available: true,
+            conditional: true,
+            source_backend: "at-spi".to_string(),
+            notes: vec!["ui_tree-capability".to_string()],
+        });
+        device_state
+    }
+
     fn write_backend_evidence(
         root: &std::path::Path,
         modality: &str,
@@ -1521,6 +1544,35 @@ mod tests {
                 .iter()
                 .any(|item| item == "ui_tree_snapshot_attached=true"),
             "ui_tree metadata entry should expose snapshot attachment state"
+        );
+    }
+
+    #[test]
+    fn build_entries_enriches_ui_tree_capability_with_support_matrix_details() {
+        let entries = build_entries(&state_with_ui_tree_capability(), &["ui_tree".to_string()]);
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].modality, "ui_tree");
+        assert!(
+            entries[0]
+                .backend_details
+                .iter()
+                .any(|item| item == "ui_tree_current_environment_id=atspi-live"),
+            "ui_tree capability entry should expose current support row"
+        );
+        assert!(
+            entries[0]
+                .backend_details
+                .iter()
+                .any(|item| item == "ui_tree_support_route_count=2"),
+            "ui_tree capability entry should expose support route count"
+        );
+        assert!(
+            entries[0]
+                .notes
+                .iter()
+                .any(|item| item == "ui_tree-capability"),
+            "ui_tree capability notes should be preserved"
         );
     }
 
