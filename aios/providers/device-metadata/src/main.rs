@@ -228,7 +228,7 @@ async fn self_register_with_registry(state: &AppState, attempts: usize) -> bool 
     }
 
     for attempt in 0..attempts {
-        match crate::clients::register_provider(state) {
+        match crate::clients::register_provider(state).await {
             Ok(_) => {
                 state.registry_sync.record_startup_registration_succeeded();
                 emit_trace(
@@ -291,7 +291,7 @@ async fn report_registry_health(
     }
 
     for attempt in 0..attempts {
-        match crate::clients::report_provider_health(state, status, last_error.clone()) {
+        match crate::clients::report_provider_health(state, status, last_error.clone()).await {
             Ok(_) => {
                 state
                     .registry_sync
@@ -345,7 +345,7 @@ async fn report_registry_health(
 
 async fn probe_deviced_health(state: &AppState, attempts: usize) -> (String, Option<String>) {
     for attempt in 0..attempts {
-        match crate::clients::fetch_device_state(state) {
+        match crate::clients::fetch_device_state_async(state).await {
             Ok(_) => return ("available".to_string(), None),
             Err(error) if attempt + 1 < attempts => {
                 tokio::time::sleep(Duration::from_millis(100)).await;
@@ -373,7 +373,7 @@ async fn sync_registry_state_once(state: &AppState, registration_succeeded: &mut
     }
 
     if !*registration_succeeded && state.config.descriptor_path.exists() {
-        match crate::clients::register_provider(state) {
+        match crate::clients::register_provider(state).await {
             Ok(_) => {
                 *registration_succeeded = true;
                 state.registry_sync.record_registration_recovered();
@@ -416,7 +416,7 @@ async fn sync_registry_state_once(state: &AppState, registration_succeeded: &mut
     }
 
     let (status, last_error) = probe_deviced_health(state, 1).await;
-    match crate::clients::report_provider_health(state, &status, last_error.clone()) {
+    match crate::clients::report_provider_health(state, &status, last_error.clone()).await {
         Ok(_) => {
             state
                 .registry_sync
