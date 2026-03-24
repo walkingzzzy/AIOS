@@ -6,7 +6,11 @@ import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-TEMP_ROOT_DIR = ROOT / ".tmp"
+TEMP_ROOT_DIR = (
+    Path("/tmp")
+    if os.name != "nt" and Path("/tmp").exists()
+    else ROOT / ".tmp"
+)
 
 
 def make_temp_dir(prefix: str) -> Path:
