@@ -345,10 +345,17 @@ EOF_DOCKERFILE
   rm -rf "$tmpdir"
 }
 
+normalize_tree_permissions() {
+  local target="$1"
+  [[ -e "$target" ]] || return 0
+  chmod -R u+rwX,go+rX "$target"
+}
+
 run_host_build() {
   sync_overlay_if_needed
   mkdir -p "$HOST_OUTPUT_DIR"
-  exec mkosi -C "$IMAGE_DIR" build "$@"
+  mkosi -C "$IMAGE_DIR" build "$@"
+  normalize_tree_permissions "$HOST_OUTPUT_DIR"
 }
 
 run_docker_build() {
@@ -373,6 +380,14 @@ run_docker_build() {
       image_root=/var/tmp/aios-image-build
       image_dir="$image_root/image"
       output_dir="$image_dir/mkosi.output"
+      workspace_owner="$(stat -c "%u:%g" /workspace)"
+
+      normalize_tree_permissions() {
+        local target="$1"
+        [[ -e "$target" ]] || return 0
+        chown -R "$workspace_owner" "$target"
+        chmod -R u+rwX,go+rX "$target"
+      }
 
       rm -rf "$image_root"
       mkdir -p "$image_dir" /host-output
@@ -407,15 +422,17 @@ PY_COPY
 
       rm -rf /host-output/*
       cp -R "$output_dir"/. /host-output/
+      normalize_tree_permissions /host-output
 
       for cached_path in mkosi.cache mkosi.builddir mkosi.tools; do
         if [[ -e "$image_dir/$cached_path" ]]; then
           rm -rf "/src-image/$cached_path"
           cp -a "$image_dir/$cached_path" "/src-image/$cached_path"
+          normalize_tree_permissions "/src-image/$cached_path"
         fi
       done
     ' bash "$@")
-  exec "${docker_cmd[@]}"
+  "${docker_cmd[@]}"
 }
 
 if [[ "$FORCE_DOCKER" == "1" || "$FORCE_DOCKER" == "true" ]]; then
@@ -427,6 +444,7 @@ if [[ "$FORCE_DOCKER" == "1" || "$FORCE_DOCKER" == "true" ]]; then
     exit 0
   fi
   run_docker_build "$@"
+  exit 0
 fi
 
 if reuse_existing_output_if_available "$@"; then

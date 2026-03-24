@@ -95,15 +95,19 @@ if [[ "${1:-}" == "--preflight" ]]; then
   if [[ -n "$IMAGE_PATH" ]]; then
     IMAGE_FOUND=true
   fi
+  IMAGE_READABLE=false
+  if [[ -n "$IMAGE_PATH" && -r "$IMAGE_PATH" ]]; then
+    IMAGE_READABLE=true
+  fi
   OVMF_CODE_FOUND=false
   if [[ -n "$OVMF_CODE" ]]; then
     OVMF_CODE_FOUND=true
   fi
   STATUS="ready"
-  if [[ "$QEMU_AVAILABLE" != "true" || "$IMAGE_FOUND" != "true" ]]; then
+  if [[ "$QEMU_AVAILABLE" != "true" || "$IMAGE_FOUND" != "true" || "$IMAGE_READABLE" != "true" ]]; then
     STATUS="blocked"
   fi
-  "$PYTHON_BIN" -     "$STATUS"     "$QEMU_AVAILABLE"     "$IMAGE_FOUND"     "$ACCEL"     "$CPU_MODEL"     "$DISPLAY_MODE"     "$SERIAL_MODE"     "$OVMF_CODE_FOUND"     "$OUTPUT_DIR"     "$IMAGE_PATH" <<'PY'
+  "$PYTHON_BIN" -     "$STATUS"     "$QEMU_AVAILABLE"     "$IMAGE_FOUND"     "$IMAGE_READABLE"     "$ACCEL"     "$CPU_MODEL"     "$DISPLAY_MODE"     "$SERIAL_MODE"     "$OVMF_CODE_FOUND"     "$OUTPUT_DIR"     "$IMAGE_PATH" <<'PY'
 import json
 import sys
 
@@ -116,13 +120,14 @@ payload = {
     "status": sys.argv[1],
     "qemu_available": as_bool(sys.argv[2]),
     "image_found": as_bool(sys.argv[3]),
-    "default_accel": sys.argv[4],
-    "cpu_model": sys.argv[5],
-    "display": sys.argv[6],
-    "serial": sys.argv[7],
-    "ovmf_code_found": as_bool(sys.argv[8]),
-    "output_dir": sys.argv[9],
-    "image_path": sys.argv[10],
+    "image_readable": as_bool(sys.argv[4]),
+    "default_accel": sys.argv[5],
+    "cpu_model": sys.argv[6],
+    "display": sys.argv[7],
+    "serial": sys.argv[8],
+    "ovmf_code_found": as_bool(sys.argv[9]),
+    "output_dir": sys.argv[10],
+    "image_path": sys.argv[11],
 }
 print(json.dumps(payload, ensure_ascii=False))
 PY
@@ -136,6 +141,11 @@ fi
 
 if [[ -z "$IMAGE_PATH" ]]; then
   echo "No disk image found in $OUTPUT_DIR. Run scripts/build-aios-image.sh first." >&2
+  exit 1
+fi
+
+if [[ ! -r "$IMAGE_PATH" ]]; then
+  echo "Disk image is not readable: $IMAGE_PATH" >&2
   exit 1
 fi
 
