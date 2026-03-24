@@ -484,7 +484,7 @@ fn remote_audit_matches_request(value: &Value, request: &TraceQueryRequest) -> b
         }
     }
     for (path, expected) in &request.payload_equals {
-        let Some(actual) = value_at_path(value, path) else {
+        let Some(actual) = remote_audit_value_at_path(value, path) else {
             return false;
         };
         if actual != expected {
@@ -492,6 +492,14 @@ fn remote_audit_matches_request(value: &Value, request: &TraceQueryRequest) -> b
         }
     }
     true
+}
+
+fn remote_audit_value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
+    value_at_path(value, path).or_else(|| match path {
+        "backend_id" | "fallback_backend" => value_at_path(value, "actual_backend"),
+        "resolved_backend" => value_at_path(value, "selected_backend"),
+        _ => None,
+    })
 }
 
 fn value_contains(value: &Value, needle: &str) -> bool {
@@ -693,6 +701,51 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0]["status"], "fallback");
         assert_eq!(entries[0]["artifact_path"], "/tmp/vendor-error.json");
+
+        let _ = fs::remove_dir_all(root);
+        Ok(())
+    }
+
+    #[test]
+    fn load_remote_audit_values_supports_runtime_payload_aliases() -> anyhow::Result<()> {
+        let root = std::env::temp_dir().join("aios-runtimed-export-remote-audit-alias-query");
+        fs::create_dir_all(&root)?;
+        let path = root.join("attested-remote-audit.jsonl");
+        write_jsonl_values(
+            &path,
+            &[json!({
+                "audit_id": "audit-alias-1",
+                "timestamp": "2026-03-16T00:00:00Z",
+                "service_id": "aios-runtimed",
+                "status": "fallback",
+                "session_id": "session-events",
+                "task_id": "task-remote-fallback",
+                "selected_backend": "attested-remote",
+                "requested_backend": "attested-remote",
+                "actual_backend": "local-cpu",
+                "artifact_path": "/tmp/vendor-error.json"
+            })],
+        )?;
+
+        let entries = load_remote_audit_values(
+            &path,
+            &TraceQueryRequest {
+                task_id: Some("task-remote-fallback".to_string()),
+                kind: Some("runtime.infer.fallback".to_string()),
+                payload_equals: BTreeMap::from([
+                    ("backend_id".to_string(), json!("local-cpu")),
+                    ("resolved_backend".to_string(), json!("attested-remote")),
+                ]),
+                limit: 10,
+                reverse: false,
+                ..TraceQueryRequest::default()
+            },
+        )?;
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["status"], "fallback");
+        assert_eq!(entries[0]["actual_backend"], "local-cpu");
+        assert_eq!(entries[0]["selected_backend"], "attested-remote");
 
         let _ = fs::remove_dir_all(root);
         Ok(())
