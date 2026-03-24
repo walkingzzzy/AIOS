@@ -218,6 +218,7 @@ def refresh_delivery_bundle() -> dict:
         sys.executable,
         str(ROOT / 'scripts' / 'build-aios-delivery.py'),
         '--build-missing',
+        '--no-archive',
     ]
     started = time.monotonic()
     completed = subprocess.run(
@@ -259,6 +260,31 @@ def render_markdown(report: dict) -> str:
             f"- Delivery bundle refresh: `{bundle_refresh['status']}` in `{bundle_refresh['duration_seconds']}` seconds"
         )
     lines.append('')
+
+    if report.get('delivery_bundle_refresh') is not None:
+        bundle_refresh = report['delivery_bundle_refresh']
+        lines.append('## Delivery Bundle Refresh')
+        lines.append('')
+        lines.append(f"- Status: `{bundle_refresh['status']}`")
+        lines.append(f"- Command: `{bundle_refresh['command']}`")
+        lines.append(f"- Duration: `{bundle_refresh['duration_seconds']}` seconds")
+        if bundle_refresh['parsed_output'] is not None:
+            lines.append('- Parsed output:')
+            lines.append('```json')
+            lines.append(json.dumps(bundle_refresh['parsed_output'], indent=2, ensure_ascii=False))
+            lines.append('```')
+        elif bundle_refresh['stdout']:
+            lines.append('- Stdout:')
+            lines.append('```text')
+            lines.append(bundle_refresh['stdout'])
+            lines.append('```')
+        if bundle_refresh['stderr']:
+            lines.append('- Stderr:')
+            lines.append('```text')
+            lines.append(bundle_refresh['stderr'])
+            lines.append('```')
+        lines.append('')
+
     lines.append('## Checklist')
     lines.append('')
     lines.append('| Check | Status | Duration (s) |')
@@ -403,11 +429,7 @@ def main() -> int:
             'json_report': str(json_path),
             'markdown_report': str(md_path),
             'evidence_index': str(evidence_index_path),
-            'delivery_bundle_refresh': {
-                'status': delivery_bundle_refresh['status'],
-                'duration_seconds': delivery_bundle_refresh['duration_seconds'],
-                'returncode': delivery_bundle_refresh['returncode'],
-            },
+            'delivery_bundle_refresh': delivery_bundle_refresh,
             'checks': [],
         }, ensure_ascii=False, indent=2))
         return 1
