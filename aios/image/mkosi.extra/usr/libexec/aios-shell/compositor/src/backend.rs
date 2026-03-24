@@ -164,6 +164,70 @@ fn append_panel_action_event(path: &Path, event: &PanelActionEvent) -> Result<()
     writeln!(file, "{line}").map_err(|error| error.to_string())
 }
 
+pub struct MultiOutputState {
+    pub outputs: Vec<OutputDescriptor>,
+    pub primary_output_index: usize,
+    pub layout_mode: OutputLayoutMode,
+}
+
+pub struct OutputDescriptor {
+    pub output_id: String,
+    pub connector_name: String,
+    pub width: u32,
+    pub height: u32,
+    pub refresh_rate_mhz: u32,
+    pub renderable: bool,
+    pub position_x: i32,
+    pub position_y: i32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum OutputLayoutMode {
+    Horizontal,
+    Vertical,
+    Mirrored,
+    Custom,
+}
+
+impl MultiOutputState {
+    pub fn single(output_id: String, width: u32, height: u32) -> Self {
+        Self {
+            outputs: vec![OutputDescriptor {
+                output_id,
+                connector_name: "primary".to_string(),
+                width,
+                height,
+                refresh_rate_mhz: 60_000,
+                renderable: true,
+                position_x: 0,
+                position_y: 0,
+            }],
+            primary_output_index: 0,
+            layout_mode: OutputLayoutMode::Horizontal,
+        }
+    }
+
+    pub fn total_render_area(&self) -> (u32, u32) {
+        match self.layout_mode {
+            OutputLayoutMode::Horizontal => {
+                let w: u32 = self.outputs.iter().filter(|o| o.renderable).map(|o| o.width).sum();
+                let h = self.outputs.iter().filter(|o| o.renderable).map(|o| o.height).max().unwrap_or(0);
+                (w, h)
+            }
+            OutputLayoutMode::Vertical => {
+                let w = self.outputs.iter().filter(|o| o.renderable).map(|o| o.width).max().unwrap_or(0);
+                let h: u32 = self.outputs.iter().filter(|o| o.renderable).map(|o| o.height).sum();
+                (w, h)
+            }
+            OutputLayoutMode::Mirrored | OutputLayoutMode::Custom => {
+                let w = self.outputs.iter().filter(|o| o.renderable).map(|o| o.width).max().unwrap_or(0);
+                let h = self.outputs.iter().filter(|o| o.renderable).map(|o| o.height).max().unwrap_or(0);
+                (w, h)
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct RuntimeArtifactPaths {
     lock_path: PathBuf,
@@ -467,7 +531,7 @@ mod mode {
             AbsolutePositionEvent, Axis, ButtonState, Device as BackendDevice,
             Event as BackendEvent, InputBackend, InputEvent, KeyState, KeyboardKeyEvent,
             PointerAxisEvent, PointerButtonEvent as BackendPointerButtonEvent,
-            PointerMotionAbsoluteEvent, PointerMotionEvent, TouchEvent,
+            PointerMotionEvent as BackendPointerMotionEvent, TouchEvent,
         },
         libinput::{LibinputInputBackend, LibinputSessionInterface},
         renderer::{
@@ -476,6 +540,7 @@ mod mode {
                 Kind,
             },
             gles::GlesRenderer,
+            ImportDma,
             utils::{draw_render_elements, on_commit_buffer_handler},
             Color32F, Frame, Renderer,
         },
@@ -981,26 +1046,27 @@ mod mode {
 
         fn restore_recent_window(&mut self) -> bool {
             let active_output = self.active_output_id.clone();
-            let Some(entry) = self
+            let active_workspace_index = self.active_workspace_index;
+            let entry_index = self
                 .persisted
                 .windows
-                .iter_mut()
-                .rev()
-                .find(|entry| {
+                .iter()
+                .rposition(|entry| {
                     entry.minimized
-                        && entry.workspace_index == self.active_workspace_index
+                        && entry.workspace_index == active_workspace_index
                         && (active_output.is_none()
                             || entry.output_id.as_ref() == active_output.as_ref()
                             || entry.output_id.is_none())
                 })
                 .or_else(|| {
-                    self.persisted.windows.iter_mut().rev().find(|entry| {
-                        entry.minimized && entry.workspace_index == self.active_workspace_index
+                    self.persisted.windows.iter().rposition(|entry| {
+                        entry.minimized && entry.workspace_index == active_workspace_index
                     })
-                })
-            else {
+                });
+            let Some(entry_index) = entry_index else {
                 return false;
             };
+            let entry = &mut self.persisted.windows[entry_index];
             entry.minimized = false;
             entry.workspace_index = self.active_workspace_index;
             if let Some(active_output_id) = self.active_output_id.clone() {
@@ -1241,32 +1307,37 @@ mod mode {
         }
 
         fn update_pointer_operation(&mut self, pointer: Point<f64, Logical>) -> bool {
-            let Some(operation) = self.pointer_operation.as_mut() else {
+            let Some(operation) = self.pointer_operation.as_ref() else {
                 return false;
             };
+            let window_key = operation.window_key.clone();
+            let initial_rect = operation.initial_rect.clone();
+            let operation_kind = operation.kind.clone();
+            let pointer_origin = operation.pointer_origin.clone();
             let Some(entry_index) = self
                 .persisted
                 .windows
                 .iter()
-                .position(|entry| entry.window_key == operation.window_key)
+                .position(|entry| entry.window_key == window_key)
             else {
                 return false;
             };
+            let primary_output_id = self.primary_output_id();
             let output_id = self.persisted.windows[entry_index]
                 .output_id
                 .clone()
-                .unwrap_or_else(|| self.primary_output_id());
+                .unwrap_or(primary_output_id);
             let mut output = self
                 .outputs
                 .iter()
                 .find(|output| output.output_id == output_id)
                 .cloned()
                 .unwrap_or_else(|| self.outputs[0].clone());
-            let delta_x = (pointer.x - operation.pointer_origin.x).round() as i32;
-            let delta_y = (pointer.y - operation.pointer_origin.y).round() as i32;
-            let mut next_rect = operation.initial_rect.clone();
+            let delta_x = (pointer.x - pointer_origin.x).round() as i32;
+            let delta_y = (pointer.y - pointer_origin.y).round() as i32;
+            let mut next_rect = initial_rect;
             let mut transferred_output: Option<LogicalOutput> = None;
-            match &operation.kind {
+            match &operation_kind {
                 PointerOperationKind::Move => {
                     next_rect.x += delta_x;
                     next_rect.y += delta_y;
@@ -1302,20 +1373,22 @@ mod mode {
                 self.persisted.active_output_id = self.active_output_id.clone();
                 self.status = format!(
                     "dragging({}:output={})",
-                    operation.window_key, target_output.label
+                    window_key, target_output.label
                 );
                 self.dirty = true;
             }
             if self.persisted.windows[entry_index].rect.as_ref() != Some(&next_rect) {
                 self.persisted.windows[entry_index].rect = Some(next_rect);
                 self.dirty = true;
-                operation.changed = true;
-                self.status = match operation.kind {
+                if let Some(operation) = self.pointer_operation.as_mut() {
+                    operation.changed = true;
+                }
+                self.status = match &operation_kind {
                     PointerOperationKind::Move => {
-                        format!("dragging({})", operation.window_key)
+                        format!("dragging({window_key})")
                     }
                     PointerOperationKind::Resize(_) => {
-                        format!("resizing({})", operation.window_key)
+                        format!("resizing({window_key})")
                     }
                 };
             }
@@ -2396,9 +2469,7 @@ mod mode {
             Libinput::new_with_udev(LibinputSessionInterface::from(libseat_session));
         libinput_context
             .udev_assign_seat(&config.seat_name)
-            .map_err(|error| {
-                format!("libinput-seat-assign-failed({}):{error}", config.seat_name)
-            })?;
+            .map_err(|_| format!("libinput-seat-assign-failed({})", config.seat_name))?;
         session.set_input_backend_status(format!("active(libinput,seat={})", config.seat_name));
         Ok(LibinputInputBackend::new(libinput_context))
     }
@@ -2902,8 +2973,8 @@ mod mode {
                 continue;
             };
             for crtc in resources.filter_crtcs(encoder_info.possible_crtcs()) {
-                if !used_crtcs.contains(crtc) {
-                    return Some(*crtc);
+                if !used_crtcs.contains(&crtc) {
+                    return Some(crtc);
                 }
             }
         }
