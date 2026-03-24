@@ -427,7 +427,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: aios-validate-artifacts
-          path: .
+          path: out/validation
 
       - name: Install QEMU and firmware deps
         run: |

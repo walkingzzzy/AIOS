@@ -50,7 +50,7 @@ jobs:
       - step_name: "Download validate artifacts"
         artifact_name: "aios-validate-artifacts"
         uses: "actions/download-artifact@v4"
-        path: "."
+        path: "out/validation"
         must_precede_steps:
           - "Cross-service health smoke"
           - "Build governance evidence index"
