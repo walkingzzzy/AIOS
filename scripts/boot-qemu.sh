@@ -48,6 +48,23 @@ resolve_python_bin() {
 
 PYTHON_BIN="$(resolve_python_bin)"
 
+linux_kvm_accessible() {
+  [[ "$HOST_OS" == "Linux" ]] || return 1
+  [[ -r /dev/kvm && -w /dev/kvm ]]
+}
+
+normalize_qemu_accel_and_cpu() {
+  if [[ "$HOST_OS" == "Linux" && "$ACCEL" == *kvm* ]] && ! linux_kvm_accessible; then
+    ACCEL="tcg"
+  fi
+
+  if [[ "$ACCEL" == "tcg" && "$CPU_MODEL" == "host" ]]; then
+    CPU_MODEL="max"
+  fi
+}
+
+normalize_qemu_accel_and_cpu
+
 if [[ -z "$OVMF_CODE" ]]; then
   for candidate in \
     /opt/homebrew/Cellar/qemu/*/share/qemu/edk2-x86_64-code.fd \

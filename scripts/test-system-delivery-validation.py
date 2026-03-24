@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -21,6 +22,7 @@ class CheckSpec:
     summary: str
     command: list[str]
     evidence_paths: tuple[str, ...] = ()
+    env: tuple[tuple[str, str], ...] = ()
 
 
 def parse_args() -> argparse.Namespace:
@@ -48,6 +50,7 @@ def parse_args() -> argparse.Namespace:
 
 def checks() -> list[CheckSpec]:
     python = sys.executable
+    qemu_safe_cpu_env = (('AIOS_QEMU_CPU', 'max'),)
     return [
         CheckSpec(
             check_id='delivery-rootfs-hygiene',
@@ -93,18 +96,21 @@ def checks() -> list[CheckSpec]:
             summary='Validate mkosi/image/QEMU prerequisites before booting the image',
             command=[python, str(ROOT / 'scripts' / 'test-boot-qemu-smoke.py')],
             evidence_paths=('aios/image/mkosi.output/aios-qemu-x86_64.raw',),
+            env=qemu_safe_cpu_env,
         ),
         CheckSpec(
             check_id='qemu-bringup-firstboot',
             summary='Boot the QEMU raw image and require AIOS firstboot evidence in the serial log',
             command=[python, str(ROOT / 'scripts' / 'test-boot-qemu-bringup.py'), '--timeout', '180', '--expect-firstboot'],
             evidence_paths=('out/boot-qemu-bringup.log',),
+            env=qemu_safe_cpu_env,
         ),
         CheckSpec(
             check_id='qemu-recovery-bringup',
             summary='Boot the QEMU recovery image and require recovery-target evidence in the serial log',
             command=[python, str(ROOT / 'scripts' / 'test-boot-qemu-recovery.py'), '--timeout', '180'],
             evidence_paths=('out/boot-qemu-recovery.log',),
+            env=qemu_safe_cpu_env,
         ),
         CheckSpec(
             check_id='installer-media-qemu',
@@ -115,6 +121,7 @@ def checks() -> list[CheckSpec]:
                 'out/boot-qemu-installer.log',
                 'out/boot-qemu-installed-cross-reboot.log',
             ),
+            env=qemu_safe_cpu_env,
         ),
         CheckSpec(
             check_id='platform-media-export',
@@ -194,9 +201,12 @@ def derive_check_status(returncode: int, parsed_output: object) -> str:
 
 def run_check(spec: CheckSpec) -> dict:
     started = time.monotonic()
+    env = os.environ.copy()
+    env.update(dict(spec.env))
     completed = subprocess.run(
         spec.command,
         cwd=ROOT,
+        env=env,
         text=True,
         capture_output=True,
         check=False,

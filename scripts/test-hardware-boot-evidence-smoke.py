@@ -161,7 +161,7 @@ def main() -> int:
     evidence_index = json.loads(evidence_index_path.read_text())
     evidence_index_validator.validate(evidence_index)
     require(evidence_index["validation_status"] == "passed", "evidence index status mismatch")
-    require(len(evidence_index["records"]) == 2, "evidence index record count mismatch")
+    require(evidence_index["summary"]["record_count"] == 2, "evidence index record count mismatch")
     print(json.dumps(report, indent=2, ensure_ascii=False))
     return 0
 

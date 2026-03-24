@@ -327,16 +327,104 @@ def render_markdown(report: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def final_record(report: dict[str, Any]) -> dict[str, Any]:
+    summaries = report.get("record_summaries") or []
+    if summaries:
+        return summaries[-1]
+    return {}
+
+
+def evidence_index_notes(report: dict[str, Any]) -> list[str]:
+    notes: list[str] = []
+    for check in report.get("checks", []):
+        if not check.get("passed", False) and check.get("detail"):
+            notes.append(str(check["detail"]))
+    return notes
+
+
 def build_evidence_index(report: dict[str, Any]) -> dict[str, Any]:
+    profile_payload = load_profile(Path(report["profile"])) if report.get("profile") else {}
+    final = final_record(report)
+    generated_at = report["generated_at"]
+    evaluator_json_path = report["output_path"] or report["input_dir"]
     return {
-        "generated_at": report["generated_at"],
-        "input_dir": report["input_dir"],
+        "platform_id": profile_payload.get("platform_media_id") or profile_payload.get("id") or "unknown-platform",
         "profile": report["profile"],
         "validation_status": "passed" if report["passed"] else "failed",
-        "record_count": report["record_count"],
-        "unique_boot_ids": report["unique_boot_ids"],
+        "generated_at": generated_at,
+        "summary": {
+            "passed": report["passed"],
+            "record_count": report["record_count"],
+            "unique_boot_ids": report["unique_boot_ids"],
+            "final_current_slot": final.get("current_slot"),
+            "final_last_good_slot": final.get("last_good_slot"),
+        },
+        "artifacts": {
+            "platform_media_manifest": None,
+            "installer_image": None,
+            "recovery_image": None,
+            "system_image": None,
+            "installer_report": None,
+            "vendor_firmware_hook_report": None,
+            "evaluator_json": evaluator_json_path,
+            "evaluator_markdown": report["report_md_path"],
+            "support_matrix": None,
+            "known_limitations": None,
+            "installer_log": None,
+            "recovery_log": None,
+            "device_backend_state_artifact": None,
+            "vendor_runtime_evidence": [],
+            "photos": [],
+            "boot_evidence_report": report["output_path"],
+            "boot_evidence_markdown": report["report_md_path"],
+            "device_metadata_artifact": None,
+        },
+        "device_runtime": {
+            "backend_state_artifact": None,
+            "release_grade_backends": {
+                "backend_ids": "",
+                "origins": "",
+                "stacks": "",
+                "contract_kinds": "",
+            },
+            "vendor_runtime": {
+                "vendor_runtime_signoff_status": "not-attached",
+                "evidence_count": 0,
+                "evidence_paths": [],
+                "provider_ids": [],
+                "runtime_service_ids": [],
+                "provider_statuses": [],
+                "provider_kinds": [],
+                "backend_ids": [],
+                "runtime_binaries": [],
+                "engine_paths": [],
+                "contract_kinds": [],
+                "issues": [],
+            },
+            "device_profile": {
+                "metadata_artifact": None,
+                "hardware_profile_id": profile_payload.get("id"),
+                "hardware_profile_path": report["profile"],
+                "canonical_hardware_profile_id": profile_payload.get("canonical_hardware_profile_id"),
+                "platform_media_id": profile_payload.get("platform_media_id"),
+                "platform_tier": profile_payload.get("platform_tier"),
+                "bringup_status": profile_payload.get("bringup_status"),
+                "runtime_profile": profile_payload.get("runtime_profile"),
+                "hardware_evidence_required": None,
+                "validation_status": None,
+                "required_modalities": [],
+                "conditional_modalities": [],
+                "available_expected_modalities": [],
+                "missing_required_modalities": [],
+                "missing_conditional_modalities": [],
+                "release_track_intent": [],
+                "profile_alignment_status": "unknown",
+            },
+        },
         "checks": report["checks"],
-        "records": report["record_summaries"],
+        "notes": evidence_index_notes(report),
+        "operator": None,
+        "date": generated_at.split("T", 1)[0] if "T" in generated_at else None,
     }
 
 
@@ -370,6 +458,8 @@ def main() -> int:
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "input_dir": str(args.input_dir),
         "profile": None if args.profile is None else str(args.profile),
+        "output_path": None if args.output is None else str(args.output),
+        "report_md_path": None if args.report_md is None else str(args.report_md),
         "record_count": len(records),
         "unique_boot_ids": unique_boot_ids,
         "resolved_expectations": expectations,
