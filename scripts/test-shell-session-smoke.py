@@ -34,7 +34,10 @@ def main() -> int:
     temp_root.parent.mkdir(parents=True, exist_ok=True)
     temp_root.mkdir(parents=True, exist_ok=False)
     previous_temp_root = os.environ.get("AIOS_SHELL_SESSION_TEMP_ROOT")
-    os.environ["AIOS_SHELL_SESSION_TEMP_ROOT"] = str((ROOT / ".tmp").resolve())
+    if os.name != "nt" and Path("/tmp").exists():
+        os.environ["AIOS_SHELL_SESSION_TEMP_ROOT"] = "/tmp"
+    else:
+        os.environ["AIOS_SHELL_SESSION_TEMP_ROOT"] = str((ROOT / ".tmp").resolve())
     try:
         marker_path = temp_root / "gtk-host-marker.json"
         fallback_marker_path = temp_root / "gtk-host-fallback-marker.json"
