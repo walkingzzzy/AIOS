@@ -342,11 +342,15 @@ def evidence_index_notes(report: dict[str, Any]) -> list[str]:
     return notes
 
 
-def build_evidence_index(report: dict[str, Any]) -> dict[str, Any]:
+def build_evidence_index(
+    report: dict[str, Any],
+    output_path: Path | None,
+    report_md_path: Path | None,
+) -> dict[str, Any]:
     profile_payload = load_profile(Path(report["profile"])) if report.get("profile") else {}
     final = final_record(report)
     generated_at = report["generated_at"]
-    evaluator_json_path = report["output_path"] or report["input_dir"]
+    evaluator_json_path = str(output_path) if output_path is not None else report["input_dir"]
     return {
         "platform_id": profile_payload.get("platform_media_id") or profile_payload.get("id") or "unknown-platform",
         "profile": report["profile"],
@@ -367,7 +371,7 @@ def build_evidence_index(report: dict[str, Any]) -> dict[str, Any]:
             "installer_report": None,
             "vendor_firmware_hook_report": None,
             "evaluator_json": evaluator_json_path,
-            "evaluator_markdown": report["report_md_path"],
+            "evaluator_markdown": None if report_md_path is None else str(report_md_path),
             "support_matrix": None,
             "known_limitations": None,
             "installer_log": None,
@@ -375,8 +379,8 @@ def build_evidence_index(report: dict[str, Any]) -> dict[str, Any]:
             "device_backend_state_artifact": None,
             "vendor_runtime_evidence": [],
             "photos": [],
-            "boot_evidence_report": report["output_path"],
-            "boot_evidence_markdown": report["report_md_path"],
+            "boot_evidence_report": None if output_path is None else str(output_path),
+            "boot_evidence_markdown": None if report_md_path is None else str(report_md_path),
             "device_metadata_artifact": None,
         },
         "device_runtime": {
@@ -458,8 +462,6 @@ def main() -> int:
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "input_dir": str(args.input_dir),
         "profile": None if args.profile is None else str(args.profile),
-        "output_path": None if args.output is None else str(args.output),
-        "report_md_path": None if args.report_md is None else str(args.report_md),
         "record_count": len(records),
         "unique_boot_ids": unique_boot_ids,
         "resolved_expectations": expectations,
@@ -474,7 +476,7 @@ def main() -> int:
     if args.report_md:
         write_text(args.report_md, render_markdown(report))
     if args.evidence_index_out:
-        write_json(args.evidence_index_out, build_evidence_index(report))
+        write_json(args.evidence_index_out, build_evidence_index(report, args.output, args.report_md))
 
     print(json.dumps(report, indent=2, ensure_ascii=False))
     return 0 if passed else 1

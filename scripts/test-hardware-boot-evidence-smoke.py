@@ -154,6 +154,8 @@ def main() -> int:
     report = json.loads(report_path.read_text())
     boot_report_validator.validate(report)
     require(report["passed"] is True, "evidence report should pass")
+    require("output_path" not in report, "boot evidence report should not expose output_path")
+    require("report_md_path" not in report, "boot evidence report should not expose report_md_path")
     require(len(report["unique_boot_ids"]) == 2, "expected two unique boot ids")
     require(report["resolved_expectations"]["require_bootctl_status"] is True, "profile expectations not applied")
     require(report_md_path.exists(), "missing markdown report")
