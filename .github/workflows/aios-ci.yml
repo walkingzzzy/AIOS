@@ -38,6 +38,7 @@ jobs:
             scripts/test-observability-schema-smoke.py \
             scripts/test-validation-matrix-smoke.py \
             scripts/test-high-risk-audit-coverage-smoke.py \
+            scripts/test-placeholder-implementation-gate-smoke.py \
             scripts/test-gpu-backend-support-matrix-smoke.py \
             scripts/test-tier1-machine-nominations-smoke.py \
             scripts/build-default-hardware-evidence-index.py \
@@ -138,6 +139,9 @@ jobs:
 
       - name: High-risk audit coverage smoke
         run: python3 scripts/test-high-risk-audit-coverage-smoke.py
+
+      - name: Placeholder implementation gate smoke
+        run: python3 scripts/test-placeholder-implementation-gate-smoke.py
 
       - name: GPU backend support matrix smoke
         run: python3 scripts/test-gpu-backend-support-matrix-smoke.py

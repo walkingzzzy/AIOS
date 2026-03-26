@@ -83,6 +83,37 @@ entries:
       expected_values:
         - "passed"
 
+  - check_id: "placeholder-implementation-gate-smoke"
+    owner: "Team E / Runtime Integrity"
+    gate: "validate"
+    domain: "runtime"
+    blocking: true
+    command: "python3 scripts/test-placeholder-implementation-gate-smoke.py"
+    artifacts:
+      - "out/validation/placeholder-implementation-gate-report.json"
+      - "out/validation/placeholder-implementation-gate-report.md"
+    source_paths:
+      - "scripts/test-placeholder-implementation-gate-smoke.py"
+      - "aios/runtime/workers/local_cpu_worker.py"
+      - "aios/runtime/profiles/default-runtime-profile.yaml"
+      - "aios/runtime/profiles/worker-integration-profile.yaml"
+      - "aios/services/runtimed/src/backend/cpu.rs"
+      - "aios/services/deviced/src/adapters.rs"
+    failure_symptom: "product mode placeholder AI path or preview-only device execution path drifted back into formal release coverage"
+    triage: "tests/observability/test-plan.md"
+    workflow_jobs:
+      - "validate"
+    coverage_domains:
+      - "runtime"
+      - "device"
+      - "release-governance"
+    status_source:
+      kind: "report-status"
+      report_path: "out/validation/placeholder-implementation-gate-report.json"
+      field: "overall_status"
+      expected_values:
+        - "passed"
+
   - check_id: "observability-correlation-smoke"
     owner: "Team E / Systems"
     gate: "validate"
