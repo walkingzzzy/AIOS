@@ -1,9 +1,5 @@
 pub fn fallback_action(intent: &str) -> String {
-    if intent.to_ascii_lowercase().contains("delete") {
-        return "request-human-confirmation".to_string();
-    }
-
-    "retry-with-lower-risk-route".to_string()
+    aios_core::intent::fallback_action(intent)
 }
 
 #[cfg(test)]
@@ -14,6 +10,14 @@ mod tests {
     fn delete_intents_require_human_confirmation() {
         assert_eq!(
             fallback_action("Delete /tmp/report.txt"),
+            "request-human-confirmation"
+        );
+    }
+
+    #[test]
+    fn chinese_delete_intents_require_human_confirmation() {
+        assert_eq!(
+            fallback_action("删除 /tmp/report.txt"),
             "request-human-confirmation"
         );
     }

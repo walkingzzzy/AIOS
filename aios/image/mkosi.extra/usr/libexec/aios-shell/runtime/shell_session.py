@@ -237,6 +237,13 @@ def choose_panel_bridge_socket_path(base_dir: Path) -> Path:
     return Path(tempfile.gettempdir()) / f"aiospb-{os.getpid()}-{int(time.time() * 1000)}.sock"
 
 
+def compositor_socket_ready_timeout(plan: dict) -> float:
+    command = [str(item) for item in plan.get("compositor", {}).get("launch_command", [])]
+    if len(command) >= 2 and command[0] == "cargo" and command[1] == "run":
+        return 20.0
+    return 5.0
+
+
 def terminate_process(process: subprocess.Popen) -> int:
     if process.poll() is None:
         process.terminate()
@@ -557,7 +564,10 @@ def launch_nested_gtk_session(plan: dict, profile: dict, args: argparse.Namespac
             try:
                 if sys.platform.startswith("linux"):
                     socket_path = runtime_dir / socket_name
-                    if not wait_for_path(socket_path, timeout=5.0):
+                    if not wait_for_path(
+                        socket_path,
+                        timeout=compositor_socket_ready_timeout(plan),
+                    ):
                         if compositor.poll() is not None:
                             return fallback_from_nested_session(
                                 plan,

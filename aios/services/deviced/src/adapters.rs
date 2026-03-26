@@ -402,6 +402,7 @@ fn execute_capture_plan(
     request: &DeviceCaptureRequest,
     plan: &CaptureAdapterPlan,
 ) -> anyhow::Result<Value> {
+    ensure_product_mode_allows_execution_path(config, plan)?;
     match plan.execution_path.as_str() {
         "command-adapter" => {
             let command = capture_command_for(config, &plan.modality)
@@ -442,6 +443,7 @@ fn execute_capture_plan(
 }
 
 fn execute_ui_tree_plan(config: &Config, plan: &CaptureAdapterPlan) -> anyhow::Result<Value> {
+    ensure_product_mode_allows_execution_path(config, plan)?;
     let mut value = match plan.execution_path.as_str() {
         "command-adapter" => run_capture_command(
             config,
@@ -501,6 +503,25 @@ fn execute_ui_tree_plan(config: &Config, plan: &CaptureAdapterPlan) -> anyhow::R
     }?;
     attach_plan_metadata(&mut value, plan);
     Ok(value)
+}
+
+fn ensure_product_mode_allows_execution_path(
+    config: &Config,
+    plan: &CaptureAdapterPlan,
+) -> anyhow::Result<()> {
+    if config.product_mode
+        && matches!(
+            plan.execution_path.as_str(),
+            "builtin-preview" | "native-stub"
+        )
+    {
+        anyhow::bail!(
+            "product mode forbids preview-only execution path {} for {}",
+            plan.execution_path,
+            plan.adapter_id
+        );
+    }
+    Ok(())
 }
 
 fn screen_plan(config: &Config) -> CaptureAdapterPlan {
@@ -1442,6 +1463,7 @@ mod tests {
             ui_tree_state_path: state_root.join("ui-tree-state.json"),
             default_resolution: "1920x1080".to_string(),
             approval_mode: "metadata-only".to_string(),
+            product_mode: false,
             approved_sessions: Vec::new(),
             approved_tasks: Vec::new(),
             screen_capture_command: None,
@@ -2159,6 +2181,69 @@ mod tests {
                 .and_then(Value::as_str),
             Some("declared-ready")
         );
+
+        cleanup(&config);
+    }
+
+    #[test]
+    fn product_mode_blocks_builtin_preview_capture() {
+        let _guard = crate::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _dbus = EnvVarGuard::unset("DBUS_SESSION_BUS_ADDRESS");
+        let _atspi = EnvVarGuard::unset("AT_SPI_BUS_ADDRESS");
+        let mut config = config();
+        config.product_mode = true;
+
+        let error = capture_preview(
+            &config,
+            &DeviceCaptureRequest {
+                modality: "screen".to_string(),
+                session_id: Some("session-product".to_string()),
+                task_id: Some("task-product".to_string()),
+                continuous: false,
+                window_ref: Some("window-product".to_string()),
+                source_device: None,
+            },
+        )
+        .expect_err("product mode should reject builtin preview fallback");
+
+        assert!(error
+            .to_string()
+            .contains("product mode forbids preview-only execution path builtin-preview"));
+
+        cleanup(&config);
+    }
+
+    #[test]
+    fn product_mode_blocks_native_stub_ui_tree_snapshot() {
+        let mut config = config();
+        config.product_mode = true;
+        config.ui_tree_supported = true;
+        fs::create_dir_all(config.ui_tree_state_path.parent().expect("ui tree dir"))
+            .expect("create ui tree dir");
+        fs::write(
+            &config.ui_tree_state_path,
+            br#"{"snapshot_id":"tree-product-1","focus_node":"button-1"}"#,
+        )
+        .expect("write ui tree state");
+
+        let error = execute_ui_tree_plan(
+            &config,
+            &CaptureAdapterPlan {
+                modality: "ui_tree".to_string(),
+                backend: "at-spi".to_string(),
+                adapter_id: "ui_tree.atspi-state-file".to_string(),
+                execution_path: "native-stub".to_string(),
+                preview_object_kind: "ui_tree_snapshot".to_string(),
+                notes: Vec::new(),
+            },
+        )
+        .expect_err("product mode should reject native stub ui_tree path");
+
+        assert!(error
+            .to_string()
+            .contains("product mode forbids preview-only execution path native-stub"));
 
         cleanup(&config);
     }

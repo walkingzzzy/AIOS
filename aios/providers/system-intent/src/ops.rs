@@ -159,118 +159,15 @@ fn summarize(intent: &str) -> String {
 }
 
 fn heuristic_capabilities(intent: &str) -> Vec<String> {
-    let normalized = intent.to_ascii_lowercase();
-    let mut capabilities = Vec::new();
-
-    if normalized.contains("delete") {
-        push_capability(&mut capabilities, "system.file.bulk_delete");
-    }
-    if normalized.contains("file")
-        || normalized.contains('/')
-        || normalized.contains("~/")
-        || normalized.contains(".txt")
-        || normalized.contains(".md")
-        || normalized.contains(".pdf")
-    {
-        push_capability(&mut capabilities, "provider.fs.open");
-    }
-    if normalized.contains("summarize")
-        || normalized.contains("write")
-        || normalized.contains("plan")
-    {
-        push_capability(&mut capabilities, "runtime.infer.submit");
-    }
-    if normalized.contains("notification") || normalized.contains("notify") {
-        push_capability(&mut capabilities, "shell.notification.open");
-    }
-    if normalized.contains("audit")
-        && (normalized.contains("operator")
-            || normalized.contains("panel")
-            || normalized.contains("log"))
-    {
-        push_capability(&mut capabilities, "shell.operator-audit.open");
-    }
-    if mentions_panel_event_query(&normalized) {
-        push_capability(&mut capabilities, methods::SHELL_PANEL_EVENTS_LIST);
-    }
-    if normalized.contains("focus") {
-        push_capability(&mut capabilities, "shell.window.focus");
-    }
-    if normalized.contains("browser")
-        || normalized.contains("http://")
-        || normalized.contains("https://")
-    {
-        push_capability(&mut capabilities, "compat.browser.navigate");
-    }
-    if capabilities.is_empty() {
-        push_capability(&mut capabilities, methods::SYSTEM_INTENT_EXECUTE);
-    }
-
-    capabilities
-}
-
-fn push_capability(capabilities: &mut Vec<String>, capability_id: &str) {
-    if !capabilities.iter().any(|item| item == capability_id) {
-        capabilities.push(capability_id.to_string());
-    }
-}
-
-fn mentions_panel_event_query(normalized: &str) -> bool {
-    normalized.contains("panel action")
-        || normalized.contains("panel actions")
-        || normalized.contains("panel event")
-        || normalized.contains("panel events")
-        || (normalized.contains("panel")
-            && (normalized.contains("event log")
-                || normalized.contains("action log")
-                || normalized.contains("activation log")))
+    aios_core::intent::candidate_capabilities(intent)
 }
 
 fn derive_route_preference(candidate_capabilities: &[String]) -> String {
-    if candidate_capabilities.len() == 1
-        && candidate_capabilities
-            .first()
-            .is_some_and(|item| item == methods::SYSTEM_INTENT_EXECUTE)
-    {
-        "manual-guidance".to_string()
-    } else {
-        "tool-calling".to_string()
-    }
+    aios_core::intent::control_plane_route_preference(candidate_capabilities)
 }
 
 fn derive_next_action(candidate_capabilities: &[String]) -> String {
-    if candidate_capabilities
-        .iter()
-        .any(|item| item == "provider.fs.open")
-    {
-        return "inspect-bound-target".to_string();
-    }
-    if candidate_capabilities
-        .iter()
-        .any(|item| item == methods::SHELL_PANEL_EVENTS_LIST)
-    {
-        return "inspect-shell-panel-events".to_string();
-    }
-    if candidate_capabilities
-        .iter()
-        .any(|item| item.starts_with("shell."))
-    {
-        return "route-shell-control".to_string();
-    }
-    if candidate_capabilities
-        .iter()
-        .any(|item| item == "runtime.infer.submit")
-    {
-        return "invoke-runtime-preview".to_string();
-    }
-    if candidate_capabilities
-        .iter()
-        .any(|item| item == "system.file.bulk_delete")
-    {
-        return "request-destructive-approval".to_string();
-    }
-
-    "review-local-control-plan".to_string()
+    aios_core::intent::next_action(candidate_capabilities)
 }
 
 fn heuristic_steps(candidate_capabilities: &[String], next_action: &str) -> Vec<AgentPlanStep> {
@@ -358,6 +255,24 @@ fn action_for_capability(index: usize, capability_id: &str) -> SystemIntentActio
                     .to_string(),
             requires_approval: true,
         },
+        "compat.code.execute" => SystemIntentAction {
+            action_id,
+            kind: "manual-review".to_string(),
+            capability_id: Some(capability_id.to_string()),
+            description:
+                "Code execution must stay approval-gated before handing off to the sandbox provider."
+                    .to_string(),
+            requires_approval: true,
+        },
+        "device.capture.screen.read" => SystemIntentAction {
+            action_id,
+            kind: "manual-review".to_string(),
+            capability_id: Some(capability_id.to_string()),
+            description:
+                "Screen capture remains approval-gated before requesting sensitive device access."
+                    .to_string(),
+            requires_approval: true,
+        },
         capability_id if capability_id.starts_with("shell.") => SystemIntentAction {
             action_id,
             kind: "shell-control".to_string(),
@@ -424,5 +339,76 @@ mod tests {
             derive_next_action(&capabilities),
             "inspect-shell-panel-events"
         );
+    }
+
+    #[test]
+    fn heuristic_capabilities_support_chinese_file_summary_intents() {
+        let capabilities = heuristic_capabilities("打开 /tmp/报告.md 并总结重点");
+
+        assert_eq!(
+            capabilities.first(),
+            Some(&methods::PROVIDER_FS_OPEN.to_string())
+        );
+        assert!(capabilities
+            .iter()
+            .any(|item| item == methods::RUNTIME_INFER_SUBMIT));
+        assert_eq!(derive_next_action(&capabilities), "inspect-bound-target");
+    }
+
+    #[test]
+    fn destructive_intents_prioritize_delete_and_require_approval() {
+        let capabilities = heuristic_capabilities("Delete /tmp/danger.txt after review");
+
+        assert_eq!(
+            capabilities.first(),
+            Some(&methods::SYSTEM_FILE_BULK_DELETE.to_string())
+        );
+        assert!(capabilities
+            .iter()
+            .any(|item| item == methods::PROVIDER_FS_OPEN));
+        assert_eq!(
+            derive_next_action(&capabilities),
+            "request-destructive-approval"
+        );
+
+        let actions = build_actions(&capabilities);
+        assert!(actions.iter().any(|item| {
+            item.capability_id.as_deref() == Some(methods::SYSTEM_FILE_BULK_DELETE)
+                && item.requires_approval
+        }));
+    }
+
+    #[test]
+    fn chinese_browser_extract_intent_avoids_filesystem_fallback() {
+        let capabilities = heuristic_capabilities("用浏览器打开 https://example.com 并提取标题");
+
+        assert_eq!(
+            capabilities.first(),
+            Some(&"compat.browser.navigate".to_string())
+        );
+        assert!(capabilities
+            .iter()
+            .any(|item| item == "compat.browser.extract"));
+        assert!(!capabilities
+            .iter()
+            .any(|item| item == methods::PROVIDER_FS_OPEN));
+    }
+
+    #[test]
+    fn chinese_code_execution_intent_is_approval_gated() {
+        let capabilities = heuristic_capabilities("在沙箱里运行这个 Python 脚本");
+
+        assert_eq!(
+            capabilities.first(),
+            Some(&"compat.code.execute".to_string())
+        );
+        assert_eq!(
+            derive_next_action(&capabilities),
+            "request-sandbox-approval"
+        );
+
+        let actions = build_actions(&capabilities);
+        assert_eq!(actions.len(), 1);
+        assert!(actions[0].requires_approval);
     }
 }

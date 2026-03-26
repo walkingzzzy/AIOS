@@ -23,6 +23,7 @@ AIOS_DIR = ROOT / 'aios'
 PYTHON = sys.executable
 DEFAULT_OUTPUT_PREFIX = ROOT / 'out' / 'validation' / 'full-regression-report'
 REGRESSION_REPORT_SCHEMA = ROOT / 'aios' / 'observability' / 'schemas' / 'full-regression-report.schema.json'
+UTF8 = 'utf-8'
 SYSTEM_VALIDATION_LINUX_ONLY_STEPS = {
     'Build system image',
     'Build recovery image',
@@ -60,6 +61,8 @@ PY_COMPILE_TARGETS = [
     'scripts/test-ipc-smoke.py', 'scripts/test-code-sandbox-smoke.py', 'scripts/test-compat-runtime-smoke.py',
     'scripts/test-policyd-audit-store-smoke.py', 'scripts/test-provider-registry-smoke.py',
     'scripts/test-portal-file-handle-smoke.py',
+    'scripts/test-team-b-control-plane-smoke.py',
+    'scripts/test-e2e-intent-flow-smoke.py',
     'scripts/test-device-metadata-provider-smoke.py', 'scripts/test-system-intent-provider-smoke.py',
     'scripts/test-runtime-local-inference-provider-smoke.py', 'scripts/test-provider-startup-edge-smoke.py',
     'scripts/test-provider-registry-recovery-smoke.py', 'scripts/test-full-regression-suite-smoke.py',
@@ -173,6 +176,8 @@ def validate_steps(host_target: str, bin_dir: str) -> list[Step]:
         Step('Cargo test', ['cargo', 'test', '--workspace'], cwd=AIOS_DIR),
         Step('Build smoke binaries', ['cargo', 'build', '--target', host_target, '-p', 'aios-agentd', '-p', 'aios-sessiond', '-p', 'aios-policyd', '-p', 'aios-runtimed', '-p', 'aios-deviced', '-p', 'aios-updated', '-p', 'aios-device-metadata-provider', '-p', 'aios-runtime-local-inference-provider', '-p', 'aios-system-intent-provider', '-p', 'aios-system-files-provider'], cwd=AIOS_DIR),
         Step('IPC smoke', [PYTHON, 'scripts/test-ipc-smoke.py', '--bin-dir', bin_dir]),
+        Step('Team B control-plane smoke', [PYTHON, 'scripts/test-team-b-control-plane-smoke.py', '--bin-dir', bin_dir]),
+        Step('E2E intent flow smoke', [PYTHON, 'scripts/test-e2e-intent-flow-smoke.py']),
         Step('Portal file-handle smoke', [PYTHON, 'scripts/test-portal-file-handle-smoke.py', '--bin-dir', bin_dir]),
         Step('Policyd audit-store smoke', [PYTHON, 'scripts/test-policyd-audit-store-smoke.py', '--bin-dir', bin_dir]),
         Step('Provider registry smoke', [PYTHON, 'scripts/test-provider-registry-smoke.py', '--bin-dir', bin_dir]),
@@ -387,17 +392,17 @@ def render_markdown(report: dict[str, Any]) -> str:
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + '\n')
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + '\n', encoding=UTF8)
 
 
 def write_markdown(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content + '\n')
+    path.write_text(content + '\n', encoding=UTF8)
 
 
 def validate_report(path: Path) -> None:
-    schema = json.loads(REGRESSION_REPORT_SCHEMA.read_text())
-    payload = json.loads(path.read_text())
+    schema = json.loads(REGRESSION_REPORT_SCHEMA.read_text(encoding=UTF8))
+    payload = json.loads(path.read_text(encoding=UTF8))
     Draft202012Validator(schema, format_checker=Draft202012Validator.FORMAT_CHECKER).validate(payload)
 
 

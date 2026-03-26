@@ -1,4 +1,5 @@
 enable aios-agentd.service
+enable aios-ai-onboarding.service
 enable aios-boot-evidence.service
 enable aios-device-metadata-provider.service
 enable aios-deviced.service

@@ -1,0 +1,16 @@
+component_id: model-library
+status: in_progress
+kind: shell-panel
+owner: aios-shell
+consumes:
+  - aios-runtime.ai-readiness.json
+  - aios-onboarding.ai-onboarding-report.json
+  - aios-runtime.model-manager
+capabilities:
+  - show_model_inventory
+  - import_local_model
+  - set_default_model
+  - delete_local_model
+entrypoint: client.py
+prototype_entrypoint: prototype.py
+panel_entrypoint: panel.py

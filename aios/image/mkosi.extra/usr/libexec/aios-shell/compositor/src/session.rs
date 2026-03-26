@@ -1335,7 +1335,10 @@ mod tests {
         assert!(summary.contains("\"panel_snapshot_source\":null"));
         assert!(summary.contains("\"panel_snapshot_profile_id\":null"));
         assert!(summary.contains("\"panel_snapshot_surface_count\":0"));
-        assert!(summary.contains("\"panel_embedding_status\":\"panel-slots-open(0/9)\""));
+        assert!(summary.contains(&format!(
+            "\"panel_embedding_status\":\"panel-slots-open(0/{})\"",
+            config.panel_slots.len()
+        )));
         assert!(summary.contains("\"embedded_surface_count\":0"));
         assert!(summary.contains("\"stacking_status\":\"panel-slots-open\""));
         assert!(summary.contains("\"attention_surface_count\":0"));
@@ -1359,7 +1362,10 @@ mod tests {
         assert!(summary.contains("\"last_pointer_x\":null"));
         assert!(summary.contains("\"last_pointer_y\":null"));
         assert!(summary.contains("\"xdg_shell_status\":\"inactive\""));
-        assert!(summary.contains("\"surface_count\":9"));
+        assert!(summary.contains(&format!(
+            "\"surface_count\":{}",
+            config.panel_slots.len()
+        )));
         assert!(summary.contains("\"layout_zone\":\"left-dock\""));
         assert!(summary.contains("\"stacking_layer\":\"panel\""));
         assert!(summary.contains("\"z_index\":120"));

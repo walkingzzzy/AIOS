@@ -47,6 +47,7 @@ DEFAULT_REQUIRED_DELIVERY_KEYS = [
     "schemas",
     "files",
 ]
+UTF8 = "utf-8"
 
 
 def parse_args() -> argparse.Namespace:
@@ -72,30 +73,30 @@ def now_iso() -> str:
 
 
 def load_document(path: Path) -> Any:
-    text = path.read_text()
+    text = path.read_text(encoding=UTF8)
     if path.suffix in {".yaml", ".yml"}:
         return yaml.safe_load(text)
     return json.loads(text)
 
 
 def load_json(path: Path) -> Any:
-    return json.loads(path.read_text())
+    return json.loads(path.read_text(encoding=UTF8))
 
 
 def write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding=UTF8)
 
 
 def write_jsonl(path: Path, payloads: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = [json.dumps(item, ensure_ascii=False) for item in payloads]
-    path.write_text("\n".join(lines) + ("\n" if lines else ""))
+    path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding=UTF8)
 
 
 def write_markdown(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content + "\n")
+    path.write_text(content + "\n", encoding=UTF8)
 
 
 def build_validator(schema_path: Path) -> Draft202012Validator:

@@ -1,0 +1,19 @@
+component_id: system-assistant
+status: in_progress
+kind: shell-panel
+owner: aios-shell
+consumes:
+  - aios-runtime.ai-readiness.json
+  - aios-onboarding.ai-onboarding-report.json
+  - aios-runtime.model-manager
+  - aios-runtime.platform.env
+  - aios-agentd.sessions
+  - aios-agentd.tasks
+  - aios-agentd.approvals
+capabilities:
+  - accept_natural_language_request
+  - route_high_risk_request
+  - show_model_and_permission_posture
+entrypoint: client.py
+prototype_entrypoint: prototype.py
+panel_entrypoint: panel.py

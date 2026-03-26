@@ -8,13 +8,27 @@ use aios_contracts::{
     RuntimeRerankRequest, RuntimeRerankResponse, RuntimeRerankResult,
 };
 
-use crate::AppState;
+use crate::{config::AiReadinessSummary, AppState};
 
 const DEFAULT_EMBEDDING_VECTOR_DIMENSION: u32 = 8;
 const EMBEDDING_ROUTE_STATE: &str = "provider-local-embedding";
 const RERANK_ROUTE_STATE: &str = "provider-local-rerank";
 const EMBEDDING_ALGORITHM: &str = "deterministic-embedding-v1";
 const RERANK_ALGORITHM: &str = "lexical-overlap-v1";
+const REMOTE_BACKEND_ID: &str = "openai-compatible-remote";
+const REMOTE_EMBEDDING_BACKEND_ID: &str = "openai-compatible-remote-embedding";
+const REMOTE_RERANK_BACKEND_ID: &str = "openai-compatible-remote-rerank";
+const REMOTE_RUNTIME_SERVICE_ID: &str = "openai-compatible-endpoint";
+const REMOTE_EMBEDDING_ROUTE_STATE: &str = "provider-remote-embedding";
+const REMOTE_RERANK_ROUTE_STATE: &str = "provider-remote-rerank";
+const REMOTE_EMBEDDING_ALGORITHM: &str = "openai-compatible-embedding-v1";
+const REMOTE_RERANK_ALGORITHM: &str = "cosine-similarity-via-embedding-v1";
+
+#[derive(Debug, Clone)]
+struct LocalFailureContext {
+    route_state: String,
+    reason: String,
+}
 
 pub fn infer(
     state: &AppState,
@@ -42,15 +56,151 @@ pub fn infer(
         anyhow::bail!("execution token rejected: {}", verification.reason);
     }
 
+    let ai_readiness = state.config.load_ai_readiness_summary();
+    let remote_endpoint = state.config.remote_endpoint_config();
     let queue_snapshot = crate::clients::fetch_runtime_queue(state).ok();
     let runtime_health = crate::clients::fetch_runtime_health(state).ok();
+    if !ai_readiness.provider_enabled() {
+        let response = build_provider_disabled_infer_response(
+            state,
+            request,
+            token,
+            &ai_readiness,
+            queue_snapshot.as_ref(),
+            runtime_health.as_ref(),
+        );
+        let _ = crate::clients::report_provider_health(state, "disabled", response.reason.clone());
+        emit_infer_trace(state, request, &response);
+        return Ok(response);
+    }
+    if ai_readiness.remote_only_preferred() && remote_endpoint.is_none() {
+        let response = build_remote_route_unavailable_response(
+            state,
+            request,
+            token,
+            &ai_readiness,
+            queue_snapshot.as_ref(),
+            runtime_health.as_ref(),
+            "remote-only route selected but endpoint is not configured",
+        );
+        let _ =
+            crate::clients::report_provider_health(state, "unavailable", response.reason.clone());
+        emit_infer_trace(state, request, &response);
+        return Ok(response);
+    }
+
+    if should_use_remote_only(&ai_readiness, remote_endpoint.as_ref()) {
+        let response = execute_remote_infer(
+            state,
+            request,
+            token,
+            &ai_readiness,
+            remote_endpoint
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("remote endpoint is not configured"))?,
+            None,
+            queue_snapshot.as_ref(),
+        )?;
+        let _ = crate::clients::report_provider_health(state, "available", None);
+        emit_infer_trace(state, request, &response);
+        return Ok(response);
+    }
+
+    let mut remote_preference_failure: Option<String> = None;
+    if should_use_remote_first(&ai_readiness, remote_endpoint.as_ref()) {
+        let remote_result = execute_remote_infer(
+            state,
+            request,
+            token,
+            &ai_readiness,
+            remote_endpoint
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("remote endpoint is not configured"))?,
+            None,
+            queue_snapshot.as_ref(),
+        );
+        match remote_result {
+            Ok(response) => {
+                let _ = crate::clients::report_provider_health(state, "available", None);
+                emit_infer_trace(state, request, &response);
+                return Ok(response);
+            }
+            Err(error) => {
+                remote_preference_failure = Some(error.to_string());
+            }
+        }
+    }
+
     let result = crate::clients::submit_runtime_infer(state, request);
 
     match result {
         Ok(mut response) => {
+            if remote_preference_failure.is_none()
+                && should_fallback_to_remote_from_response(
+                    &response,
+                    &ai_readiness,
+                    remote_endpoint.as_ref(),
+                )
+            {
+                let local_failure = LocalFailureContext {
+                    route_state: response.route_state.clone(),
+                    reason: response
+                        .reason
+                        .clone()
+                        .unwrap_or_else(|| "local runtime rejected the request".to_string()),
+                };
+                let remote_result = execute_remote_infer(
+                    state,
+                    request,
+                    token,
+                    &ai_readiness,
+                    remote_endpoint
+                        .as_ref()
+                        .ok_or_else(|| anyhow::anyhow!("remote endpoint is not configured"))?,
+                    Some(local_failure),
+                    None,
+                );
+                match remote_result {
+                    Ok(fallback_response) => {
+                        let _ = crate::clients::report_provider_health(
+                            state,
+                            "degraded",
+                            Some(
+                                "local runtime unavailable; remote endpoint served request"
+                                    .to_string(),
+                            ),
+                        );
+                        emit_infer_trace(state, request, &fallback_response);
+                        return Ok(fallback_response);
+                    }
+                    Err(error) => {
+                        let response = build_remote_failure_response(
+                            state,
+                            token,
+                            &ai_readiness,
+                            queue_snapshot.as_ref(),
+                            runtime_health.as_ref(),
+                            Some(LocalFailureContext {
+                                route_state: response.route_state.clone(),
+                                reason: response.reason.clone().unwrap_or_default(),
+                            }),
+                            error.to_string(),
+                        );
+                        let _ = crate::clients::report_provider_health(
+                            state,
+                            "unavailable",
+                            response.reason.clone(),
+                        );
+                        emit_infer_trace(state, request, &response);
+                        return Ok(response);
+                    }
+                }
+            }
+
             let (_, _, runtime_dependency) =
                 provider_runtime_dependency_state(runtime_health.as_ref());
             append_provider_operation_notes(&mut response.notes, "infer", runtime_dependency);
+            append_ai_readiness_notes(&mut response.notes, &ai_readiness);
             attach_runtime_metadata(
                 state,
                 token,
@@ -61,16 +211,88 @@ pub fn infer(
             response.provider_id = Some(state.config.provider_id.clone());
             response.runtime_service_id =
                 runtime_health.as_ref().map(|item| item.service_id.clone());
-            response.provider_status = Some("available".to_string());
+            if let Some(remote_preference_failure) = remote_preference_failure.as_deref() {
+                response.degraded = true;
+                response.provider_status = Some("degraded".to_string());
+                response.notes.push(format!(
+                    "remote_preference_failure={remote_preference_failure}"
+                ));
+                let _ = crate::clients::report_provider_health(
+                    state,
+                    "degraded",
+                    Some(remote_preference_failure.to_string()),
+                );
+            } else {
+                response.provider_status = Some("available".to_string());
+                let _ = crate::clients::report_provider_health(state, "available", None);
+            }
             response.queue_saturated = queue_snapshot.as_ref().map(|item| item.saturated);
             response.runtime_budget = crate::clients::fetch_runtime_budget(state).ok();
-            let _ = crate::clients::report_provider_health(state, "available", None);
             emit_infer_trace(state, request, &response);
             Ok(response)
         }
         Err(error) => {
             let error_text = error.to_string();
             let classification = classify_runtime_error(&error_text);
+
+            if remote_preference_failure.is_none()
+                && should_fallback_to_remote_from_error(
+                    &classification,
+                    &ai_readiness,
+                    remote_endpoint.as_ref(),
+                )
+            {
+                let remote_result = execute_remote_infer(
+                    state,
+                    request,
+                    token,
+                    &ai_readiness,
+                    remote_endpoint
+                        .as_ref()
+                        .ok_or_else(|| anyhow::anyhow!("remote endpoint is not configured"))?,
+                    Some(LocalFailureContext {
+                        route_state: classification.route_state.to_string(),
+                        reason: error_text.clone(),
+                    }),
+                    None,
+                );
+                match remote_result {
+                    Ok(fallback_response) => {
+                        let _ = crate::clients::report_provider_health(
+                            state,
+                            "degraded",
+                            Some(
+                                "local runtime unavailable; remote endpoint served request"
+                                    .to_string(),
+                            ),
+                        );
+                        emit_infer_trace(state, request, &fallback_response);
+                        return Ok(fallback_response);
+                    }
+                    Err(remote_error) => {
+                        let response = build_remote_failure_response(
+                            state,
+                            token,
+                            &ai_readiness,
+                            queue_snapshot.as_ref(),
+                            runtime_health.as_ref(),
+                            Some(LocalFailureContext {
+                                route_state: classification.route_state.to_string(),
+                                reason: error_text.clone(),
+                            }),
+                            remote_error.to_string(),
+                        );
+                        let _ = crate::clients::report_provider_health(
+                            state,
+                            "unavailable",
+                            response.reason.clone(),
+                        );
+                        emit_infer_trace(state, request, &response);
+                        return Ok(response);
+                    }
+                }
+            }
+
             let _ = crate::clients::report_provider_health(
                 state,
                 classification.reported_status,
@@ -81,6 +303,12 @@ pub fn infer(
             let (_, _, runtime_dependency) =
                 provider_runtime_dependency_state(runtime_health.as_ref());
             append_provider_operation_notes(&mut notes, "infer", runtime_dependency);
+            append_ai_readiness_notes(&mut notes, &ai_readiness);
+            if let Some(remote_preference_failure) = remote_preference_failure.as_deref() {
+                notes.push(format!(
+                    "remote_preference_failure={remote_preference_failure}"
+                ));
+            }
             attach_runtime_metadata(
                 state,
                 token,
@@ -113,6 +341,681 @@ pub fn infer(
     }
 }
 
+fn should_use_remote_only(
+    ai_readiness: &AiReadinessSummary,
+    remote_endpoint: Option<&crate::config::RemoteEndpointConfig>,
+) -> bool {
+    remote_endpoint.is_some()
+        && ai_readiness.remote_fallback_allowed()
+        && ai_readiness.remote_only_preferred()
+}
+
+fn should_use_remote_first(
+    ai_readiness: &AiReadinessSummary,
+    remote_endpoint: Option<&crate::config::RemoteEndpointConfig>,
+) -> bool {
+    remote_endpoint.is_some()
+        && ai_readiness.remote_fallback_allowed()
+        && ai_readiness.remote_first_preferred()
+        && !ai_readiness.remote_only_preferred()
+}
+
+fn preferred_backend_requests_remote(preferred_backend: Option<&String>) -> bool {
+    preferred_backend
+        .map(|value| value.trim().to_ascii_lowercase())
+        .map(|value| value.contains("remote"))
+        .unwrap_or(false)
+}
+
+fn should_fallback_to_remote_from_response(
+    response: &RuntimeInferResponse,
+    ai_readiness: &AiReadinessSummary,
+    remote_endpoint: Option<&crate::config::RemoteEndpointConfig>,
+) -> bool {
+    remote_endpoint.is_some()
+        && ai_readiness.remote_fallback_allowed()
+        && response.rejected
+        && local_response_requires_remote(response)
+}
+
+fn should_fallback_to_remote_from_error(
+    classification: &RuntimeErrorClassification,
+    ai_readiness: &AiReadinessSummary,
+    remote_endpoint: Option<&crate::config::RemoteEndpointConfig>,
+) -> bool {
+    remote_endpoint.is_some()
+        && ai_readiness.remote_fallback_allowed()
+        && matches!(classification.route_state, "runtime-unavailable")
+}
+
+fn local_response_requires_remote(response: &RuntimeInferResponse) -> bool {
+    if matches!(
+        response.route_state.as_str(),
+        "setup-pending"
+            | "runtime-unavailable"
+            | "backend-worker-required"
+            | "backend-worker-unreachable"
+            | "capability-rejected"
+    ) {
+        return true;
+    }
+
+    response
+        .reason
+        .as_deref()
+        .map(str::to_ascii_lowercase)
+        .map(|reason| {
+            [
+                "product mode requires",
+                "backend is not executable",
+                "worker is not executable",
+                "failed to connect to",
+                "connection refused",
+                "no such file or directory",
+            ]
+            .iter()
+            .any(|pattern| reason.contains(pattern))
+        })
+        .unwrap_or(false)
+}
+
+fn execute_remote_infer(
+    state: &AppState,
+    request: &RuntimeInferRequest,
+    token: &ExecutionToken,
+    ai_readiness: &AiReadinessSummary,
+    remote_endpoint: &crate::config::RemoteEndpointConfig,
+    local_failure: Option<LocalFailureContext>,
+    queue_snapshot: Option<&RuntimeQueueResponse>,
+) -> anyhow::Result<RuntimeInferResponse> {
+    let remote_result = crate::clients::submit_remote_infer(state, request, remote_endpoint)?;
+    let provider_status = if local_failure.is_some() && !ai_readiness.remote_only_preferred() {
+        "degraded"
+    } else {
+        "available"
+    };
+    let mut notes = vec![
+        "provider_operation=infer".to_string(),
+        "runtime_dependency=remote-endpoint".to_string(),
+        format!("remote_backend={REMOTE_BACKEND_ID}"),
+        format!("remote_model={}", remote_result.model),
+        format!("remote_base_url={}", remote_endpoint.base_url),
+        format!(
+            "remote_api_key_configured={}",
+            if remote_endpoint.api_key.is_some() {
+                "true"
+            } else {
+                "false"
+            }
+        ),
+    ];
+    append_ai_readiness_notes(&mut notes, ai_readiness);
+    if let Some(total_tokens) = remote_result.usage_total_tokens {
+        notes.push(format!("remote_total_tokens={total_tokens}"));
+    }
+    if let Some(local_failure) = local_failure {
+        notes.push(format!(
+            "local_failure_route_state={}",
+            local_failure.route_state
+        ));
+        notes.push(format!("local_failure_reason={}", local_failure.reason));
+    }
+    attach_runtime_metadata(
+        state,
+        token,
+        &mut notes,
+        queue_snapshot,
+        Some(REMOTE_RUNTIME_SERVICE_ID.to_string()),
+    );
+
+    Ok(RuntimeInferResponse {
+        backend_id: REMOTE_BACKEND_ID.to_string(),
+        route_state: ai_readiness.remote_route_state().to_string(),
+        content: remote_result.content,
+        degraded: provider_status == "degraded",
+        rejected: false,
+        reason: Some("served by openai-compatible remote endpoint".to_string()),
+        estimated_latency_ms: Some(remote_result.estimated_latency_ms),
+        provider_id: Some(state.config.provider_id.clone()),
+        runtime_service_id: Some(REMOTE_RUNTIME_SERVICE_ID.to_string()),
+        provider_status: Some(provider_status.to_string()),
+        queue_saturated: None,
+        runtime_budget: None,
+        notes,
+    })
+}
+
+fn build_remote_failure_response(
+    state: &AppState,
+    token: &ExecutionToken,
+    ai_readiness: &AiReadinessSummary,
+    queue_snapshot: Option<&RuntimeQueueResponse>,
+    runtime_health: Option<&HealthResponse>,
+    local_failure: Option<LocalFailureContext>,
+    remote_error: String,
+) -> RuntimeInferResponse {
+    let mut notes = vec![
+        "provider_operation=infer".to_string(),
+        "runtime_dependency=remote-endpoint".to_string(),
+        format!("remote_backend={REMOTE_BACKEND_ID}"),
+    ];
+    append_ai_readiness_notes(&mut notes, ai_readiness);
+    if let Some(local_failure) = local_failure.as_ref() {
+        notes.push(format!(
+            "local_failure_route_state={}",
+            local_failure.route_state
+        ));
+        notes.push(format!("local_failure_reason={}", local_failure.reason));
+    }
+    notes.push(format!("remote_failure_reason={remote_error}"));
+    attach_runtime_metadata(
+        state,
+        token,
+        &mut notes,
+        queue_snapshot,
+        runtime_health
+            .map(|item| item.service_id.clone())
+            .or_else(|| Some(REMOTE_RUNTIME_SERVICE_ID.to_string())),
+    );
+
+    let reason = local_failure
+        .map(|failure| {
+            format!(
+                "local route {} failed: {}; remote fallback failed: {}",
+                failure.route_state, failure.reason, remote_error
+            )
+        })
+        .unwrap_or_else(|| format!("remote fallback failed: {remote_error}"));
+
+    RuntimeInferResponse {
+        backend_id: REMOTE_BACKEND_ID.to_string(),
+        route_state: "remote-unavailable".to_string(),
+        content: String::new(),
+        degraded: true,
+        rejected: true,
+        reason: Some(reason),
+        estimated_latency_ms: None,
+        provider_id: Some(state.config.provider_id.clone()),
+        runtime_service_id: runtime_health
+            .map(|item| item.service_id.clone())
+            .or_else(|| Some(REMOTE_RUNTIME_SERVICE_ID.to_string())),
+        provider_status: Some("degraded".to_string()),
+        queue_saturated: queue_snapshot.map(|item| item.saturated),
+        runtime_budget: None,
+        notes,
+    }
+}
+
+fn build_provider_disabled_infer_response(
+    state: &AppState,
+    request: &RuntimeInferRequest,
+    token: &ExecutionToken,
+    ai_readiness: &AiReadinessSummary,
+    queue_snapshot: Option<&RuntimeQueueResponse>,
+    runtime_health: Option<&HealthResponse>,
+) -> RuntimeInferResponse {
+    let mut notes = vec![
+        "provider_operation=infer".to_string(),
+        "runtime_dependency=disabled".to_string(),
+    ];
+    append_ai_readiness_notes(&mut notes, ai_readiness);
+    attach_runtime_metadata(
+        state,
+        token,
+        &mut notes,
+        queue_snapshot,
+        runtime_health.map(|item| item.service_id.clone()),
+    );
+    RuntimeInferResponse {
+        backend_id: request
+            .preferred_backend
+            .clone()
+            .unwrap_or_else(|| "disabled".to_string()),
+        route_state: "disabled".to_string(),
+        content: String::new(),
+        degraded: false,
+        rejected: true,
+        reason: Some("AI provider disabled via runtime platform env".to_string()),
+        estimated_latency_ms: None,
+        provider_id: Some(state.config.provider_id.clone()),
+        runtime_service_id: runtime_health.map(|item| item.service_id.clone()),
+        provider_status: Some("disabled".to_string()),
+        queue_saturated: queue_snapshot.map(|item| item.saturated),
+        runtime_budget: None,
+        notes,
+    }
+}
+
+fn build_remote_route_unavailable_response(
+    state: &AppState,
+    request: &RuntimeInferRequest,
+    token: &ExecutionToken,
+    ai_readiness: &AiReadinessSummary,
+    queue_snapshot: Option<&RuntimeQueueResponse>,
+    runtime_health: Option<&HealthResponse>,
+    reason: &str,
+) -> RuntimeInferResponse {
+    let mut notes = vec![
+        "provider_operation=infer".to_string(),
+        "runtime_dependency=remote-endpoint".to_string(),
+    ];
+    append_ai_readiness_notes(&mut notes, ai_readiness);
+    attach_runtime_metadata(
+        state,
+        token,
+        &mut notes,
+        queue_snapshot,
+        runtime_health.map(|item| item.service_id.clone()),
+    );
+    RuntimeInferResponse {
+        backend_id: request
+            .preferred_backend
+            .clone()
+            .unwrap_or_else(|| REMOTE_BACKEND_ID.to_string()),
+        route_state: "remote-unavailable".to_string(),
+        content: String::new(),
+        degraded: true,
+        rejected: true,
+        reason: Some(reason.to_string()),
+        estimated_latency_ms: None,
+        provider_id: Some(state.config.provider_id.clone()),
+        runtime_service_id: runtime_health
+            .map(|item| item.service_id.clone())
+            .or_else(|| Some(REMOTE_RUNTIME_SERVICE_ID.to_string())),
+        provider_status: Some("degraded".to_string()),
+        queue_saturated: queue_snapshot.map(|item| item.saturated),
+        runtime_budget: None,
+        notes,
+    }
+}
+
+fn execute_remote_embed(
+    state: &AppState,
+    request: &RuntimeEmbedRequest,
+    token: &ExecutionToken,
+    ai_readiness: &AiReadinessSummary,
+    remote_endpoint: &crate::config::RemoteEndpointConfig,
+    queue_snapshot: Option<&RuntimeQueueResponse>,
+) -> anyhow::Result<RuntimeEmbedResponse> {
+    let remote_result =
+        crate::clients::submit_remote_embed(state, &request.inputs, remote_endpoint)?;
+    let crate::clients::RemoteEmbeddingResult {
+        embeddings: remote_vectors,
+        model: remote_model,
+        vector_dimension,
+        estimated_latency_ms,
+        usage_total_tokens,
+    } = remote_result;
+    let embeddings = request
+        .inputs
+        .iter()
+        .enumerate()
+        .zip(remote_vectors)
+        .map(|((index, input), vector)| RuntimeEmbeddingRecord {
+            input_index: index,
+            vector,
+            text_length: input.chars().count(),
+        })
+        .collect::<Vec<_>>();
+    let mut notes = vec![
+        "provider_operation=embedding".to_string(),
+        format!("provider_algorithm={REMOTE_EMBEDDING_ALGORITHM}"),
+        format!("embedding_backend={REMOTE_EMBEDDING_BACKEND_ID}"),
+        format!("embedding_count={}", embeddings.len()),
+        format!("embedding_vector_dimension={vector_dimension}"),
+        "backend_selection=remote-endpoint".to_string(),
+        "runtime_dependency=remote-endpoint".to_string(),
+        format!("remote_backend={REMOTE_EMBEDDING_BACKEND_ID}"),
+        format!("remote_model={remote_model}"),
+        format!("embedding_model={remote_model}"),
+        format!("remote_estimated_latency_ms={estimated_latency_ms}"),
+        format!("remote_base_url={}", remote_endpoint.base_url),
+        format!(
+            "remote_api_key_configured={}",
+            if remote_endpoint.api_key.is_some() {
+                "true"
+            } else {
+                "false"
+            }
+        ),
+    ];
+    append_ai_readiness_notes(&mut notes, ai_readiness);
+    if let Some(total_tokens) = usage_total_tokens {
+        notes.push(format!("remote_total_tokens={total_tokens}"));
+    }
+    attach_runtime_metadata(
+        state,
+        token,
+        &mut notes,
+        queue_snapshot,
+        Some(REMOTE_RUNTIME_SERVICE_ID.to_string()),
+    );
+
+    Ok(RuntimeEmbedResponse {
+        backend_id: REMOTE_EMBEDDING_BACKEND_ID.to_string(),
+        route_state: REMOTE_EMBEDDING_ROUTE_STATE.to_string(),
+        vector_dimension,
+        embeddings,
+        degraded: false,
+        rejected: false,
+        reason: Some("served by openai-compatible remote embedding endpoint".to_string()),
+        provider_id: Some(state.config.provider_id.clone()),
+        runtime_service_id: Some(REMOTE_RUNTIME_SERVICE_ID.to_string()),
+        provider_status: Some("available".to_string()),
+        queue_saturated: None,
+        runtime_budget: None,
+        notes,
+    })
+}
+
+fn build_remote_route_unavailable_embed_response(
+    state: &AppState,
+    request: &RuntimeEmbedRequest,
+    token: &ExecutionToken,
+    ai_readiness: &AiReadinessSummary,
+    queue_snapshot: Option<&RuntimeQueueResponse>,
+    runtime_health: Option<&HealthResponse>,
+    reason: &str,
+) -> RuntimeEmbedResponse {
+    let mut notes = vec![
+        "provider_operation=embedding".to_string(),
+        format!("provider_algorithm={REMOTE_EMBEDDING_ALGORITHM}"),
+        "runtime_dependency=remote-endpoint".to_string(),
+    ];
+    append_ai_readiness_notes(&mut notes, ai_readiness);
+    attach_runtime_metadata(
+        state,
+        token,
+        &mut notes,
+        queue_snapshot,
+        runtime_health
+            .map(|item| item.service_id.clone())
+            .or_else(|| Some(REMOTE_RUNTIME_SERVICE_ID.to_string())),
+    );
+    RuntimeEmbedResponse {
+        backend_id: request
+            .preferred_backend
+            .clone()
+            .unwrap_or_else(|| REMOTE_EMBEDDING_BACKEND_ID.to_string()),
+        route_state: "remote-unavailable".to_string(),
+        vector_dimension: 0,
+        embeddings: Vec::new(),
+        degraded: true,
+        rejected: true,
+        reason: Some(reason.to_string()),
+        provider_id: Some(state.config.provider_id.clone()),
+        runtime_service_id: runtime_health
+            .map(|item| item.service_id.clone())
+            .or_else(|| Some(REMOTE_RUNTIME_SERVICE_ID.to_string())),
+        provider_status: Some("degraded".to_string()),
+        queue_saturated: queue_snapshot.map(|item| item.saturated),
+        runtime_budget: None,
+        notes,
+    }
+}
+
+fn build_remote_failure_embed_response(
+    state: &AppState,
+    token: &ExecutionToken,
+    ai_readiness: &AiReadinessSummary,
+    queue_snapshot: Option<&RuntimeQueueResponse>,
+    runtime_health: Option<&HealthResponse>,
+    remote_error: String,
+) -> RuntimeEmbedResponse {
+    let mut notes = vec![
+        "provider_operation=embedding".to_string(),
+        format!("provider_algorithm={REMOTE_EMBEDDING_ALGORITHM}"),
+        "runtime_dependency=remote-endpoint".to_string(),
+        format!("remote_failure_reason={remote_error}"),
+    ];
+    append_ai_readiness_notes(&mut notes, ai_readiness);
+    attach_runtime_metadata(
+        state,
+        token,
+        &mut notes,
+        queue_snapshot,
+        runtime_health
+            .map(|item| item.service_id.clone())
+            .or_else(|| Some(REMOTE_RUNTIME_SERVICE_ID.to_string())),
+    );
+
+    RuntimeEmbedResponse {
+        backend_id: REMOTE_EMBEDDING_BACKEND_ID.to_string(),
+        route_state: "remote-unavailable".to_string(),
+        vector_dimension: 0,
+        embeddings: Vec::new(),
+        degraded: true,
+        rejected: true,
+        reason: Some(format!("remote embedding failed: {remote_error}")),
+        provider_id: Some(state.config.provider_id.clone()),
+        runtime_service_id: runtime_health
+            .map(|item| item.service_id.clone())
+            .or_else(|| Some(REMOTE_RUNTIME_SERVICE_ID.to_string())),
+        provider_status: Some("degraded".to_string()),
+        queue_saturated: queue_snapshot.map(|item| item.saturated),
+        runtime_budget: None,
+        notes,
+    }
+}
+
+fn execute_remote_rerank(
+    state: &AppState,
+    request: &RuntimeRerankRequest,
+    token: &ExecutionToken,
+    ai_readiness: &AiReadinessSummary,
+    remote_endpoint: &crate::config::RemoteEndpointConfig,
+    queue_snapshot: Option<&RuntimeQueueResponse>,
+) -> anyhow::Result<RuntimeRerankResponse> {
+    let mut inputs = Vec::with_capacity(request.documents.len() + 1);
+    inputs.push(request.query.clone());
+    inputs.extend(request.documents.iter().cloned());
+    let remote_result = crate::clients::submit_remote_embed(state, &inputs, remote_endpoint)?;
+    if remote_result.embeddings.len() != request.documents.len() + 1 {
+        anyhow::bail!(
+            "remote embedding endpoint returned {} vectors for {} rerank inputs",
+            remote_result.embeddings.len(),
+            request.documents.len() + 1
+        );
+    }
+    let query_vector = remote_result
+        .embeddings
+        .first()
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("remote rerank query embedding missing"))?;
+    let results = rank_documents_by_embedding(
+        &query_vector,
+        &remote_result.embeddings[1..],
+        &request.documents,
+        request.top_k,
+    );
+    let mut notes = vec![
+        "provider_operation=rerank".to_string(),
+        format!("provider_algorithm={REMOTE_RERANK_ALGORITHM}"),
+        format!("rerank_backend={REMOTE_RERANK_BACKEND_ID}"),
+        format!("document_count={}", request.documents.len()),
+        format!(
+            "top_k_requested={}",
+            request.top_k.unwrap_or(request.documents.len() as u32)
+        ),
+        format!("top_k_returned={}", results.len()),
+        format!(
+            "remote_embedding_dimension={}",
+            remote_result.vector_dimension
+        ),
+        "backend_selection=remote-endpoint".to_string(),
+        "runtime_dependency=remote-endpoint".to_string(),
+        format!("remote_backend={REMOTE_RERANK_BACKEND_ID}"),
+        format!("remote_model={}", remote_result.model),
+        format!("rerank_model={}", remote_result.model),
+        format!(
+            "remote_estimated_latency_ms={}",
+            remote_result.estimated_latency_ms
+        ),
+        format!("remote_base_url={}", remote_endpoint.base_url),
+        format!(
+            "remote_api_key_configured={}",
+            if remote_endpoint.api_key.is_some() {
+                "true"
+            } else {
+                "false"
+            }
+        ),
+    ];
+    append_ai_readiness_notes(&mut notes, ai_readiness);
+    if let Some(total_tokens) = remote_result.usage_total_tokens {
+        notes.push(format!("remote_total_tokens={total_tokens}"));
+    }
+    attach_runtime_metadata(
+        state,
+        token,
+        &mut notes,
+        queue_snapshot,
+        Some(REMOTE_RUNTIME_SERVICE_ID.to_string()),
+    );
+
+    Ok(RuntimeRerankResponse {
+        backend_id: REMOTE_RERANK_BACKEND_ID.to_string(),
+        route_state: REMOTE_RERANK_ROUTE_STATE.to_string(),
+        results,
+        degraded: false,
+        rejected: false,
+        reason: Some("served by openai-compatible remote rerank endpoint".to_string()),
+        provider_id: Some(state.config.provider_id.clone()),
+        runtime_service_id: Some(REMOTE_RUNTIME_SERVICE_ID.to_string()),
+        provider_status: Some("available".to_string()),
+        queue_saturated: None,
+        runtime_budget: None,
+        notes,
+    })
+}
+
+fn build_remote_route_unavailable_rerank_response(
+    state: &AppState,
+    request: &RuntimeRerankRequest,
+    token: &ExecutionToken,
+    ai_readiness: &AiReadinessSummary,
+    queue_snapshot: Option<&RuntimeQueueResponse>,
+    runtime_health: Option<&HealthResponse>,
+    reason: &str,
+) -> RuntimeRerankResponse {
+    let mut notes = vec![
+        "provider_operation=rerank".to_string(),
+        format!("provider_algorithm={REMOTE_RERANK_ALGORITHM}"),
+        "runtime_dependency=remote-endpoint".to_string(),
+    ];
+    append_ai_readiness_notes(&mut notes, ai_readiness);
+    attach_runtime_metadata(
+        state,
+        token,
+        &mut notes,
+        queue_snapshot,
+        runtime_health
+            .map(|item| item.service_id.clone())
+            .or_else(|| Some(REMOTE_RUNTIME_SERVICE_ID.to_string())),
+    );
+    RuntimeRerankResponse {
+        backend_id: request
+            .preferred_backend
+            .clone()
+            .unwrap_or_else(|| REMOTE_RERANK_BACKEND_ID.to_string()),
+        route_state: "remote-unavailable".to_string(),
+        results: Vec::new(),
+        degraded: true,
+        rejected: true,
+        reason: Some(reason.to_string()),
+        provider_id: Some(state.config.provider_id.clone()),
+        runtime_service_id: runtime_health
+            .map(|item| item.service_id.clone())
+            .or_else(|| Some(REMOTE_RUNTIME_SERVICE_ID.to_string())),
+        provider_status: Some("degraded".to_string()),
+        queue_saturated: queue_snapshot.map(|item| item.saturated),
+        runtime_budget: None,
+        notes,
+    }
+}
+
+fn build_remote_failure_rerank_response(
+    state: &AppState,
+    token: &ExecutionToken,
+    ai_readiness: &AiReadinessSummary,
+    queue_snapshot: Option<&RuntimeQueueResponse>,
+    runtime_health: Option<&HealthResponse>,
+    remote_error: String,
+) -> RuntimeRerankResponse {
+    let mut notes = vec![
+        "provider_operation=rerank".to_string(),
+        format!("provider_algorithm={REMOTE_RERANK_ALGORITHM}"),
+        "runtime_dependency=remote-endpoint".to_string(),
+        format!("remote_failure_reason={remote_error}"),
+    ];
+    append_ai_readiness_notes(&mut notes, ai_readiness);
+    attach_runtime_metadata(
+        state,
+        token,
+        &mut notes,
+        queue_snapshot,
+        runtime_health
+            .map(|item| item.service_id.clone())
+            .or_else(|| Some(REMOTE_RUNTIME_SERVICE_ID.to_string())),
+    );
+
+    RuntimeRerankResponse {
+        backend_id: REMOTE_RERANK_BACKEND_ID.to_string(),
+        route_state: "remote-unavailable".to_string(),
+        results: Vec::new(),
+        degraded: true,
+        rejected: true,
+        reason: Some(format!("remote rerank failed: {remote_error}")),
+        provider_id: Some(state.config.provider_id.clone()),
+        runtime_service_id: runtime_health
+            .map(|item| item.service_id.clone())
+            .or_else(|| Some(REMOTE_RUNTIME_SERVICE_ID.to_string())),
+        provider_status: Some("degraded".to_string()),
+        queue_saturated: queue_snapshot.map(|item| item.saturated),
+        runtime_budget: None,
+        notes,
+    }
+}
+
+fn append_ai_readiness_notes(notes: &mut Vec<String>, ai_readiness: &AiReadinessSummary) {
+    notes.push(format!(
+        "ai_readiness_source={}",
+        if ai_readiness.source_available {
+            "published"
+        } else {
+            "default"
+        }
+    ));
+    notes.push(format!(
+        "ai_readiness_state={}",
+        ai_readiness.state.as_deref().unwrap_or("unknown")
+    ));
+    notes.push(format!(
+        "ai_endpoint_configured={}",
+        if ai_readiness.endpoint_configured {
+            "true"
+        } else {
+            "false"
+        }
+    ));
+    if let Some(reason) = ai_readiness.reason.as_deref() {
+        notes.push(format!("ai_readiness_reason={reason}"));
+    }
+    if let Some(next_action) = ai_readiness.next_action.as_deref() {
+        notes.push(format!("ai_next_action={next_action}"));
+    }
+    if let Some(ai_mode) = ai_readiness.ai_mode.as_deref() {
+        notes.push(format!("ai_mode={ai_mode}"));
+    }
+    notes.push(format!(
+        "route_preference={}",
+        ai_readiness.effective_route_preference()
+    ));
+    if let Some(local_model_count) = ai_readiness.local_model_count {
+        notes.push(format!("local_model_count={local_model_count}"));
+    }
+}
+
 pub fn embed(
     state: &AppState,
     request: &RuntimeEmbedRequest,
@@ -142,9 +1045,111 @@ pub fn embed(
         anyhow::bail!("execution token rejected: {}", verification.reason);
     }
 
+    let ai_readiness = state.config.load_ai_readiness_summary();
     let queue_snapshot = crate::clients::fetch_runtime_queue(state).ok();
     let runtime_health = crate::clients::fetch_runtime_health(state).ok();
     let runtime_budget = crate::clients::fetch_runtime_budget(state).ok();
+    let remote_endpoint = state
+        .config
+        .remote_embedding_endpoint_config(request.model.as_deref());
+    let explicit_remote_backend =
+        preferred_backend_requests_remote(request.preferred_backend.as_ref());
+    if !ai_readiness.provider_enabled() {
+        let response = RuntimeEmbedResponse {
+            backend_id: state.config.embedding_backend.clone(),
+            route_state: "disabled".to_string(),
+            vector_dimension: DEFAULT_EMBEDDING_VECTOR_DIMENSION,
+            embeddings: Vec::new(),
+            degraded: false,
+            rejected: true,
+            reason: Some("AI provider disabled via runtime platform env".to_string()),
+            provider_id: Some(state.config.provider_id.clone()),
+            runtime_service_id: None,
+            provider_status: Some("disabled".to_string()),
+            queue_saturated: None,
+            runtime_budget: None,
+            notes: vec![
+                "provider_operation=embedding".to_string(),
+                "runtime_dependency=disabled".to_string(),
+            ],
+        };
+        emit_embedding_trace(state, request, &response);
+        return Ok(response);
+    }
+    if (ai_readiness.remote_only_preferred() || explicit_remote_backend)
+        && remote_endpoint.is_none()
+    {
+        let response = build_remote_route_unavailable_embed_response(
+            state,
+            request,
+            token,
+            &ai_readiness,
+            queue_snapshot.as_ref(),
+            runtime_health.as_ref(),
+            if ai_readiness.remote_only_preferred() {
+                "remote-only route selected but embedding endpoint is not configured"
+            } else {
+                "remote embedding backend requested but endpoint is not configured"
+            },
+        );
+        emit_embedding_trace(state, request, &response);
+        return Ok(response);
+    }
+
+    let mut remote_preference_failure: Option<String> = None;
+    if explicit_remote_backend || should_use_remote_only(&ai_readiness, remote_endpoint.as_ref()) {
+        let response = execute_remote_embed(
+            state,
+            request,
+            token,
+            &ai_readiness,
+            remote_endpoint
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("remote embedding endpoint is not configured"))?,
+            queue_snapshot.as_ref(),
+        );
+        match response {
+            Ok(response) => {
+                emit_embedding_trace(state, request, &response);
+                return Ok(response);
+            }
+            Err(error) if explicit_remote_backend && !ai_readiness.remote_only_preferred() => {
+                remote_preference_failure = Some(error.to_string());
+            }
+            Err(error) => {
+                let response = build_remote_failure_embed_response(
+                    state,
+                    token,
+                    &ai_readiness,
+                    queue_snapshot.as_ref(),
+                    runtime_health.as_ref(),
+                    error.to_string(),
+                );
+                emit_embedding_trace(state, request, &response);
+                return Ok(response);
+            }
+        }
+    } else if should_use_remote_first(&ai_readiness, remote_endpoint.as_ref()) {
+        match execute_remote_embed(
+            state,
+            request,
+            token,
+            &ai_readiness,
+            remote_endpoint
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("remote embedding endpoint is not configured"))?,
+            queue_snapshot.as_ref(),
+        ) {
+            Ok(response) => {
+                emit_embedding_trace(state, request, &response);
+                return Ok(response);
+            }
+            Err(error) => {
+                remote_preference_failure = Some(error.to_string());
+            }
+        }
+    }
+
     let (provider_status, degraded, runtime_dependency) =
         provider_runtime_dependency_state(runtime_health.as_ref());
     let vector_dimension = DEFAULT_EMBEDDING_VECTOR_DIMENSION;
@@ -162,6 +1167,11 @@ pub fn embed(
         request.model.as_deref(),
         runtime_dependency,
     );
+    if let Some(remote_preference_failure) = remote_preference_failure.as_deref() {
+        notes.push(format!(
+            "remote_preference_failure={remote_preference_failure}"
+        ));
+    }
     attach_runtime_metadata(
         state,
         token,
@@ -170,12 +1180,17 @@ pub fn embed(
         runtime_health.as_ref().map(|item| item.service_id.clone()),
     );
 
+    let provider_status = if remote_preference_failure.is_some() {
+        "degraded"
+    } else {
+        provider_status
+    };
     let response = RuntimeEmbedResponse {
         backend_id,
         route_state: EMBEDDING_ROUTE_STATE.to_string(),
         vector_dimension,
         embeddings,
-        degraded,
+        degraded: degraded || remote_preference_failure.is_some(),
         rejected: false,
         reason: None,
         provider_id: Some(state.config.provider_id.clone()),
@@ -226,9 +1241,110 @@ pub fn rerank(
         anyhow::bail!("execution token rejected: {}", verification.reason);
     }
 
+    let ai_readiness = state.config.load_ai_readiness_summary();
     let queue_snapshot = crate::clients::fetch_runtime_queue(state).ok();
     let runtime_health = crate::clients::fetch_runtime_health(state).ok();
     let runtime_budget = crate::clients::fetch_runtime_budget(state).ok();
+    let remote_endpoint = state
+        .config
+        .remote_rerank_endpoint_config(request.model.as_deref());
+    let explicit_remote_backend =
+        preferred_backend_requests_remote(request.preferred_backend.as_ref());
+    if !ai_readiness.provider_enabled() {
+        let response = RuntimeRerankResponse {
+            backend_id: state.config.rerank_backend.clone(),
+            route_state: "disabled".to_string(),
+            results: Vec::new(),
+            degraded: false,
+            rejected: true,
+            reason: Some("AI provider disabled via runtime platform env".to_string()),
+            provider_id: Some(state.config.provider_id.clone()),
+            runtime_service_id: None,
+            provider_status: Some("disabled".to_string()),
+            queue_saturated: None,
+            runtime_budget: None,
+            notes: vec![
+                "provider_operation=rerank".to_string(),
+                "runtime_dependency=disabled".to_string(),
+            ],
+        };
+        emit_rerank_trace(state, request, &response);
+        return Ok(response);
+    }
+    if (ai_readiness.remote_only_preferred() || explicit_remote_backend)
+        && remote_endpoint.is_none()
+    {
+        let response = build_remote_route_unavailable_rerank_response(
+            state,
+            request,
+            token,
+            &ai_readiness,
+            queue_snapshot.as_ref(),
+            runtime_health.as_ref(),
+            if ai_readiness.remote_only_preferred() {
+                "remote-only route selected but rerank endpoint is not configured"
+            } else {
+                "remote rerank backend requested but endpoint is not configured"
+            },
+        );
+        emit_rerank_trace(state, request, &response);
+        return Ok(response);
+    }
+
+    let mut remote_preference_failure: Option<String> = None;
+    if explicit_remote_backend || should_use_remote_only(&ai_readiness, remote_endpoint.as_ref()) {
+        let response = execute_remote_rerank(
+            state,
+            request,
+            token,
+            &ai_readiness,
+            remote_endpoint
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("remote rerank endpoint is not configured"))?,
+            queue_snapshot.as_ref(),
+        );
+        match response {
+            Ok(response) => {
+                emit_rerank_trace(state, request, &response);
+                return Ok(response);
+            }
+            Err(error) if explicit_remote_backend && !ai_readiness.remote_only_preferred() => {
+                remote_preference_failure = Some(error.to_string());
+            }
+            Err(error) => {
+                let response = build_remote_failure_rerank_response(
+                    state,
+                    token,
+                    &ai_readiness,
+                    queue_snapshot.as_ref(),
+                    runtime_health.as_ref(),
+                    error.to_string(),
+                );
+                emit_rerank_trace(state, request, &response);
+                return Ok(response);
+            }
+        }
+    } else if should_use_remote_first(&ai_readiness, remote_endpoint.as_ref()) {
+        match execute_remote_rerank(
+            state,
+            request,
+            token,
+            &ai_readiness,
+            remote_endpoint
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("remote rerank endpoint is not configured"))?,
+            queue_snapshot.as_ref(),
+        ) {
+            Ok(response) => {
+                emit_rerank_trace(state, request, &response);
+                return Ok(response);
+            }
+            Err(error) => {
+                remote_preference_failure = Some(error.to_string());
+            }
+        }
+    }
+
     let (provider_status, degraded, runtime_dependency) =
         provider_runtime_dependency_state(runtime_health.as_ref());
     let (backend_id, backend_source) = resolve_backend_id(
@@ -246,6 +1362,11 @@ pub fn rerank(
         request.model.as_deref(),
         runtime_dependency,
     );
+    if let Some(remote_preference_failure) = remote_preference_failure.as_deref() {
+        notes.push(format!(
+            "remote_preference_failure={remote_preference_failure}"
+        ));
+    }
     attach_runtime_metadata(
         state,
         token,
@@ -254,11 +1375,16 @@ pub fn rerank(
         runtime_health.as_ref().map(|item| item.service_id.clone()),
     );
 
+    let provider_status = if remote_preference_failure.is_some() {
+        "degraded"
+    } else {
+        provider_status
+    };
     let response = RuntimeRerankResponse {
         backend_id,
         route_state: RERANK_ROUTE_STATE.to_string(),
         results,
-        degraded,
+        degraded: degraded || remote_preference_failure.is_some(),
         rejected: false,
         reason: None,
         provider_id: Some(state.config.provider_id.clone()),
@@ -454,6 +1580,54 @@ fn rank_documents(
     results
 }
 
+fn rank_documents_by_embedding(
+    query_vector: &[f32],
+    document_vectors: &[Vec<f32>],
+    documents: &[String],
+    top_k: Option<u32>,
+) -> Vec<RuntimeRerankResult> {
+    let mut results = documents
+        .iter()
+        .enumerate()
+        .map(|(index, document)| RuntimeRerankResult {
+            document_index: index,
+            score: document_vectors
+                .get(index)
+                .map(|vector| cosine_similarity(query_vector, vector))
+                .unwrap_or(0.0),
+            document: document.clone(),
+        })
+        .collect::<Vec<_>>();
+    results.sort_by(|left, right| {
+        right
+            .score
+            .total_cmp(&left.score)
+            .then_with(|| left.document_index.cmp(&right.document_index))
+    });
+    if let Some(top_k) = top_k {
+        results.truncate(top_k.max(1) as usize);
+    }
+    results
+}
+
+fn cosine_similarity(left: &[f32], right: &[f32]) -> f32 {
+    if left.is_empty() || right.is_empty() || left.len() != right.len() {
+        return 0.0;
+    }
+
+    let dot = left
+        .iter()
+        .zip(right.iter())
+        .map(|(left, right)| left * right)
+        .sum::<f32>();
+    let left_norm = left.iter().map(|value| value * value).sum::<f32>().sqrt();
+    let right_norm = right.iter().map(|value| value * value).sum::<f32>().sqrt();
+    if left_norm == 0.0 || right_norm == 0.0 {
+        return 0.0;
+    }
+    dot / (left_norm * right_norm)
+}
+
 fn emit_infer_trace(
     state: &AppState,
     request: &RuntimeInferRequest,
@@ -641,6 +1815,7 @@ fn classify_runtime_error(message: &str) -> RuntimeErrorClassification {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::AiReadinessSummary;
 
     #[test]
     fn classify_runtime_error_marks_socket_failures_as_unavailable() {
@@ -761,5 +1936,95 @@ mod tests {
         assert_eq!(results[0].document_index, 0);
         assert_eq!(results[1].document_index, 1);
         assert!(results[0].score >= results[1].score);
+    }
+
+    #[test]
+    fn rank_documents_by_embedding_prefers_closest_vector() {
+        let query = vec![1.0, 0.0, 0.0];
+        let vectors = vec![
+            vec![0.95, 0.05, 0.0],
+            vec![0.2, 0.8, 0.0],
+            vec![0.0, 0.0, 1.0],
+        ];
+        let documents = vec![
+            "provider health summary".to_string(),
+            "device metadata stream".to_string(),
+            "shell panel route".to_string(),
+        ];
+
+        let results = rank_documents_by_embedding(&query, &vectors, &documents, Some(2));
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].document_index, 0);
+        assert!(results[0].score > results[1].score);
+    }
+
+    #[test]
+    fn preferred_backend_requests_remote_for_remote_names() {
+        assert!(preferred_backend_requests_remote(Some(
+            &"openai-compatible-remote".to_string()
+        )));
+        assert!(preferred_backend_requests_remote(Some(
+            &"REMOTE-gpu".to_string()
+        )));
+        assert!(!preferred_backend_requests_remote(Some(
+            &"local-embedding".to_string()
+        )));
+        assert!(!preferred_backend_requests_remote(None));
+    }
+
+    #[test]
+    fn cloud_ready_state_prefers_remote_only_execution() {
+        let readiness = AiReadinessSummary {
+            state: Some("cloud-ready".to_string()),
+            ai_enabled: Some(true),
+            endpoint_configured: true,
+            ..AiReadinessSummary::default()
+        };
+
+        assert!(should_use_remote_only(
+            &readiness,
+            Some(&remote_endpoint_fixture())
+        ));
+    }
+
+    #[test]
+    fn setup_pending_local_response_can_fallback_remote() {
+        let readiness = AiReadinessSummary {
+            state: Some("setup-pending".to_string()),
+            ai_enabled: Some(true),
+            endpoint_configured: true,
+            ..AiReadinessSummary::default()
+        };
+        let response = RuntimeInferResponse {
+            backend_id: "local-cpu".to_string(),
+            route_state: "setup-pending".to_string(),
+            content: String::new(),
+            degraded: true,
+            rejected: true,
+            reason: Some("selected local-cpu but backend is not executable".to_string()),
+            estimated_latency_ms: None,
+            provider_id: None,
+            runtime_service_id: None,
+            provider_status: None,
+            queue_saturated: None,
+            runtime_budget: None,
+            notes: Vec::new(),
+        };
+
+        assert!(should_fallback_to_remote_from_response(
+            &response,
+            &readiness,
+            Some(&remote_endpoint_fixture())
+        ));
+    }
+
+    fn remote_endpoint_fixture() -> crate::config::RemoteEndpointConfig {
+        crate::config::RemoteEndpointConfig {
+            base_url: "http://127.0.0.1:11434/v1".to_string(),
+            model: "qwen2.5:7b-instruct".to_string(),
+            api_key: None,
+            timeout_ms: 30_000,
+        }
     }
 }

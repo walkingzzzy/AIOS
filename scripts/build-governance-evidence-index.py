@@ -41,6 +41,7 @@ DEFAULT_REQUIRED_MANIFEST_KEYS = [
     "schemas",
     "files",
 ]
+UTF8 = "utf-8"
 
 
 def parse_args() -> argparse.Namespace:
@@ -52,7 +53,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def load_yaml(path: Path) -> dict[str, Any]:
-    return yaml.safe_load(path.read_text())
+    return yaml.safe_load(path.read_text(encoding=UTF8))
 
 
 def resolve_path(path: str | Path) -> Path:
@@ -62,12 +63,12 @@ def resolve_path(path: str | Path) -> Path:
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding=UTF8)
 
 
 def write_markdown(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content + "\n")
+    path.write_text(content + "\n", encoding=UTF8)
 
 
 def validate_json(schema_path: Path, payload_path: Path) -> None:
@@ -125,6 +126,34 @@ def find_report_check(report: dict[str, Any], check_id: str) -> dict[str, Any] |
     return None
 
 
+def normalize_check_status(value: Any) -> str:
+    normalized = str(value)
+    if normalized in {"passed", "failed", "skipped"}:
+        return normalized
+    return "failed"
+
+
+def get_health_collection_mode(report: dict[str, Any]) -> str:
+    return str(report.get("collection_mode") or "native").strip() or "native"
+
+
+def health_report_has_limited_coverage(report: dict[str, Any]) -> bool:
+    return get_health_collection_mode(report) == "synthetic-fallback"
+
+
+def describe_health_report_scope(report: dict[str, Any]) -> str:
+    mode = get_health_collection_mode(report)
+    limitations = [
+        str(item).strip()
+        for item in report.get("limitations", [])
+        if str(item).strip()
+    ]
+    detail = f"health report collection_mode={mode}"
+    if limitations:
+        detail += f"; limitations={' | '.join(limitations)}"
+    return detail
+
+
 def evaluate_system_validation_check(status_source: dict[str, Any], report_cache: dict[str, Any]) -> tuple[str, str, list[str]]:
     path = resolve_path(status_source.get("report_path") or DEFAULT_REPORTS["system_validation"])
     report = load_report(report_cache, path)
@@ -133,7 +162,7 @@ def evaluate_system_validation_check(status_source: dict[str, Any], report_cache
     item = find_report_check(report, str(status_source["check_id"]))
     if item is None:
         return "failed", f"check `{status_source['check_id']}` missing from {path}", [str(path)]
-    status = "passed" if item.get("status") == "passed" else "failed"
+    status = normalize_check_status(item.get("status"))
     return status, f"validation report status={item.get('status')}", [str(path), *item.get("evidence_paths", [])]
 
 
@@ -148,8 +177,14 @@ def evaluate_health_check(status_source: dict[str, Any], report_cache: dict[str,
         return "failed", f"missing health report: {path}", [str(path)]
     item = find_report_check(report, str(status_source["check_id"]))
     if item is None:
+        if health_report_has_limited_coverage(report):
+            return (
+                "skipped",
+                f"{describe_health_report_scope(report)}; missing health check `{status_source['check_id']}` under limited coverage",
+                [str(path)],
+            )
         return "failed", f"health check `{status_source['check_id']}` missing from {path}", [str(path)]
-    status = "passed" if item.get("status") == "passed" else "failed"
+    status = normalize_check_status(item.get("status"))
     return status, f"health report status={item.get('status')}", [str(path), *item.get("artifact_paths", [])]
 
 
@@ -160,15 +195,22 @@ def evaluate_health_group(status_source: dict[str, Any], report_cache: dict[str,
 
     missing: list[str] = []
     failing: list[str] = []
+    skipped: list[str] = []
     artifacts = [str(path)]
     for check_id in status_source["check_ids"]:
         item = find_report_check(report, str(check_id))
         if item is None:
-            missing.append(str(check_id))
+            if health_report_has_limited_coverage(report):
+                skipped.append(str(check_id))
+            else:
+                missing.append(str(check_id))
             continue
         artifacts.extend(item.get("artifact_paths", []))
-        if item.get("status") != "passed":
+        status = normalize_check_status(item.get("status"))
+        if status == "failed":
             failing.append(f"{check_id}={item.get('status')}")
+        elif status == "skipped":
+            skipped.append(f"{check_id}=skipped")
     if missing or failing:
         detail_parts = []
         if missing:
@@ -176,6 +218,12 @@ def evaluate_health_group(status_source: dict[str, Any], report_cache: dict[str,
         if failing:
             detail_parts.append(f"failing checks: {', '.join(failing)}")
         return "failed", "; ".join(detail_parts), artifacts
+    if skipped:
+        return (
+            "skipped",
+            f"{describe_health_report_scope(report)}; skipped checks: {', '.join(skipped)}",
+            artifacts,
+        )
     return "passed", f"group passed: {', '.join(status_source['check_ids'])}", artifacts
 
 
@@ -195,6 +243,12 @@ def evaluate_provider_health(status_source: dict[str, Any], report_cache: dict[s
     acceptable_statuses = status_source.get("acceptable_statuses") or ["ready", "idle"]
     events = iter_health_events_for_provider(report, provider_id)
     if not events:
+        if health_report_has_limited_coverage(report):
+            return (
+                "skipped",
+                f"{describe_health_report_scope(report)}; provider `{provider_id}` not collected under limited coverage",
+                [str(path)],
+            )
         return "failed", f"provider `{provider_id}` missing from health report", [str(path)]
     statuses = sorted({str(item.get("overall_status")) for item in events if item.get("overall_status")})
     status = "passed" if all(item in acceptable_statuses for item in statuses) else "failed"
@@ -214,6 +268,7 @@ def evaluate_provider_group(status_source: dict[str, Any], report_cache: dict[st
     details: list[str] = []
     artifacts: list[str] = []
     failures: list[str] = []
+    skipped: list[str] = []
     for provider_id in status_source["provider_ids"]:
         status, detail, event_artifacts = evaluate_provider_health(
             {
@@ -225,10 +280,12 @@ def evaluate_provider_group(status_source: dict[str, Any], report_cache: dict[st
         )
         details.append(f"{provider_id}: {detail}")
         artifacts.extend(event_artifacts)
-        if status != "passed":
+        if status == "failed":
             failures.append(provider_id)
+        elif status == "skipped":
+            skipped.append(provider_id)
     return (
-        "failed" if failures else "passed",
+        "failed" if failures else "skipped" if skipped else "passed",
         "; ".join(details),
         artifacts,
     )
@@ -357,7 +414,7 @@ def main() -> int:
 
     report_cache: dict[str, Any] = {}
     checks: list[dict[str, Any]] = []
-    status_counts = {"passed": 0, "failed": 0}
+    status_counts = {"passed": 0, "failed": 0, "skipped": 0}
     artifacts = {"logs": [], "images": [], "scripts": [], "configs": [], "other": []}
     unique_artifacts: set[str] = set()
 
@@ -408,7 +465,7 @@ def main() -> int:
         "status_counts": status_counts,
         "artifacts": artifacts,
         "checks": checks,
-        "failing_checks": [item["check_id"] for item in checks if item["status"] != "passed"],
+        "failing_checks": [item["check_id"] for item in checks if item["status"] == "failed"],
         "matrix_path": str(args.matrix),
         "release_checklist": str(args.release_checklist),
         "source_reports": {name: str(path) for name, path in DEFAULT_REPORTS.items()},

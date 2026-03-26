@@ -11,7 +11,6 @@ import socket
 import subprocess
 import sys
 import tempfile
-import uuid
 import time
 from pathlib import Path
 
@@ -29,6 +28,7 @@ OFFICE_PROVIDER = ROOT / "aios" / "compat" / "office" / "runtime" / "office_prov
 CODE_SANDBOX_PROVIDER = ROOT / "aios" / "compat" / "code-sandbox" / "runtime" / "aios_sandbox_executor.py"
 UI_TREE_COLLECTOR = ROOT / "aios" / "services" / "deviced" / "runtime" / "ui_tree_atspi_snapshot.py"
 DEFAULT_OUTPUT_PREFIX = ROOT / "out" / "validation" / "cross-service-health-report"
+UTF8 = "utf-8"
 DEFAULT_DELIVERY_MANIFEST = ROOT / "out" / "aios-system-delivery" / "manifest.json"
 
 
@@ -175,12 +175,63 @@ def require(condition: bool, message: str) -> None:
 
 def write_json(path: Path, payload: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding=UTF8)
 
 
 def write_text(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
+
+
+def unique_strings(items: list[object]) -> list[str]:
+    values: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        text = str(item).strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        values.append(text)
+    return values
+
+
+def annotate_synthetic_health_report(report: dict, report_path: Path) -> dict:
+    limitations = unique_strings(
+        [
+            "当前主机不支持 Unix domain socket 控制面探活，已降级为 synthetic fallback。",
+            "该报告只覆盖 platform 与 hardware 交付证据，不代表 control-plane、provider、shell、device、update 全量健康导出。",
+        ]
+    )
+    warnings = unique_strings(
+        [
+            *(report.get("warnings") or []),
+            "synthetic fallback active: host transport does not support full cross-service health export",
+        ]
+    )
+    report["collection_mode"] = "synthetic-fallback"
+    report["limitations"] = limitations
+    report["warnings"] = warnings
+    summary = report.get("summary")
+    if isinstance(summary, dict):
+        summary["collection_mode"] = "synthetic-fallback"
+        summary["coverage_scope"] = ["platform", "hardware"]
+        summary["coverage_limitations"] = limitations
+    write_json(report_path, report)
+    markdown_path = Path(str(report.get("markdown_report") or "")).expanduser()
+    if not markdown_path.is_absolute():
+        markdown_path = ROOT / markdown_path
+    if markdown_path.exists():
+        markdown = markdown_path.read_text(encoding=UTF8).rstrip()
+        markdown += (
+            "\n\n## Synthetic Fallback\n\n"
+            "- Collection mode: `synthetic-fallback`\n"
+            "- Scope: `platform`, `hardware`\n"
+            "- Limitations:\n"
+            f"  - {limitations[0]}\n"
+            f"  - {limitations[1]}\n"
+        )
+        write_text(markdown_path, markdown + "\n")
+    return report
 
 
 def assert_vendor_runtime_health_report(report: dict, hardware_validation_index: Path, vendor_evidence: Path) -> None:
@@ -226,9 +277,9 @@ def assert_vendor_runtime_health_report(report: dict, hardware_validation_index:
 
 
 def run_synthetic_fallback(args: argparse.Namespace) -> int:
-    temp_parent = ROOT / "out" / "tmp"
-    temp_parent.mkdir(parents=True, exist_ok=True)
-    temp_root = temp_parent / f"aios-cross-service-health-synthetic-{uuid.uuid4().hex}"
+    temp_root = args.output_prefix.parent / f"{args.output_prefix.name}-synthetic-state"
+    if temp_root.exists():
+        shutil.rmtree(temp_root, ignore_errors=True)
     temp_root.mkdir(parents=True, exist_ok=True)
     failed = False
     try:
@@ -314,7 +365,7 @@ def run_synthetic_fallback(args: argparse.Namespace) -> int:
             ),
             encoding="utf-8",
         )
-        output_prefix = temp_root / "cross-service-health-report"
+        output_prefix = args.output_prefix
         completed = subprocess.run(
             [
                 sys.executable,
@@ -342,6 +393,7 @@ def run_synthetic_fallback(args: argparse.Namespace) -> int:
         require(report_path.exists(), "synthetic cross-service health report json missing")
         require(events_path.exists(), "synthetic cross-service health events jsonl missing")
         report = json.loads(report_path.read_text(encoding="utf-8"))
+        report = annotate_synthetic_health_report(report, report_path)
         require(report["overall_status"] == "passed", "synthetic cross-service health report did not pass")
         require(report["summary"]["source_count"] == 2, f"unexpected synthetic source_count: {report['summary']['source_count']}")
         require(report["summary"]["event_count"] == 2, f"unexpected synthetic event_count: {report['summary']['event_count']}")
@@ -369,10 +421,7 @@ def run_synthetic_fallback(args: argparse.Namespace) -> int:
         failed = True
         raise
     finally:
-        if failed or args.keep_state:
-            print(f"state kept at: {temp_root}")
-        else:
-            shutil.rmtree(temp_root, ignore_errors=True)
+        print(f"state kept at: {temp_root}")
 
 
 def make_control_plane_env(root: Path) -> dict[str, str]:
@@ -830,7 +879,10 @@ def build_spec(
         },
     ]
     spec_path.parent.mkdir(parents=True, exist_ok=True)
-    spec_path.write_text(yaml.safe_dump({"sources": sources}, sort_keys=False, allow_unicode=False))
+    spec_path.write_text(
+        yaml.safe_dump({"sources": sources}, sort_keys=False, allow_unicode=False),
+        encoding=UTF8,
+    )
 
 
 def main() -> int:
@@ -893,7 +945,7 @@ def main() -> int:
         require(shared_observability_log.exists(), "shared observability log missing before provider bootstrap")
         shared_entries = [
             json.loads(line)
-            for line in shared_observability_log.read_text().splitlines()
+            for line in shared_observability_log.read_text(encoding=UTF8).splitlines()
             if line.strip()
         ]
         require(
@@ -1004,7 +1056,7 @@ def main() -> int:
             args.output_prefix.parent
             / args.output_prefix.name.replace("-report", "-events")
         ).with_suffix(".jsonl")
-        report = json.loads(report_path.read_text())
+        report = json.loads(report_path.read_text(encoding=UTF8))
         require(report["overall_status"] == "passed", "cross-service health report did not pass")
         required_checks = {
             "sessiond",

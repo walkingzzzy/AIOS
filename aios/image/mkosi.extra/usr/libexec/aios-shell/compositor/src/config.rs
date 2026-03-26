@@ -62,6 +62,11 @@ impl Default for Config {
             panel_slots: vec![
                 "launcher".to_string(),
                 "task-surface".to_string(),
+                "system-assistant".to_string(),
+                "ai-center".to_string(),
+                "provider-settings".to_string(),
+                "privacy-memory".to_string(),
+                "model-library".to_string(),
                 "approval-panel".to_string(),
                 "portal-chooser".to_string(),
                 "notification-center".to_string(),

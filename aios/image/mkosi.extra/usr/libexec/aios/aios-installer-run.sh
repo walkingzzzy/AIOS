@@ -9,6 +9,21 @@ log() {
   printf '[aios-installer] %s\n' "$*"
 }
 
+is_truthy() {
+  case "${1,,}" in
+    1|true|yes|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+json_bool() {
+  if is_truthy "$1"; then
+    printf 'true\n'
+  else
+    printf 'false\n'
+  fi
+}
+
 SOURCE_DISK="${AIOS_INSTALLER_SOURCE_DISK:-/dev/vdb}"
 SOURCE_IMAGE_FILE="${AIOS_INSTALLER_SOURCE_IMAGE_FILE:-}"
 TARGET_DISK="${AIOS_INSTALLER_TARGET_DISK:-/dev/vdc}"
@@ -21,6 +36,14 @@ INSTALL_SLOT="${AIOS_INSTALLER_INSTALL_SLOT:-a}"
 BOOT_BACKEND="${AIOS_INSTALLER_BOOT_BACKEND:-firmware}"
 VENDOR_ID="${AIOS_INSTALLER_VENDOR_ID:-}"
 HARDWARE_PROFILE_ID="${AIOS_INSTALLER_HARDWARE_PROFILE_ID:-}"
+AI_ENABLED="${AIOS_INSTALLER_AI_ENABLED:-1}"
+AI_MODE="${AIOS_INSTALLER_AI_MODE:-hybrid}"
+AI_PRIVACY_PROFILE="${AIOS_INSTALLER_AI_PRIVACY_PROFILE:-balanced}"
+AI_AUTO_PULL_DEFAULT_MODEL="${AIOS_INSTALLER_AI_AUTO_PULL_DEFAULT_MODEL:-0}"
+AI_AUTO_MODEL_SOURCE="${AIOS_INSTALLER_AI_AUTO_MODEL_SOURCE:-ollama-library}"
+AI_AUTO_MODEL_ID="${AIOS_INSTALLER_AI_AUTO_MODEL_ID:-qwen2.5:7b-instruct}"
+AI_ENDPOINT_BASE_URL="${AIOS_INSTALLER_AI_ENDPOINT_BASE_URL:-}"
+AI_ENDPOINT_MODEL="${AIOS_INSTALLER_AI_ENDPOINT_MODEL:-}"
 ESP_PARTLABEL="${AIOS_INSTALLER_ESP_PARTLABEL:-AIOS-ESP}"
 ROOT_PARTLABEL="${AIOS_INSTALLER_ROOT_PARTLABEL:-AIOS-root}"
 VAR_PARTLABEL="${AIOS_INSTALLER_VAR_PARTLABEL:-AIOS-var}"
@@ -146,6 +169,16 @@ write_report() {
       "status": "$(json_escape "$POST_INSTALL_HOOK_STATUS")"
     }
   },
+  "ai_config": {
+    "enabled": $(json_bool "$AI_ENABLED"),
+    "mode": "$(json_escape "$AI_MODE")",
+    "privacy_profile": "$(json_escape "$AI_PRIVACY_PROFILE")",
+    "auto_pull_default_model": $(json_bool "$AI_AUTO_PULL_DEFAULT_MODEL"),
+    "auto_model_source": "$(json_escape "$AI_AUTO_MODEL_SOURCE")",
+    "auto_model_id": "$(json_escape "$AI_AUTO_MODEL_ID")",
+    "endpoint_base_url": "$(json_escape "$AI_ENDPOINT_BASE_URL")",
+    "endpoint_model": "$(json_escape "$AI_ENDPOINT_MODEL")"
+  },
   "recovery_manifest_present": ${RECOVERY_MANIFEST_PRESENT},
   "firstboot_reset": ${FIRSTBOOT_RESET},
   "target_overlay_dir": "$(json_escape "$TARGET_OVERLAY_DIR")",
@@ -255,7 +288,7 @@ rewrite_firstboot_env() {
   tmp_path="$(mktemp)"
   mkdir -p "$(dirname "$env_path")"
   if [[ -f "$env_path" ]]; then
-    grep -Ev '^(AIOS_FIRSTBOOT_INSTALL_ID|AIOS_FIRSTBOOT_INSTALL_SOURCE|AIOS_FIRSTBOOT_INSTALLER_VERSION|AIOS_FIRSTBOOT_INSTALL_MODE|AIOS_FIRSTBOOT_INSTALL_SLOT|AIOS_FIRSTBOOT_BOOT_BACKEND|AIOS_FIRSTBOOT_VENDOR_ID|AIOS_FIRSTBOOT_HARDWARE_PROFILE_ID|AIOS_FIRSTBOOT_INSTALL_MANIFEST|AIOS_FIRSTBOOT_RECOVERY_IMAGE_PROFILE|AIOS_FIRSTBOOT_RECOVERY_DEFAULT_TARGET|AIOS_FIRSTBOOT_RECOVERY_IMAGE_MANIFEST)=' "$env_path" > "$tmp_path" || true
+    grep -Ev '^(AIOS_FIRSTBOOT_INSTALL_ID|AIOS_FIRSTBOOT_INSTALL_SOURCE|AIOS_FIRSTBOOT_INSTALLER_VERSION|AIOS_FIRSTBOOT_INSTALL_MODE|AIOS_FIRSTBOOT_INSTALL_SLOT|AIOS_FIRSTBOOT_BOOT_BACKEND|AIOS_FIRSTBOOT_VENDOR_ID|AIOS_FIRSTBOOT_HARDWARE_PROFILE_ID|AIOS_FIRSTBOOT_INSTALL_MANIFEST|AIOS_FIRSTBOOT_RECOVERY_IMAGE_PROFILE|AIOS_FIRSTBOOT_RECOVERY_DEFAULT_TARGET|AIOS_FIRSTBOOT_RECOVERY_IMAGE_MANIFEST|AIOS_FIRSTBOOT_AI_ENABLED|AIOS_FIRSTBOOT_AI_MODE|AIOS_FIRSTBOOT_AI_PRIVACY_PROFILE|AIOS_FIRSTBOOT_AI_AUTO_PULL_DEFAULT_MODEL|AIOS_FIRSTBOOT_AI_AUTO_MODEL_SOURCE|AIOS_FIRSTBOOT_AI_AUTO_MODEL_ID|AIOS_FIRSTBOOT_AI_ENDPOINT_BASE_URL|AIOS_FIRSTBOOT_AI_ENDPOINT_MODEL)=' "$env_path" > "$tmp_path" || true
   fi
   {
     cat "$tmp_path"
@@ -270,8 +303,54 @@ rewrite_firstboot_env() {
     printf 'AIOS_FIRSTBOOT_INSTALL_MANIFEST=%s\n' '/etc/aios/installer/install-manifest.json'
     printf 'AIOS_FIRSTBOOT_RECOVERY_IMAGE_PROFILE=%s\n' "$RECOVERY_PROFILE"
     printf 'AIOS_FIRSTBOOT_RECOVERY_DEFAULT_TARGET=%s\n' "$RECOVERY_DEFAULT_TARGET"
+    printf 'AIOS_FIRSTBOOT_AI_ENABLED=%s\n' "$AI_ENABLED"
+    printf 'AIOS_FIRSTBOOT_AI_MODE=%s\n' "$AI_MODE"
+    printf 'AIOS_FIRSTBOOT_AI_PRIVACY_PROFILE=%s\n' "$AI_PRIVACY_PROFILE"
+    printf 'AIOS_FIRSTBOOT_AI_AUTO_PULL_DEFAULT_MODEL=%s\n' "$AI_AUTO_PULL_DEFAULT_MODEL"
+    if [[ -n "$AI_AUTO_MODEL_SOURCE" ]]; then
+      printf 'AIOS_FIRSTBOOT_AI_AUTO_MODEL_SOURCE=%s\n' "$AI_AUTO_MODEL_SOURCE"
+    fi
+    if [[ -n "$AI_AUTO_MODEL_ID" ]]; then
+      printf 'AIOS_FIRSTBOOT_AI_AUTO_MODEL_ID=%s\n' "$AI_AUTO_MODEL_ID"
+    fi
+    if [[ -n "$AI_ENDPOINT_BASE_URL" ]]; then
+      printf 'AIOS_FIRSTBOOT_AI_ENDPOINT_BASE_URL=%s\n' "$AI_ENDPOINT_BASE_URL"
+    fi
+    if [[ -n "$AI_ENDPOINT_MODEL" ]]; then
+      printf 'AIOS_FIRSTBOOT_AI_ENDPOINT_MODEL=%s\n' "$AI_ENDPOINT_MODEL"
+    fi
     if [[ "$RECOVERY_MANIFEST_PRESENT" == true ]]; then
       printf 'AIOS_FIRSTBOOT_RECOVERY_IMAGE_MANIFEST=%s\n' '/etc/aios/installer/recovery-image-manifest.json'
+    fi
+  } > "$env_path"
+  rm -f "$tmp_path"
+}
+
+write_runtime_platform_env() {
+  local env_path="$TARGET_ROOT/etc/aios/runtime/platform.env"
+  local tmp_path
+  tmp_path="$(mktemp)"
+  mkdir -p "$(dirname "$env_path")"
+  if [[ -f "$env_path" ]]; then
+    grep -Ev '^(AIOS_RUNTIMED_PRODUCT_MODE|AIOS_RUNTIMED_AI_ENABLED|AIOS_RUNTIMED_AI_MODE|AIOS_RUNTIMED_AI_PRIVACY_PROFILE|AIOS_RUNTIMED_HARDWARE_PROFILE_ID|AIOS_RUNTIMED_LOCAL_CPU_COMMAND|AIOS_RUNTIMED_AI_ENDPOINT_BASE_URL|AIOS_RUNTIMED_AI_ENDPOINT_MODEL)=' "$env_path" > "$tmp_path" || true
+  fi
+  {
+    cat "$tmp_path"
+    printf 'AIOS_RUNTIMED_PRODUCT_MODE=1\n'
+    printf 'AIOS_RUNTIMED_AI_ENABLED=%s\n' "$AI_ENABLED"
+    printf 'AIOS_RUNTIMED_AI_MODE=%s\n' "$AI_MODE"
+    printf 'AIOS_RUNTIMED_AI_PRIVACY_PROFILE=%s\n' "$AI_PRIVACY_PROFILE"
+    if [[ -n "$HARDWARE_PROFILE_ID" ]]; then
+      printf 'AIOS_RUNTIMED_HARDWARE_PROFILE_ID=%s\n' "$HARDWARE_PROFILE_ID"
+    fi
+    if is_truthy "$AI_ENABLED" && [[ "$AI_MODE" == "local" || "$AI_MODE" == "hybrid" ]]; then
+      printf 'AIOS_RUNTIMED_LOCAL_CPU_COMMAND=%s\n' '/usr/libexec/aios/runtime/workers/launch_local_cpu_worker.sh'
+    fi
+    if [[ -n "$AI_ENDPOINT_BASE_URL" ]]; then
+      printf 'AIOS_RUNTIMED_AI_ENDPOINT_BASE_URL=%s\n' "$AI_ENDPOINT_BASE_URL"
+    fi
+    if [[ -n "$AI_ENDPOINT_MODEL" ]]; then
+      printf 'AIOS_RUNTIMED_AI_ENDPOINT_MODEL=%s\n' "$AI_ENDPOINT_MODEL"
     fi
   } > "$env_path"
   rm -f "$tmp_path"
@@ -318,6 +397,16 @@ write_target_manifests() {
       "path": "$(json_escape "$POST_INSTALL_HOOK")",
       "status": "$(json_escape "$POST_INSTALL_HOOK_STATUS")"
     }
+  },
+  "ai_config": {
+    "enabled": $(json_bool "$AI_ENABLED"),
+    "mode": "$(json_escape "$AI_MODE")",
+    "privacy_profile": "$(json_escape "$AI_PRIVACY_PROFILE")",
+    "auto_pull_default_model": $(json_bool "$AI_AUTO_PULL_DEFAULT_MODEL"),
+    "auto_model_source": "$(json_escape "$AI_AUTO_MODEL_SOURCE")",
+    "auto_model_id": "$(json_escape "$AI_AUTO_MODEL_ID")",
+    "endpoint_base_url": "$(json_escape "$AI_ENDPOINT_BASE_URL")",
+    "endpoint_model": "$(json_escape "$AI_ENDPOINT_MODEL")"
   }
 }
 EOF
@@ -428,6 +517,8 @@ log "applying target overlay"
 apply_target_overlay
 log "rewriting target firstboot environment"
 rewrite_firstboot_env
+log "writing runtime platform environment"
+write_runtime_platform_env
 log "seeding updated boot state"
 seed_boot_state
 log "running post-install hook"

@@ -204,6 +204,9 @@ jobs:
       - name: IPC smoke
         run: python3 scripts/test-ipc-smoke.py --bin-dir aios/target/debug
 
+      - name: Team B control-plane smoke
+        run: python3 scripts/test-team-b-control-plane-smoke.py --bin-dir aios/target/debug
+
       - name: Portal file-handle smoke
         run: python3 scripts/test-portal-file-handle-smoke.py --bin-dir aios/target/debug
 

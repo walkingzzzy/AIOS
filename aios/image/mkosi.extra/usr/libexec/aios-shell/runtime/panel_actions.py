@@ -69,6 +69,28 @@ def build_action_command(
         target_state = action.get("target_state")
         if target_state:
             command.extend(["--new-state", str(target_state)])
+    elif component == "system-assistant":
+        session_id = action_value(surface, action, "session_id", "resolved_session_id")
+        if session_id:
+            command.extend(["--session-id", str(session_id)])
+        user_id = action_value(surface, action, "user_id")
+        if user_id:
+            command.extend(["--user-id", str(user_id)])
+        intent = action_value(surface, action, "intent", "request_intent")
+        if intent:
+            command.extend(["--intent", str(intent)])
+        title = action_value(surface, action, "title", "request_title")
+        if title:
+            command.extend(["--title", str(title)])
+        task_state = action_value(surface, action, "task_state")
+        if task_state:
+            command.extend(["--task-state", str(task_state)])
+        approval_lane = action_value(surface, action, "approval_lane")
+        if approval_lane:
+            command.extend(["--approval-lane", str(approval_lane)])
+        capability_id = action_value(surface, action, "capability_id")
+        if capability_id:
+            command.extend(["--capability-id", str(capability_id)])
     elif component == "approval-panel":
         approval_ref = action_value(surface, action, "approval_ref", "focus_approval_ref")
         if approval_ref:
@@ -95,6 +117,82 @@ def build_action_command(
             command.extend(["--reason", str(reason)])
     elif component == "device-backend-status" and action_id == "focus-attention":
         command.append("--attention-only")
+    elif component == "model-library":
+        source_path = action_value(surface, action, "source_path", "import_source_path")
+        if source_path:
+            command.extend(["--source-path", str(source_path)])
+        model_id = action_value(surface, action, "model_id", "focus_model_id")
+        if model_id:
+            command.extend(["--model-id", str(model_id)])
+        capability = action_value(surface, action, "capability")
+        if capability:
+            command.extend(["--capability", str(capability)])
+        for alias in action.get("aliases", []) or []:
+            command.extend(["--alias", str(alias)])
+        for capability_item in action.get("capabilities", []) or []:
+            if capability_item == capability:
+                continue
+            command.extend(["--capability", str(capability_item)])
+        if action.get("set_default"):
+            command.append("--set-default")
+        if action.get("symlink"):
+            command.append("--symlink")
+        if action.get("keep_file"):
+            command.append("--keep-file")
+        quantization = action_value(surface, action, "quantization")
+        if quantization:
+            command.extend(["--quantization", str(quantization)])
+        parameters_estimate = action_value(surface, action, "parameters_estimate")
+        if parameters_estimate:
+            command.extend(["--parameters-estimate", str(parameters_estimate)])
+    elif component == "provider-settings":
+        provider_enabled = action.get("provider_enabled")
+        if provider_enabled is True:
+            command.append("--provider-enabled")
+        elif provider_enabled is False:
+            command.append("--provider-disabled")
+        ai_mode = action_value(surface, action, "ai_mode")
+        if ai_mode:
+            command.extend(["--ai-mode", str(ai_mode)])
+        route_preference = action_value(surface, action, "route_preference")
+        if route_preference:
+            command.extend(["--route-preference", str(route_preference)])
+        privacy_profile = action_value(surface, action, "privacy_profile")
+        if privacy_profile:
+            command.extend(["--privacy-profile", str(privacy_profile)])
+        endpoint_base_url = action_value(surface, action, "endpoint_base_url")
+        if endpoint_base_url:
+            command.extend(["--endpoint-base-url", str(endpoint_base_url)])
+        endpoint_model = action_value(surface, action, "endpoint_model")
+        if endpoint_model:
+            command.extend(["--endpoint-model", str(endpoint_model)])
+        api_key = action_value(surface, action, "api_key")
+        if api_key:
+            command.extend(["--api-key", str(api_key)])
+        if action.get("clear_api_key"):
+            command.append("--clear-api-key")
+        if action.get("clear_remote_endpoint"):
+            command.append("--clear-remote-endpoint")
+        if action.get("use_onboarding_endpoint"):
+            command.append("--use-onboarding-endpoint")
+    elif component == "privacy-memory":
+        memory_enabled = action.get("memory_enabled")
+        if memory_enabled is True:
+            command.append("--memory-enabled")
+        elif memory_enabled is False:
+            command.append("--memory-disabled")
+        memory_retention_days = action_value(surface, action, "memory_retention_days")
+        if memory_retention_days not in (None, ""):
+            command.extend(["--memory-retention-days", str(memory_retention_days)])
+        audit_retention_days = action_value(surface, action, "audit_retention_days")
+        if audit_retention_days not in (None, ""):
+            command.extend(["--audit-retention-days", str(audit_retention_days)])
+        approval_policy = action_value(surface, action, "approval_default_policy")
+        if approval_policy:
+            command.extend(["--approval-policy", str(approval_policy)])
+        remote_prompt_level = action_value(surface, action, "remote_prompt_level")
+        if remote_prompt_level:
+            command.extend(["--remote-prompt-level", str(remote_prompt_level)])
 
     if component in {"launcher", "task-surface"}:
         for flag, keys in (
@@ -206,6 +304,26 @@ def summarize_action_result(component: str, action: dict[str, Any], result: dict
         status = result.get("status")
         if approval_ref and status:
             return f"{label}: {approval_ref} -> {status}"
+
+    if component == "privacy-memory":
+        memory_enabled = result.get("memory_enabled")
+        memory_retention_days = result.get("memory_retention_days")
+        audit_retention_days = result.get("audit_retention_days")
+        approval_policy = result.get("approval_default_policy")
+        remote_prompt_level = result.get("remote_prompt_level")
+        details = [
+            f"memory={'on' if memory_enabled else 'off'}" if memory_enabled is not None else None,
+            (
+                f"retention={memory_retention_days}d/{audit_retention_days}d"
+                if memory_retention_days not in (None, "") and audit_retention_days not in (None, "")
+                else None
+            ),
+            f"policy={approval_policy}" if approval_policy else None,
+            f"remote_prompt={remote_prompt_level}" if remote_prompt_level else None,
+        ]
+        details = [item for item in details if item]
+        if details:
+            return f"{label}: {' '.join(details)}"
 
     if component == "recovery-surface":
         if result.get("overall_status"):

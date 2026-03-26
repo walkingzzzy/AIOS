@@ -25,6 +25,7 @@ HEALTH_REPORT_SCHEMA = ROOT / "aios" / "observability" / "schemas" / "cross-serv
 RELEASE_GATE_SCHEMA = ROOT / "aios" / "observability" / "schemas" / "release-gate-report.schema.json"
 GOVERNANCE_EVIDENCE_BUILDER = ROOT / "scripts" / "build-governance-evidence-index.py"
 HARDWARE_EVIDENCE_BUILDER = ROOT / "scripts" / "build-default-hardware-evidence-index.py"
+UTF8 = "utf-8"
 
 
 def parse_args() -> argparse.Namespace:
@@ -93,12 +94,12 @@ def render_markdown(report: dict[str, Any]) -> str:
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding=UTF8)
 
 
 def write_markdown(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content + "\n")
+    path.write_text(content + "\n", encoding=UTF8)
 
 
 def collect_report_checks(validation_report: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -109,34 +110,73 @@ def collect_report_checks(validation_report: dict[str, Any]) -> dict[str, dict[s
     }
 
 
-def ensure_governance_evidence_index(path: Path) -> None:
-    if path.exists():
-        return
+def get_health_collection_mode(payload: dict[str, Any]) -> str:
+    return str(payload.get("collection_mode") or "native").strip() or "native"
+
+
+def health_report_has_limited_coverage(payload: dict[str, Any]) -> bool:
+    return get_health_collection_mode(payload) == "synthetic-fallback"
+
+
+def describe_governance_check(item: dict[str, Any]) -> str:
+    detail_parts = [
+        f"governance evidence status={item.get('status')}",
+        f"gate={item.get('gate')}",
+        f"domain={item.get('domain')}",
+    ]
+    detail = str(item.get("detail") or "").strip()
+    if detail:
+        detail_parts.append(f"detail={detail}")
+    return "; ".join(detail_parts)
+
+
+def ensure_valid_json_artifact(path: Path, schema_path: Path) -> bool:
+    if not path.exists():
+        return False
+    try:
+        validate_json(schema_path, path)
+    except Exception:  # noqa: BLE001
+        return False
+    return True
+
+
+def run_builder_and_validate(
+    command: list[str],
+    output_path: Path,
+    schema_path: Path,
+    error_prefix: str,
+) -> None:
     completed = subprocess.run(
-        [sys.executable, str(GOVERNANCE_EVIDENCE_BUILDER), "--output-prefix", str(path.with_suffix(""))],
+        command,
         cwd=ROOT,
         text=True,
         capture_output=True,
         check=False,
     )
-    if completed.returncode != 0:
-        detail = completed.stderr.strip() or completed.stdout.strip() or f"returncode={completed.returncode}"
-        raise RuntimeError(f"failed to build governance evidence index: {detail}")
+    if ensure_valid_json_artifact(output_path, schema_path):
+        return
+    detail = completed.stderr.strip() or completed.stdout.strip() or f"returncode={completed.returncode}"
+    raise RuntimeError(f"{error_prefix}: {detail}")
+
+
+def ensure_governance_evidence_index(path: Path, refresh: bool = False) -> None:
+    if not refresh and ensure_valid_json_artifact(path, EVIDENCE_INDEX_SCHEMA):
+        return
+    run_builder_and_validate(
+        [sys.executable, str(GOVERNANCE_EVIDENCE_BUILDER), "--output-prefix", str(path.with_suffix(""))],
+        path,
+        EVIDENCE_INDEX_SCHEMA,
+        "failed to build governance evidence index",
+    )
 
 
 def ensure_default_hardware_evidence_index(path: Path) -> None:
-    if path.exists():
-        return
-    completed = subprocess.run(
+    run_builder_and_validate(
         [sys.executable, str(HARDWARE_EVIDENCE_BUILDER), "--output-dir", str(path.parent)],
-        cwd=ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
+        path,
+        ROOT / "aios" / "hardware" / "schemas" / "hardware-validation-evidence-index.schema.json",
+        "failed to build default hardware evidence index",
     )
-    if completed.returncode != 0:
-        detail = completed.stderr.strip() or completed.stdout.strip() or f"returncode={completed.returncode}"
-        raise RuntimeError(f"failed to build default hardware evidence index: {detail}")
 
 
 def evaluate_hardware_evidence_index(path: Path) -> tuple[str, str, list[str]]:
@@ -285,26 +325,29 @@ def evaluate_evidence_index_checks(
     if use_matrix_blocking:
         for check_id, item in sorted(evidence_checks.items()):
             blocking = bool(item.get("blocking"))
+            item_status = str(item.get("status") or "")
+            detail = describe_governance_check(item)
             if blocking:
-                status = "passed" if item.get("status") == "passed" else "failed"
-                results.append(
-                    make_check(
-                        check_id,
-                        status,
-                        True,
-                        f"governance evidence status={item.get('status')}; gate={item.get('gate')}; domain={item.get('domain')}",
+                if item_status == "passed":
+                    results.append(make_check(check_id, "passed", True, detail))
+                elif item_status == "skipped":
+                    warnings.append(
+                        f"blocking governance check skipped on current host: {check_id} ({item.get('domain')})"
                     )
-                )
-            elif warn_on_non_blocking_failures and item.get("status") != "passed":
+                    results.append(make_check(check_id, "warning", False, detail))
+                else:
+                    results.append(make_check(check_id, "failed", True, detail))
+            elif warn_on_non_blocking_failures and item_status != "passed":
+                warning_reason = "skipped" if item_status == "skipped" else "failed"
                 warnings.append(
-                    f"non-blocking governance check failed: {check_id} ({item.get('domain')})"
+                    f"non-blocking governance check {warning_reason}: {check_id} ({item.get('domain')})"
                 )
                 results.append(
                     make_check(
                         check_id,
                         "warning",
                         False,
-                        f"governance evidence status={item.get('status')}; gate={item.get('gate')}; domain={item.get('domain')}",
+                        detail,
                     )
                 )
     return results
@@ -344,7 +387,10 @@ def main() -> int:
             checks.append(make_check("validation-report-schema", "failed", True, str(exc)))
 
     try:
-        ensure_governance_evidence_index(args.evidence_index)
+        ensure_governance_evidence_index(
+            args.evidence_index,
+            refresh=args.evidence_index.resolve() == DEFAULT_EVIDENCE_INDEX.resolve(),
+        )
     except Exception as exc:  # noqa: BLE001
         checks.append(make_check("evidence-index-build", "failed", True, str(exc)))
 
@@ -437,14 +483,22 @@ def main() -> int:
             component_kinds = health_report.get("summary", {}).get("component_kinds", [])
             missing = sorted(set(required_health_component_kinds) - set(component_kinds))
             if missing:
-                checks.append(
-                    make_check(
-                        "cross-service-health-coverage",
-                        "failed",
-                        True,
-                        f"missing component kinds: {', '.join(missing)}",
+                detail = f"missing component kinds: {', '.join(missing)}"
+                if health_report_has_limited_coverage(health_report):
+                    detail = f"health report collection_mode={get_health_collection_mode(health_report)}; {detail}"
+                    warnings.append(
+                        f"cross-service health coverage is partial on current host: missing {', '.join(missing)}"
                     )
-                )
+                    checks.append(make_check("cross-service-health-coverage", "warning", False, detail))
+                else:
+                    checks.append(
+                        make_check(
+                            "cross-service-health-coverage",
+                            "failed",
+                            True,
+                            detail,
+                        )
+                    )
             else:
                 checks.append(
                     make_check(

@@ -108,12 +108,18 @@ def main() -> int:
         bundle_dir / "rootfs" / "usr" / "libexec" / "aios" / "system-intent-provider",
         bundle_dir / "rootfs" / "usr" / "libexec" / "aios" / "system-files-provider",
         bundle_dir / "rootfs" / "usr" / "libexec" / "aios" / "aios-firstboot.sh",
+        bundle_dir / "rootfs" / "usr" / "libexec" / "aios" / "aios-ai-onboarding.sh",
         bundle_dir / "rootfs" / "usr" / "libexec" / "aios" / "aios-recovery-report.sh",
         bundle_dir / "rootfs" / "usr" / "libexec" / "aios" / "aios-installer-guided.sh",
+        bundle_dir / "rootfs" / "usr" / "libexec" / "aios" / "runtime" / "model_manager.py",
+        bundle_dir / "rootfs" / "usr" / "libexec" / "aios" / "runtime" / "recommended-model-catalog.yaml",
+        bundle_dir / "rootfs" / "usr" / "libexec" / "aios" / "runtime" / "workers" / "local_cpu_worker.py",
+        bundle_dir / "rootfs" / "usr" / "libexec" / "aios" / "runtime" / "workers" / "launch_local_cpu_worker.sh",
         bundle_dir / "rootfs" / "usr" / "share" / "aios" / "boot" / "loader" / "loader.conf",
         bundle_dir / "rootfs" / "usr" / "share" / "aios" / "boot" / "kernel-command-line.txt",
         bundle_dir / "rootfs" / "usr" / "share" / "aios" / "installer" / "ui" / "README.md",
         bundle_dir / "rootfs" / "usr" / "lib" / "systemd" / "system" / "aios-firstboot.service",
+        bundle_dir / "rootfs" / "usr" / "lib" / "systemd" / "system" / "aios-ai-onboarding.service",
         bundle_dir / "rootfs" / "usr" / "lib" / "systemd" / "system" / "aios-recovery.target",
         bundle_dir / "rootfs" / "usr" / "lib" / "systemd" / "system" / "aios-recovery-shell.service",
         bundle_dir / "rootfs" / "usr" / "libexec" / "aios-compat" / "browser" / "browser_provider.py",
@@ -158,6 +164,9 @@ def main() -> int:
         "d /var/lib/aios/updated/boot 0755 root root -",
         "d /var/lib/aios/updated/recovery 0755 root root -",
         "d /var/lib/aios/updated/diagnostics 0755 root root -",
+        "d /var/lib/aios/onboarding 0755 root root -",
+        "d /var/lib/aios/runtime 0755 root root -",
+        "d /var/lib/aios/models 0755 root root -",
         "d /var/lib/aios/hardware-evidence 0755 root root -",
         "d /var/lib/aios/hardware-evidence/boots 0755 root root -",
         "d /var/log/aios 0755 root root -",
@@ -195,6 +204,7 @@ def main() -> int:
         "aios-system-intent-provider.service",
         "aios-system-files-provider.service",
         "aios-firstboot.service",
+        "aios-ai-onboarding.service",
     }
     if not required_units.issubset(enabled_units):
         missing = sorted(required_units - enabled_units)
@@ -476,6 +486,20 @@ def main() -> int:
     ensure(
         "EnvironmentFile=-/etc/aios/runtime/platform.env" in runtimed_unit.read_text(encoding="utf-8"),
         "runtimed unit missing runtime platform env wiring",
+    )
+    runtime_provider_unit = (
+        bundle_dir
+        / "rootfs"
+        / "usr"
+        / "lib"
+        / "systemd"
+        / "system"
+        / "aios-runtime-local-inference-provider.service"
+    )
+    ensure(
+        "EnvironmentFile=-/etc/aios/runtime/platform.env"
+        in runtime_provider_unit.read_text(encoding="utf-8"),
+        "runtime local inference provider unit missing runtime platform env wiring",
     )
     jetson_runtime_profile = (
         bundle_dir

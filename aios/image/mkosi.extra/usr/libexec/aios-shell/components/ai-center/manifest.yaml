@@ -1,0 +1,15 @@
+component_id: ai-center
+status: in_progress
+kind: shell-panel
+owner: aios-shell
+consumes:
+  - aios-runtime.ai-readiness.json
+  - aios-onboarding.ai-onboarding-report.json
+  - aios-runtime.model-manager
+capabilities:
+  - show_ai_readiness
+  - show_model_inventory
+  - route_ai_settings
+entrypoint: client.py
+prototype_entrypoint: prototype.py
+panel_entrypoint: panel.py

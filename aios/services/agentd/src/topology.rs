@@ -1,16 +1,5 @@
 pub fn choose(intent: &str) -> String {
-    let normalized = intent.to_ascii_lowercase();
-
-    if normalized.contains("plan") || normalized.contains("multi-step") {
-        return "plan-execute".to_string();
-    }
-
-    if normalized.contains("open") || normalized.contains("file") || normalized.contains("browser")
-    {
-        return "tool-calling".to_string();
-    }
-
-    "direct".to_string()
+    aios_core::intent::topology_preference(intent)
 }
 
 #[cfg(test)]
@@ -28,6 +17,11 @@ mod tests {
     #[test]
     fn picks_tool_calling_for_file_or_browser_work() {
         assert_eq!(choose("Open the browser and file chooser"), "tool-calling");
+    }
+
+    #[test]
+    fn picks_tool_calling_for_chinese_file_or_browser_work() {
+        assert_eq!(choose("打开浏览器并检查文件路径"), "tool-calling");
     }
 
     #[test]

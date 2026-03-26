@@ -1,10 +1,23 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import argparse
+import importlib.util
 import json
 import os
+import sys
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
+from types import ModuleType
+from typing import Any
+
+try:
+    import yaml  # type: ignore[import-untyped]
+
+    _HAS_YAML = True
+except ImportError:
+    _HAS_YAML = False
 
 
 FILTER_FIELDS = {
@@ -34,6 +47,17 @@ STATUS_ORDER = {
     "missing": 0,
     "unknown": 0,
 }
+VALID_REMOTE_AUTH_MODES = {"none", "bearer", "header", "execution-token"}
+REMOTE_REQUEST_CAPABILITIES = {
+    "browser": ["compat.browser.navigate", "compat.browser.extract"],
+    "office": ["compat.document.open", "compat.office.export_pdf"],
+    "mcp": ["compat.mcp.call"],
+    "a2a": ["compat.a2a.forward"],
+}
+
+
+_REMOTE_RUNTIME_SUPPORT_MODULE: ModuleType | None = None
+_REMOTE_PROVIDER_MODULES: dict[str, ModuleType] = {}
 
 
 def default_browser_remote_registry() -> Path:
@@ -70,6 +94,478 @@ def default_provider_registry_state_dir() -> Path:
             "/var/lib/aios/registry",
         )
     )
+
+
+def default_remote_registration_request_path() -> Path:
+    return Path(
+        os.environ.get(
+            "AIOS_REMOTE_REGISTRATION_REQUEST",
+            "/var/lib/aios/runtime/remote-registration-request.yaml",
+        )
+    )
+
+
+def _load_module(module_name: str, path: Path) -> ModuleType:
+    module = sys.modules.get(module_name)
+    if module is not None:
+        return module
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"unable to load module from {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_remote_runtime_support_module() -> ModuleType:
+    global _REMOTE_RUNTIME_SUPPORT_MODULE
+    if _REMOTE_RUNTIME_SUPPORT_MODULE is not None:
+        return _REMOTE_RUNTIME_SUPPORT_MODULE
+    module_path = Path(__file__).resolve().parents[3] / "compat" / "remote_runtime_support.py"
+    _REMOTE_RUNTIME_SUPPORT_MODULE = _load_module(
+        "aios_shell_remote_runtime_support",
+        module_path,
+    )
+    return _REMOTE_RUNTIME_SUPPORT_MODULE
+
+
+def load_remote_provider_module(provider_kind: str) -> ModuleType:
+    normalized_kind = normalize_request_provider_kind(provider_kind)
+    if normalized_kind == "a2a":
+        normalized_kind = "mcp"
+    module = _REMOTE_PROVIDER_MODULES.get(normalized_kind)
+    if module is not None:
+        return module
+    root = Path(__file__).resolve().parents[3] / "compat"
+    module_path = {
+        "browser": root / "browser" / "runtime" / "browser_provider.py",
+        "office": root / "office" / "runtime" / "office_provider.py",
+        "mcp": root / "mcp-bridge" / "runtime" / "mcp_bridge_provider.py",
+    }[normalized_kind]
+    module = _load_module(f"aios_shell_remote_provider_{normalized_kind}", module_path)
+    _REMOTE_PROVIDER_MODULES[normalized_kind] = module
+    return module
+
+
+def _load_structured_document(path: Path) -> dict[str, Any]:
+    with open(path, "r", encoding="utf-8") as file:
+        if path.suffix in {".yaml", ".yml"}:
+            if not _HAS_YAML:
+                raise RuntimeError("PyYAML is required to load YAML request documents")
+            payload = yaml.safe_load(file)
+        else:
+            payload = json.load(file)
+    if not payload:
+        return {}
+    if not isinstance(payload, dict):
+        raise ValueError(f"expected object document: {path}")
+    return payload
+
+
+def normalize_request_provider_kind(value: str | None) -> str:
+    kind = optional_text(value) or "mcp"
+    kind = kind.lower()
+    if kind not in {"browser", "office", "mcp", "a2a"}:
+        raise ValueError(f"unsupported provider_kind: {kind}")
+    return kind
+
+
+def normalize_request_capabilities(provider_kind: str, value: Any) -> list[str]:
+    normalized_kind = normalize_request_provider_kind(provider_kind)
+    defaults = list(REMOTE_REQUEST_CAPABILITIES[normalized_kind])
+    if value in (None, ""):
+        if normalized_kind == "a2a":
+            return ["compat.a2a.forward"]
+        if normalized_kind == "mcp":
+            return ["compat.mcp.call"]
+        return defaults
+    if isinstance(value, str):
+        requested = [value]
+    elif isinstance(value, (list, tuple, set)):
+        requested = [str(item) for item in value if item not in (None, "")]
+    else:
+        raise ValueError("request capabilities must be a string or list")
+    allowed = set(REMOTE_REQUEST_CAPABILITIES["mcp"] + REMOTE_REQUEST_CAPABILITIES["a2a"])
+    if normalized_kind == "browser":
+        allowed = set(REMOTE_REQUEST_CAPABILITIES["browser"])
+    elif normalized_kind == "office":
+        allowed = set(REMOTE_REQUEST_CAPABILITIES["office"])
+    normalized: list[str] = []
+    for capability in requested:
+        if capability not in allowed:
+            raise ValueError(f"unsupported capability for {normalized_kind}: {capability}")
+        if capability not in normalized:
+            normalized.append(capability)
+    return normalized
+
+
+def _normalize_request_status(value: Any, default: str) -> str:
+    text = optional_text(value) or default
+    return text
+
+
+def provider_kind_spec(
+    provider_kind: str,
+    *,
+    browser_remote_registry: Path,
+    office_remote_registry: Path,
+    mcp_remote_registry: Path | None,
+) -> dict[str, Any]:
+    normalized_kind = normalize_request_provider_kind(provider_kind)
+    if normalized_kind == "a2a":
+        normalized_kind = "mcp"
+    registry_path = {
+        "browser": browser_remote_registry,
+        "office": office_remote_registry,
+        "mcp": mcp_remote_registry or default_mcp_remote_registry(),
+    }[normalized_kind]
+    return {
+        "provider_kind": normalized_kind,
+        "remote_registry_path": registry_path,
+        "provider_prefix": {
+            "browser": "compat.browser.remote",
+            "office": "compat.office.remote",
+            "mcp": "compat.mcp.remote",
+        }[normalized_kind],
+        "state_subdir": {
+            "browser": "compat-browser",
+            "office": "compat-office",
+            "mcp": "compat-mcp-bridge",
+        }[normalized_kind],
+        "env_var": {
+            "browser": "AIOS_BROWSER_REMOTE_REGISTRY",
+            "office": "AIOS_OFFICE_REMOTE_REGISTRY",
+            "mcp": "AIOS_MCP_BRIDGE_REMOTE_REGISTRY",
+        }[normalized_kind],
+    }
+
+
+def load_remote_registration_request(path: Path | None) -> dict[str, Any]:
+    resolved_path = path or default_remote_registration_request_path()
+    payload: dict[str, Any] = {
+        "configured": path is not None or resolved_path.exists(),
+        "source_path": str(resolved_path),
+        "source_status": "missing",
+        "source_error": None,
+        "ready": False,
+        "provider_kind": None,
+        "normalized_provider_kind": None,
+        "provider_ref": None,
+        "endpoint": None,
+        "capabilities": [],
+        "auth_mode": "none",
+        "auth_header_name": None,
+        "auth_secret_env": None,
+        "display_name": None,
+        "heartbeat_ttl_seconds": None,
+        "attestation": None,
+        "governance": None,
+        "control_plane_provider_id": None,
+        "health_status": "available",
+        "health_disabled": False,
+        "health_disabled_reason": None,
+        "health_last_error": None,
+        "errors": [],
+        "warnings": [],
+        "request": None,
+    }
+    if not resolved_path.exists():
+        return payload
+    try:
+        request = _load_structured_document(resolved_path)
+        provider_kind = normalize_request_provider_kind(request.get("provider_kind") or request.get("kind"))
+        normalized_kind = "mcp" if provider_kind == "a2a" else provider_kind
+        auth_mode = optional_text(request.get("auth_mode")) or "none"
+        if auth_mode not in VALID_REMOTE_AUTH_MODES:
+            raise ValueError(f"unsupported auth_mode: {auth_mode}")
+        normalized_request = {
+            "provider_kind": provider_kind,
+            "normalized_provider_kind": normalized_kind,
+            "provider_ref": optional_text(request.get("provider_ref")),
+            "endpoint": optional_text(request.get("endpoint")),
+            "capabilities": normalize_request_capabilities(provider_kind, request.get("capabilities")),
+            "auth_mode": auth_mode,
+            "auth_header_name": optional_text(request.get("auth_header_name")),
+            "auth_secret_env": optional_text(request.get("auth_secret_env")),
+            "display_name": optional_text(request.get("display_name")),
+            "heartbeat_ttl_seconds": optional_int(request.get("heartbeat_ttl_seconds")),
+            "attestation": request.get("attestation") if isinstance(request.get("attestation"), dict) else {},
+            "governance": request.get("governance") if isinstance(request.get("governance"), dict) else {},
+            "control_plane_provider_id": optional_text(request.get("control_plane_provider_id")),
+            "health_status": _normalize_request_status(request.get("health_status"), "available"),
+            "health_disabled": bool(request.get("health_disabled", False)),
+            "health_disabled_reason": optional_text(request.get("health_disabled_reason")),
+            "health_last_error": optional_text(request.get("health_last_error")),
+        }
+        errors: list[str] = []
+        if normalized_request["provider_ref"] is None:
+            errors.append("provider_ref missing")
+        if normalized_request["endpoint"] is None:
+            errors.append("endpoint missing")
+        if not normalized_request["capabilities"]:
+            errors.append("capabilities missing")
+        if auth_mode in {"bearer", "header"} and normalized_request["auth_secret_env"] is None:
+            errors.append("auth_secret_env missing")
+        if auth_mode == "header" and normalized_request["auth_header_name"] is None:
+            errors.append("auth_header_name missing")
+        governance = normalized_request["governance"] or {}
+        if not optional_text(governance.get("fleet_id")) or not optional_text(governance.get("governance_group")):
+            payload["warnings"].append("governance metadata incomplete")
+        payload.update(normalized_request)
+        payload["source_status"] = "ready"
+        payload["errors"] = errors
+        payload["ready"] = not errors
+        payload["request"] = normalized_request
+    except Exception as error:
+        payload["source_status"] = "error"
+        payload["source_error"] = str(error)
+        payload["errors"] = [str(error)]
+    return payload
+
+
+def _build_remote_registration(
+    request_summary: dict[str, Any],
+    *,
+    support: ModuleType,
+) -> Any:
+    attestation_payload = request_summary.get("attestation") or {}
+    governance_payload = request_summary.get("governance") or {}
+    attestation = support.RemoteAttestation(
+        mode=optional_text(attestation_payload.get("mode")) or "bootstrap",
+        issuer=optional_text(attestation_payload.get("issuer")),
+        subject=optional_text(attestation_payload.get("subject")),
+        issued_at=optional_text(attestation_payload.get("issued_at")) or support.utc_now(),
+        expires_at=optional_text(attestation_payload.get("expires_at")),
+        evidence_ref=optional_text(attestation_payload.get("evidence_ref")),
+        digest=optional_text(attestation_payload.get("digest")),
+        status=optional_text(attestation_payload.get("status")) or "trusted",
+    )
+    governance = None
+    if optional_text(governance_payload.get("fleet_id")) and optional_text(
+        governance_payload.get("governance_group")
+    ):
+        governance = support.RemoteGovernance(
+            fleet_id=optional_text(governance_payload.get("fleet_id")),
+            governance_group=optional_text(governance_payload.get("governance_group")),
+            policy_group=optional_text(governance_payload.get("policy_group")),
+            registered_by=optional_text(governance_payload.get("registered_by")),
+            approval_ref=optional_text(governance_payload.get("approval_ref")),
+            allow_lateral_movement=bool(governance_payload.get("allow_lateral_movement", False)),
+        )
+    now = support.utc_now()
+    return support.RemoteRegistration(
+        provider_ref=str(request_summary["provider_ref"]),
+        endpoint=str(request_summary["endpoint"]),
+        capabilities=list(request_summary.get("capabilities") or []),
+        auth_mode=str(request_summary.get("auth_mode") or "none"),
+        auth_header_name=optional_text(request_summary.get("auth_header_name")),
+        auth_secret_env=optional_text(request_summary.get("auth_secret_env")),
+        target_hash=support.remote_target_hash(str(request_summary["endpoint"])),
+        registered_at=now,
+        display_name=optional_text(request_summary.get("display_name")),
+        control_plane_provider_id=optional_text(request_summary.get("control_plane_provider_id")),
+        registration_status="active",
+        last_heartbeat_at=now,
+        heartbeat_ttl_seconds=optional_int(request_summary.get("heartbeat_ttl_seconds")),
+        attestation=attestation,
+        governance=governance,
+    )
+
+
+def _write_offline_promotion_artifacts(
+    provider_registry_state_dir: Path,
+    *,
+    provider_id: str,
+    descriptor: dict[str, Any],
+    request_summary: dict[str, Any],
+) -> dict[str, str]:
+    descriptors_dir = provider_registry_state_dir / "descriptors"
+    health_dir = provider_registry_state_dir / "health"
+    descriptors_dir.mkdir(parents=True, exist_ok=True)
+    health_dir.mkdir(parents=True, exist_ok=True)
+    descriptor_path = descriptors_dir / f"{provider_id}.json"
+    descriptor_path.write_text(json.dumps(descriptor, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    health_path = health_dir / f"{provider_id}.json"
+    health_payload = {
+        "provider_id": provider_id,
+        "status": request_summary.get("health_status") or "available",
+        "disabled": bool(request_summary.get("health_disabled", False)),
+        "disabled_reason": request_summary.get("health_disabled_reason"),
+        "last_error": request_summary.get("health_last_error"),
+        "updated_at": utc_now(),
+    }
+    health_path.write_text(json.dumps(health_payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return {
+        "descriptor_path": str(descriptor_path),
+        "health_path": str(health_path),
+    }
+
+
+def apply_remote_registration_request(
+    request_summary: dict[str, Any],
+    *,
+    browser_remote_registry: Path,
+    office_remote_registry: Path,
+    mcp_remote_registry: Path | None,
+) -> dict[str, Any]:
+    if not request_summary.get("ready"):
+        return {
+            "status": "invalid-request",
+            "request_ready": False,
+            "errors": list(request_summary.get("errors") or []),
+        }
+    support = load_remote_runtime_support_module()
+    provider_kind = str(request_summary.get("provider_kind") or "mcp")
+    spec = provider_kind_spec(
+        provider_kind,
+        browser_remote_registry=browser_remote_registry,
+        office_remote_registry=office_remote_registry,
+        mcp_remote_registry=mcp_remote_registry,
+    )
+    registration = _build_remote_registration(request_summary, support=support)
+    registry_path, existing = support.load_remote_registry(
+        explicit=spec["remote_registry_path"],
+        env_var=spec["env_var"],
+        state_subdir=spec["state_subdir"],
+    )
+    updated = support.upsert_remote_registration(existing, registration)
+    support.write_remote_registry(registry_path, updated)
+    persisted = next(
+        (
+            item
+            for item in updated
+            if item.provider_ref == request_summary.get("provider_ref")
+            and item.endpoint == request_summary.get("endpoint")
+        ),
+        registration,
+    )
+    return {
+        "status": "registered",
+        "request_ready": True,
+        "provider_kind": spec["provider_kind"],
+        "remote_registry_path": str(registry_path),
+        "registered_remote_count": len(updated),
+        "registration": persisted.to_payload(),
+    }
+
+
+def promote_remote_registration_request(
+    request_summary: dict[str, Any],
+    *,
+    browser_remote_registry: Path,
+    office_remote_registry: Path,
+    mcp_remote_registry: Path | None,
+    provider_registry_state_dir: Path,
+    agent_socket: Path | None,
+) -> dict[str, Any]:
+    if not request_summary.get("ready"):
+        return {
+            "status": "invalid-request",
+            "request_ready": False,
+            "errors": list(request_summary.get("errors") or []),
+        }
+    support = load_remote_runtime_support_module()
+    provider_kind = str(request_summary.get("provider_kind") or "mcp")
+    spec = provider_kind_spec(
+        provider_kind,
+        browser_remote_registry=browser_remote_registry,
+        office_remote_registry=office_remote_registry,
+        mcp_remote_registry=mcp_remote_registry,
+    )
+    registry_path, registrations = support.load_remote_registry(
+        explicit=spec["remote_registry_path"],
+        env_var=spec["env_var"],
+        state_subdir=spec["state_subdir"],
+    )
+    _, registration = support.find_remote_registration(
+        registrations,
+        provider_ref=request_summary.get("provider_ref"),
+        endpoint=request_summary.get("endpoint"),
+    )
+    if registration is None:
+        return {
+            "status": "remote-missing",
+            "request_ready": True,
+            "remote_registry_path": str(registry_path),
+            "provider_ref": request_summary.get("provider_ref"),
+        }
+
+    provider_id = (
+        optional_text(request_summary.get("control_plane_provider_id"))
+        or optional_text(getattr(registration, "control_plane_provider_id", None))
+        or support.normalize_remote_provider_id(spec["provider_prefix"], registration.provider_ref)
+    )
+    provider_module = load_remote_provider_module(provider_kind)
+    descriptor = provider_module.build_control_plane_descriptor(
+        registration,
+        provider_id=provider_id,
+        display_name=optional_text(request_summary.get("display_name")),
+    )
+
+    promotion_mode = "offline-fallback"
+    record: dict[str, Any] | None = None
+    artifact_paths: dict[str, str] = {}
+    agentd_error: str | None = None
+    if agent_socket is not None and agent_socket.exists():
+        try:
+            record = support.agentd_rpc(
+                agent_socket,
+                "provider.register",
+                {"descriptor": descriptor},
+                error_prefix="remote_governance",
+            )
+            promotion_mode = "agentd-register"
+        except Exception as error:  # noqa: BLE001
+            category = getattr(error, "category", None)
+            if category not in {"unavailable", "timeout"}:
+                raise
+            agentd_error = str(error)
+
+    if promotion_mode != "agentd-register":
+        artifact_paths = _write_offline_promotion_artifacts(
+            provider_registry_state_dir,
+            provider_id=provider_id,
+            descriptor=descriptor,
+            request_summary=request_summary,
+        )
+        record = {
+            "provider_id": provider_id,
+            "status": "written",
+            **artifact_paths,
+        }
+
+    updated_registrations = [
+        replace(
+            item,
+            control_plane_provider_id=(provider_id if item.provider_ref == registration.provider_ref else item.control_plane_provider_id),
+        )
+        for item in registrations
+    ]
+    support.write_remote_registry(registry_path, updated_registrations)
+    promoted_registration = next(
+        (
+            item
+            for item in updated_registrations
+            if item.provider_ref == registration.provider_ref and item.endpoint == registration.endpoint
+        ),
+        registration,
+    )
+    return {
+        "status": "promoted",
+        "request_ready": True,
+        "provider_kind": spec["provider_kind"],
+        "promotion_mode": promotion_mode,
+        "remote_registry_path": str(registry_path),
+        "provider_registry_state_dir": str(provider_registry_state_dir),
+        "control_plane_provider_id": provider_id,
+        "registration": promoted_registration.to_payload(),
+        "descriptor": descriptor,
+        "record": record,
+        "agentd_socket": str(agent_socket) if agent_socket is not None else None,
+        "agentd_error": agentd_error,
+        **artifact_paths,
+    }
 
 
 def utc_now() -> str:

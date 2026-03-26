@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
+import sys
 import time
 from pathlib import Path
+from types import ModuleType
 
 from prototype import (
     notification_context,
@@ -48,6 +51,28 @@ SEVERITY_RANK = {
     "high": 3,
 }
 
+AI_READY_TONES = {
+    "local-ready": "positive",
+    "hybrid-ready": "positive",
+    "cloud-ready": "positive",
+    "hybrid-remote-only": "warning",
+    "setup-pending": "warning",
+    "not-ready": "critical",
+    "disabled": "neutral",
+}
+
+ROUTE_TONES = {
+    "local": "positive",
+    "cloud": "warning",
+    "hybrid": "neutral",
+    "pending": "warning",
+    "disabled": "neutral",
+    "unknown": "neutral",
+}
+
+_AI_CENTER_PROTOTYPE_MODULE: ModuleType | None = None
+_PROVIDER_SETTINGS_PROTOTYPE_MODULE: ModuleType | None = None
+
 
 def tone_for(severity: str | None) -> str:
     if not severity:
@@ -63,6 +88,65 @@ def default_compositor_runtime_state() -> Path | None:
 def default_compositor_window_state() -> Path | None:
     value = os.environ.get("AIOS_SHELL_COMPOSITOR_WINDOW_STATE_PATH")
     return Path(value) if value else None
+
+
+def default_ai_readiness_path() -> Path:
+    value = os.environ.get("AIOS_SHELL_AI_READINESS_PATH")
+    return Path(value) if value else Path("/var/lib/aios/runtime/ai-readiness.json")
+
+
+def default_ai_onboarding_report_path() -> Path:
+    value = os.environ.get("AIOS_SHELL_AI_ONBOARDING_REPORT_PATH")
+    return Path(value) if value else Path("/var/lib/aios/onboarding/ai-onboarding-report.json")
+
+
+def _load_module(module_name: str, path: Path) -> ModuleType:
+    module = sys.modules.get(module_name)
+    if module is not None:
+        return module
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"unable to load module from {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_ai_center_prototype_module() -> ModuleType:
+    global _AI_CENTER_PROTOTYPE_MODULE
+    if _AI_CENTER_PROTOTYPE_MODULE is not None:
+        return _AI_CENTER_PROTOTYPE_MODULE
+    module_path = Path(__file__).resolve().parents[1] / "ai-center" / "prototype.py"
+    _AI_CENTER_PROTOTYPE_MODULE = _load_module(
+        "aios_shell_notification_center_ai_center_prototype",
+        module_path,
+    )
+    return _AI_CENTER_PROTOTYPE_MODULE
+
+
+def load_provider_settings_prototype_module() -> ModuleType:
+    global _PROVIDER_SETTINGS_PROTOTYPE_MODULE
+    if _PROVIDER_SETTINGS_PROTOTYPE_MODULE is not None:
+        return _PROVIDER_SETTINGS_PROTOTYPE_MODULE
+    module_path = Path(__file__).resolve().parents[1] / "provider-settings" / "prototype.py"
+    _PROVIDER_SETTINGS_PROTOTYPE_MODULE = _load_module(
+        "aios_shell_notification_center_provider_settings_prototype",
+        module_path,
+    )
+    return _PROVIDER_SETTINGS_PROTOTYPE_MODULE
+
+
+def default_runtime_platform_env_path() -> Path:
+    return load_provider_settings_prototype_module().default_runtime_platform_env_path()
+
+
+def default_model_dir() -> Path:
+    return load_ai_center_prototype_module().default_model_dir()
+
+
+def default_model_registry() -> Path:
+    return load_ai_center_prototype_module().default_model_registry()
 
 
 def parse_int(value, default: int = 0) -> int:
@@ -81,6 +165,202 @@ def load_compositor_json(path: Path | None) -> tuple[dict, str | None]:
     if isinstance(payload, dict):
         return payload, None
     return {}, f"invalid-json-object:{path}"
+
+
+def ai_tone_for(state: str | None) -> str:
+    if not state:
+        return "neutral"
+    return AI_READY_TONES.get(state, "neutral")
+
+
+def ai_state_label(state: str | None) -> str:
+    labels = {
+        "local-ready": "Local Ready",
+        "hybrid-ready": "Hybrid Ready",
+        "cloud-ready": "Cloud Ready",
+        "hybrid-remote-only": "Remote Only",
+        "setup-pending": "Setup Pending",
+        "not-ready": "Not Ready",
+        "disabled": "Disabled",
+    }
+    return labels.get(state or "", state or "Unknown")
+
+
+def route_label(route_kind: str) -> str:
+    labels = {
+        "local": "Local Model",
+        "cloud": "Cloud Model",
+        "hybrid": "Hybrid Route",
+        "pending": "Setup Pending",
+        "disabled": "Disabled",
+        "unknown": "Unresolved",
+    }
+    return labels.get(route_kind, route_kind or "Unresolved")
+
+
+def load_ai_readiness_summary(readiness_path: Path | None, report_path: Path | None) -> dict:
+    readiness_payload, readiness_error = load_compositor_json(readiness_path)
+    report_payload, report_error = load_compositor_json(report_path)
+    has_source = bool(readiness_payload or report_payload)
+    errors = [error for error in (readiness_error, report_error) if error]
+    source_status = "ready" if has_source else "unavailable"
+    if has_source and errors:
+        source_status = "partial"
+
+    state = readiness_payload.get("state") or report_payload.get("readiness_state")
+    reason = readiness_payload.get("reason") or report_payload.get("readiness_reason")
+    next_action = readiness_payload.get("next_action") or report_payload.get("next_action")
+    endpoint_configured = readiness_payload.get("endpoint_configured")
+    if endpoint_configured is None:
+        endpoint_configured = report_payload.get("endpoint_configured")
+    local_model_count = readiness_payload.get("local_model_count")
+    if local_model_count is None:
+        local_model_count = report_payload.get("local_model_count")
+
+    return {
+        "state": state,
+        "state_label": ai_state_label(state),
+        "tone": ai_tone_for(state),
+        "reason": reason,
+        "next_action": next_action,
+        "ai_mode": readiness_payload.get("ai_mode") or report_payload.get("ai_mode"),
+        "local_model_count": parse_int(local_model_count, 0),
+        "endpoint_configured": bool(endpoint_configured),
+        "endpoint_base_url": report_payload.get("endpoint_base_url"),
+        "endpoint_model": report_payload.get("endpoint_model"),
+        "has_source": has_source,
+        "source_status": source_status,
+        "source_error": "; ".join(errors) if errors else None,
+        "readiness_path": str(readiness_path) if readiness_path else None,
+        "report_path": readiness_payload.get("report_path") or str(report_path) if report_path else None,
+    }
+
+
+def classify_current_route_kind(
+    provider_settings_state: dict,
+    readiness_summary: dict,
+    effective_local_model_count: int = 0,
+) -> str:
+    if provider_settings_state.get("provider_enabled") is False:
+        return "disabled"
+
+    readiness_state = str(readiness_summary.get("state") or "").strip().lower()
+    route_preference = provider_settings_state.get("route_preference")
+    local_model_count = max(
+        parse_int(readiness_summary.get("local_model_count"), 0),
+        parse_int(effective_local_model_count, 0),
+    )
+    endpoint_configured = bool(provider_settings_state.get("endpoint_configured"))
+
+    if readiness_state == "local-ready":
+        return "local"
+    if readiness_state in {"cloud-ready", "hybrid-remote-only"}:
+        return "cloud"
+    if route_preference in {"remote-first", "remote-only"} and endpoint_configured:
+        return "cloud"
+    if route_preference == "local-first" and local_model_count > 0:
+        return "local"
+    if readiness_state == "hybrid-ready":
+        if local_model_count > 0:
+            return "local"
+        if endpoint_configured:
+            return "cloud"
+        return "hybrid"
+    if local_model_count > 0:
+        return "local"
+    if endpoint_configured:
+        return "cloud"
+    if readiness_state in {"setup-pending", "not-ready"}:
+        return "pending"
+    return "unknown"
+
+
+def model_source_label(
+    route_kind: str,
+    readiness_summary: dict,
+    provider_settings_state: dict,
+    ai_center_state: dict,
+) -> str:
+    default_text_model = ai_center_state.get("default_text_generation_model")
+    endpoint_model = (
+        provider_settings_state.get("endpoint_model")
+        or readiness_summary.get("endpoint_model")
+    )
+    local_model_count = parse_int(
+        ai_center_state.get("effective_local_model_count"),
+        parse_int(readiness_summary.get("local_model_count"), 0),
+    )
+
+    if route_kind == "local":
+        if default_text_model:
+            return default_text_model
+        if local_model_count > 0:
+            return f"local-models:{local_model_count}"
+    if route_kind == "cloud":
+        if endpoint_model:
+            return endpoint_model
+        return "remote-endpoint"
+    if default_text_model:
+        return default_text_model
+    if endpoint_model:
+        return endpoint_model
+    if local_model_count > 0:
+        return f"local-models:{local_model_count}"
+    if provider_settings_state.get("provider_enabled") is False:
+        return "disabled"
+    return "unconfigured"
+
+
+def build_ai_execution_summary(
+    readiness_path: Path | None,
+    report_path: Path | None,
+    runtime_platform_env_path: Path | None,
+    model_dir: Path | None,
+    model_registry: Path | None,
+    ai_readiness_summary: dict | None,
+) -> dict:
+    provider_settings_module = load_provider_settings_prototype_module()
+    ai_center_module = load_ai_center_prototype_module()
+    provider_settings_state = provider_settings_module.build_provider_settings_state(
+        readiness_path,
+        report_path,
+        runtime_platform_env_path,
+    )
+    ai_center_state = ai_center_module.build_ai_center_state(
+        readiness_path,
+        report_path,
+        model_dir,
+        model_registry,
+    )
+    readiness_summary = (
+        ai_readiness_summary
+        or provider_settings_state.get("readiness")
+        or ai_center_state.get("readiness")
+        or {}
+    )
+    current_route_kind = classify_current_route_kind(
+        provider_settings_state,
+        readiness_summary,
+        parse_int(ai_center_state.get("effective_local_model_count"), 0),
+    )
+    return {
+        "provider_settings_state": provider_settings_state,
+        "ai_center_state": ai_center_state,
+        "current_route_kind": current_route_kind,
+        "current_route_label": route_label(current_route_kind),
+        "current_route_tone": ROUTE_TONES.get(current_route_kind, "neutral"),
+        "current_model": model_source_label(
+            current_route_kind,
+            readiness_summary,
+            provider_settings_state,
+            ai_center_state,
+        ),
+        "route_preference": provider_settings_state.get("route_preference"),
+        "route_preference_label": provider_settings_state.get("route_preference_label"),
+        "provider_enabled": provider_settings_state.get("provider_enabled"),
+        "runtime_platform_env_path": provider_settings_state.get("runtime_platform_env_path"),
+        "default_text_generation_model": ai_center_state.get("default_text_generation_model"),
+    }
 
 
 def derive_managed_windows(window_payload: dict, runtime_session: dict) -> list[dict]:
@@ -240,6 +520,42 @@ def compositor_notifications(summary: dict) -> list[dict]:
     return notifications
 
 
+def ai_readiness_notifications(summary: dict, ai_execution_summary: dict | None = None) -> list[dict]:
+    if not summary.get("has_source"):
+        return []
+    ai_execution_summary = ai_execution_summary or {}
+
+    state = summary.get("state")
+    if state in {"setup-pending"}:
+        severity = "medium"
+    elif state in {"not-ready"}:
+        severity = "high"
+    elif state in {"hybrid-remote-only"}:
+        severity = "medium"
+    else:
+        severity = "info"
+
+    detail_parts = [summary.get("reason") or summary.get("state_label") or "AI readiness available"]
+    if ai_execution_summary.get("current_route_label"):
+        detail_parts.append(f"route={ai_execution_summary['current_route_label']}")
+    if ai_execution_summary.get("current_model"):
+        detail_parts.append(f"model={ai_execution_summary['current_model']}")
+    if summary.get("next_action") and summary.get("next_action") != "none":
+        detail_parts.append(f"next={summary['next_action']}")
+    if summary.get("endpoint_model"):
+        detail_parts.append(f"remote_model={summary['endpoint_model']}")
+
+    return [
+        {
+            "title": f"AI readiness: {summary.get('state_label') or 'Unknown'}",
+            "detail": " · ".join(part for part in detail_parts if part),
+            "source": "ai",
+            "severity": severity,
+            "kind": f"ai-readiness-{state or 'unknown'}",
+        }
+    ]
+
+
 def summarize(notifications: list[dict]) -> dict:
     by_severity: dict[str, int] = {}
     by_source: dict[str, int] = {}
@@ -268,7 +584,7 @@ def overall_severity(notifications: list[dict]) -> str:
     return status
 
 
-def load_notifications(args: argparse.Namespace) -> tuple[list[dict], dict, dict, dict, dict]:
+def load_notifications(args: argparse.Namespace) -> tuple[list[dict], dict, dict, dict, dict, dict, dict]:
     recovery_surface = load_recovery_surface(args.recovery_surface, args.updated_socket)
     indicator_state = load_json(args.indicator_state)
     backend_state = load_backend_state(args.backend_state, args.deviced_socket)
@@ -299,14 +615,29 @@ def load_notifications(args: argparse.Namespace) -> tuple[list[dict], dict, dict
         args.compositor_runtime_state,
         args.compositor_window_state,
     )
+    ai_readiness_summary = load_ai_readiness_summary(
+        args.ai_readiness,
+        args.ai_onboarding_report,
+    )
+    ai_execution_summary = build_ai_execution_summary(
+        args.ai_readiness,
+        args.ai_onboarding_report,
+        args.runtime_platform_env,
+        args.model_dir,
+        args.model_registry,
+        ai_readiness_summary,
+    )
     notifications = list(context["notifications"])
     notifications.extend(compositor_notifications(compositor_summary))
+    notifications.extend(ai_readiness_notifications(ai_readiness_summary, ai_execution_summary))
     return (
         notifications,
         context["audit_summary"],
         context["backend_evidence_summary"],
         context["remote_governance_summary"],
         compositor_summary,
+        ai_readiness_summary,
+        ai_execution_summary,
     )
 
 
@@ -316,6 +647,8 @@ def build_model(
     backend_evidence_summary: dict,
     remote_governance_summary: dict,
     compositor_summary: dict,
+    ai_readiness_summary: dict,
+    ai_execution_summary: dict,
 ) -> dict:
     summary = summarize(notifications)
     status = overall_severity(notifications)
@@ -369,6 +702,12 @@ def build_model(
             ),
             "tone": "warning" if compositor_summary.get("minimized_window_count") else "neutral",
         },
+        {
+            "action_id": "open-ai-center",
+            "label": "Open AI Center",
+            "enabled": bool(ai_readiness_summary.get("has_source")),
+            "tone": ai_readiness_summary.get("tone", "neutral"),
+        },
     ]
 
     return {
@@ -394,6 +733,16 @@ def build_model(
                 "label": "Minimized",
                 "value": compositor_summary.get("minimized_window_count", 0),
                 "tone": "warning" if compositor_summary.get("minimized_window_count", 0) else "neutral",
+            },
+            {
+                "label": "AI",
+                "value": ai_readiness_summary.get("state_label", "unknown"),
+                "tone": ai_readiness_summary.get("tone", "neutral"),
+            },
+            {
+                "label": "Route",
+                "value": ai_execution_summary.get("current_route_label", "Unresolved"),
+                "tone": ai_execution_summary.get("current_route_tone", "neutral"),
             },
         ],
         "actions": actions,
@@ -552,6 +901,24 @@ def build_model(
                 "empty_state": "No remote governance issues",
             },
             {
+                "section_id": "ai-readiness",
+                "title": "AI Readiness",
+                "items": [
+                    {"label": "State", "value": ai_readiness_summary.get("state_label") or "Unknown", "tone": ai_readiness_summary.get("tone", "neutral")},
+                    {"label": "Reason", "value": ai_readiness_summary.get("reason") or "-", "tone": ai_readiness_summary.get("tone", "neutral")},
+                    {"label": "Mode", "value": ai_readiness_summary.get("ai_mode") or "-", "tone": "neutral"},
+                    {"label": "Current Route", "value": ai_execution_summary.get("current_route_label") or "Unresolved", "tone": ai_execution_summary.get("current_route_tone", "neutral")},
+                    {"label": "Route Policy", "value": ai_execution_summary.get("route_preference_label") or "-", "tone": "neutral"},
+                    {"label": "Current Model", "value": ai_execution_summary.get("current_model") or "unconfigured", "tone": ai_execution_summary.get("current_route_tone", "neutral")},
+                    {"label": "Local Models", "value": ai_readiness_summary.get("local_model_count", 0), "tone": "positive" if ai_readiness_summary.get("local_model_count", 0) else "warning"},
+                    {"label": "Remote Endpoint", "value": ai_readiness_summary.get("endpoint_model") or ("configured" if ai_readiness_summary.get("endpoint_configured") else "missing"), "tone": "positive" if ai_readiness_summary.get("endpoint_configured") else "warning"},
+                    {"label": "Next Action", "value": ai_readiness_summary.get("next_action") or "none", "tone": "warning" if ai_readiness_summary.get("next_action") not in (None, "none") else "neutral"},
+                ]
+                if ai_readiness_summary.get("has_source")
+                else [],
+                "empty_state": "No AI readiness summary published",
+            },
+            {
                 "section_id": "window-manager",
                 "title": "Window Manager",
                 "items": [
@@ -597,6 +964,26 @@ def build_model(
             "remote_governance_source_counts": remote_governance_summary.get("source_counts", {}),
             "remote_governance_status_counts": remote_governance_summary.get("status_counts", {}),
             "remote_governance_artifact_paths": remote_governance_summary.get("artifact_paths", {}),
+            "ai_readiness_state": ai_readiness_summary.get("state"),
+            "ai_readiness_label": ai_readiness_summary.get("state_label"),
+            "ai_readiness_reason": ai_readiness_summary.get("reason"),
+            "ai_readiness_next_action": ai_readiness_summary.get("next_action"),
+            "ai_readiness_mode": ai_readiness_summary.get("ai_mode"),
+            "ai_local_model_count": ai_readiness_summary.get("local_model_count", 0),
+            "ai_endpoint_configured": ai_readiness_summary.get("endpoint_configured", False),
+            "ai_endpoint_model": ai_readiness_summary.get("endpoint_model"),
+            "ai_data_status": ai_readiness_summary.get("source_status"),
+            "ai_data_error": ai_readiness_summary.get("source_error"),
+            "ai_readiness_path": ai_readiness_summary.get("readiness_path"),
+            "ai_onboarding_report_path": ai_readiness_summary.get("report_path"),
+            "ai_route_preference": ai_execution_summary.get("route_preference"),
+            "ai_route_preference_label": ai_execution_summary.get("route_preference_label"),
+            "ai_current_route": ai_execution_summary.get("current_route_kind"),
+            "ai_current_route_label": ai_execution_summary.get("current_route_label"),
+            "ai_current_model": ai_execution_summary.get("current_model"),
+            "ai_default_text_generation_model": ai_execution_summary.get("default_text_generation_model"),
+            "ai_provider_enabled": ai_execution_summary.get("provider_enabled"),
+            "runtime_platform_env_path": ai_execution_summary.get("runtime_platform_env_path"),
             "compositor_data_status": compositor_summary.get("data_status"),
             "compositor_data_error": compositor_summary.get("data_error"),
             "compositor_runtime_phase": compositor_summary.get("runtime_phase"),
@@ -672,6 +1059,11 @@ def main() -> int:
     parser.add_argument("--approval-fixture", type=Path)
     parser.add_argument("--compositor-runtime-state", type=Path, default=default_compositor_runtime_state())
     parser.add_argument("--compositor-window-state", type=Path, default=default_compositor_window_state())
+    parser.add_argument("--ai-readiness", type=Path, default=default_ai_readiness_path())
+    parser.add_argument("--ai-onboarding-report", type=Path, default=default_ai_onboarding_report_path())
+    parser.add_argument("--runtime-platform-env", type=Path, default=default_runtime_platform_env_path())
+    parser.add_argument("--model-dir", type=Path, default=default_model_dir())
+    parser.add_argument("--model-registry", type=Path, default=default_model_registry())
     parser.add_argument("--action")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--interval", type=float, default=2.0)
@@ -681,13 +1073,15 @@ def main() -> int:
     if args.command == "action":
         if not args.action:
             raise SystemExit("--action is required for action")
-        notifications, audit_summary, backend_evidence_summary, remote_governance_summary, compositor_summary = load_notifications(args)
+        notifications, audit_summary, backend_evidence_summary, remote_governance_summary, compositor_summary, ai_readiness_summary, ai_execution_summary = load_notifications(args)
         model = build_model(
             notifications,
             audit_summary,
             backend_evidence_summary,
             remote_governance_summary,
             compositor_summary,
+            ai_readiness_summary,
+            ai_execution_summary,
         )
         selected = next((item for item in model["actions"] if item["action_id"] == args.action), None)
         if selected is None:
@@ -705,6 +1099,8 @@ def main() -> int:
             target_component = "remote-governance"
         elif args.action == "inspect-window-manager" and selected.get("enabled", False):
             target_component = "task-surface"
+        elif args.action == "open-ai-center" and selected.get("enabled", False):
+            target_component = "ai-center"
         result = {
             "action": args.action,
             "enabled": bool(selected.get("enabled", False)),
@@ -715,6 +1111,8 @@ def main() -> int:
             "remote_governance_issue_count": model["meta"]["remote_governance_issue_count"],
             "backend_evidence_present_count": model["meta"]["backend_evidence_present_count"],
             "backend_evidence_backend_ids": model["meta"]["backend_evidence_backend_ids"],
+            "ai_readiness_state": model["meta"]["ai_readiness_state"],
+            "ai_next_action": model["meta"]["ai_readiness_next_action"],
         }
         print(json.dumps(result, indent=2, ensure_ascii=False))
         return 0
@@ -722,13 +1120,15 @@ def main() -> int:
     if args.command == "watch":
         iterations = max(1, args.iterations)
         for index in range(iterations):
-            notifications, audit_summary, backend_evidence_summary, remote_governance_summary, compositor_summary = load_notifications(args)
+            notifications, audit_summary, backend_evidence_summary, remote_governance_summary, compositor_summary, ai_readiness_summary, ai_execution_summary = load_notifications(args)
             model = build_model(
                 notifications,
                 audit_summary,
                 backend_evidence_summary,
                 remote_governance_summary,
                 compositor_summary,
+                ai_readiness_summary,
+                ai_execution_summary,
             )
             if args.json:
                 print(json.dumps(model, indent=2, ensure_ascii=False))
@@ -740,13 +1140,15 @@ def main() -> int:
                 time.sleep(args.interval)
         return 0
 
-    notifications, audit_summary, backend_evidence_summary, remote_governance_summary, compositor_summary = load_notifications(args)
+    notifications, audit_summary, backend_evidence_summary, remote_governance_summary, compositor_summary, ai_readiness_summary, ai_execution_summary = load_notifications(args)
     model = build_model(
         notifications,
         audit_summary,
         backend_evidence_summary,
         remote_governance_summary,
         compositor_summary,
+        ai_readiness_summary,
+        ai_execution_summary,
     )
     if args.command == "model" or args.json:
         print(json.dumps(model, indent=2, ensure_ascii=False))

@@ -24,6 +24,7 @@ pub struct AppState {
 
 impl AppState {
     fn health(&self) -> HealthResponse {
+        let ai_readiness = self.config.load_ai_readiness_summary();
         let mut notes = vec![
             format!("provider_id={}", self.config.provider_id),
             format!("runtimed_socket={}", self.config.runtimed_socket.display()),
@@ -37,7 +38,83 @@ impl AppState {
             format!("max_concurrency={}", self.config.max_concurrency),
             format!("embedding_backend={}", self.config.embedding_backend),
             format!("rerank_backend={}", self.config.rerank_backend),
+            format!(
+                "ai_readiness_path={}",
+                self.config.ai_readiness_path.display()
+            ),
+            format!(
+                "ai_onboarding_report_path={}",
+                self.config.ai_onboarding_report_path.display()
+            ),
+            format!(
+                "remote_endpoint_configured={}",
+                if self.config.remote_endpoint_config().is_some() {
+                    "true"
+                } else {
+                    "false"
+                }
+            ),
+            format!(
+                "remote_api_key_configured={}",
+                if self.config.remote_api_key.is_some() {
+                    "true"
+                } else {
+                    "false"
+                }
+            ),
+            format!(
+                "provider_enabled={}",
+                if ai_readiness.provider_enabled() {
+                    "true"
+                } else {
+                    "false"
+                }
+            ),
+            format!(
+                "route_preference={}",
+                ai_readiness.effective_route_preference()
+            ),
         ];
+        if let Some(base_url) = self.config.remote_base_url.as_deref() {
+            notes.push(format!("remote_base_url={base_url}"));
+        }
+        if let Some(model) = self.config.remote_model.as_deref() {
+            notes.push(format!("remote_model={model}"));
+        }
+        if let Some(model) = self.config.remote_embedding_model.as_deref() {
+            notes.push(format!("remote_embedding_model={model}"));
+        }
+        if let Some(model) = self.config.remote_rerank_model.as_deref() {
+            notes.push(format!("remote_rerank_model={model}"));
+        }
+        notes.push(format!(
+            "ai_readiness_state={}",
+            ai_readiness.state.as_deref().unwrap_or("unknown")
+        ));
+        notes.push(format!(
+            "ai_endpoint_ready={}",
+            if ai_readiness.endpoint_configured {
+                "true"
+            } else {
+                "false"
+            }
+        ));
+        notes.push(format!(
+            "remote_embedding_endpoint_configured={}",
+            if self.config.remote_embedding_endpoint_config(None).is_some() {
+                "true"
+            } else {
+                "false"
+            }
+        ));
+        notes.push(format!(
+            "remote_rerank_endpoint_configured={}",
+            if self.config.remote_rerank_endpoint_config(None).is_some() {
+                "true"
+            } else {
+                "false"
+            }
+        ));
         notes.extend(self.registry_sync.health_notes());
 
         HealthResponse {
@@ -239,6 +316,22 @@ async fn report_registry_health(
 }
 
 async fn probe_runtime_health(state: &AppState, attempts: usize) -> (String, Option<String>) {
+    let ai_readiness = state.config.load_ai_readiness_summary();
+    if !ai_readiness.provider_enabled() {
+        return (
+            "disabled".to_string(),
+            Some("AI provider disabled via runtime platform env".to_string()),
+        );
+    }
+    let remote_ready =
+        state.config.remote_endpoint_config().is_some() && ai_readiness.remote_fallback_allowed();
+    if ai_readiness.remote_only_preferred() && !remote_ready {
+        return (
+            "unavailable".to_string(),
+            Some("remote-only route selected but endpoint is not configured".to_string()),
+        );
+    }
+
     for attempt in 0..attempts {
         match crate::clients::fetch_runtime_health(state) {
             Ok(_) => return ("available".to_string(), None),
@@ -249,14 +342,43 @@ async fn probe_runtime_health(state: &AppState, attempts: usize) -> (String, Opt
                 }
                 tracing::debug!(?error, "runtimed probe failed during startup, retrying");
             }
-            Err(error) => return ("unavailable".to_string(), Some(error.to_string())),
+            Err(error) => {
+                if ai_readiness.remote_only_preferred() && remote_ready {
+                    return (
+                        "available".to_string(),
+                        Some("local runtime unavailable; remote endpoint configured".to_string()),
+                    );
+                }
+                if remote_ready {
+                    return (
+                        "degraded".to_string(),
+                        Some(format!(
+                            "local runtime unavailable; remote endpoint configured: {}",
+                            error
+                        )),
+                    );
+                }
+                return ("unavailable".to_string(), Some(error.to_string()));
+            }
         }
     }
 
-    (
-        "unavailable".to_string(),
-        Some("runtimed probe exhausted".to_string()),
-    )
+    if ai_readiness.remote_only_preferred() && remote_ready {
+        (
+            "available".to_string(),
+            Some("local runtime probe exhausted; remote endpoint configured".to_string()),
+        )
+    } else if remote_ready {
+        (
+            "degraded".to_string(),
+            Some("local runtime probe exhausted; remote endpoint configured".to_string()),
+        )
+    } else {
+        (
+            "unavailable".to_string(),
+            Some("runtimed probe exhausted".to_string()),
+        )
+    }
 }
 
 async fn sync_registry_state_once(state: &AppState, registration_succeeded: &mut bool) {

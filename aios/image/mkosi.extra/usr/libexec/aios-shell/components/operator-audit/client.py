@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
+import sys
 from pathlib import Path
+from types import ModuleType
 
 from prototype import (
     default_browser_remote_registry,
@@ -16,10 +19,45 @@ from prototype import (
     default_runtime_events_log,
     load_operator_audit,
 )
+_PRIVACY_MEMORY_PROTOTYPE_MODULE: ModuleType | None = None
 
 
-def build_summary(audit: dict) -> dict:
+def _load_module(module_name: str, path: Path) -> ModuleType:
+    module = sys.modules.get(module_name)
+    if module is not None:
+        return module
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"unable to load module from {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_privacy_memory_prototype_module() -> ModuleType:
+    global _PRIVACY_MEMORY_PROTOTYPE_MODULE
+    if _PRIVACY_MEMORY_PROTOTYPE_MODULE is not None:
+        return _PRIVACY_MEMORY_PROTOTYPE_MODULE
+    module_path = Path(__file__).resolve().parents[1] / "privacy-memory" / "prototype.py"
+    _PRIVACY_MEMORY_PROTOTYPE_MODULE = _load_module(
+        "aios_shell_privacy_memory_prototype",
+        module_path,
+    )
+    return _PRIVACY_MEMORY_PROTOTYPE_MODULE
+
+
+def default_runtime_platform_env_path() -> Path:
+    return load_privacy_memory_prototype_module().default_runtime_platform_env_path()
+
+
+def build_privacy_memory_state(runtime_platform_env_path: Path | None) -> dict:
+    return load_privacy_memory_prototype_module().build_privacy_memory_state(runtime_platform_env_path)
+
+
+def build_summary(audit: dict, privacy_memory: dict | None = None) -> dict:
     remote_governance = audit.get("remote_governance") or {}
+    privacy_memory = privacy_memory or {}
     return {
         "record_count": audit.get("record_count", 0),
         "issue_count": audit.get("issue_count", 0),
@@ -31,6 +69,11 @@ def build_summary(audit: dict) -> dict:
         "remote_governance_issue_count": remote_governance.get("issue_count", 0),
         "remote_governance_fleet_count": remote_governance.get("fleet_count", 0),
         "artifact_paths": audit.get("artifact_paths", {}),
+        "memory_enabled": privacy_memory.get("memory_enabled", True),
+        "memory_retention_days": privacy_memory.get("memory_retention_days"),
+        "audit_retention_days": privacy_memory.get("audit_retention_days"),
+        "approval_default_policy": privacy_memory.get("approval_default_policy"),
+        "remote_prompt_level": privacy_memory.get("remote_prompt_level"),
     }
 
 
@@ -71,6 +114,7 @@ def main() -> int:
     parser.add_argument("--attestation-mode")
     parser.add_argument("--control-plane-status")
     parser.add_argument("--write-report", type=Path)
+    parser.add_argument("--runtime-platform-env", type=Path, default=default_runtime_platform_env_path())
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
@@ -111,7 +155,7 @@ def main() -> int:
     )
 
     if args.command == "summary":
-        summary = build_summary(audit)
+        summary = build_summary(audit, build_privacy_memory_state(args.runtime_platform_env))
         summary["matched_record_count"] = audit.get("matched_record_count", 0)
         summary["filters"] = (audit.get("query") or {}).get("filters", {})
         summary["report_path"] = (audit.get("query") or {}).get("report_path")

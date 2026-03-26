@@ -65,6 +65,8 @@ def write_release_checklist(path: Path) -> None:
         path,
         """# Synthetic Release Checklist
 
+本文件用于验证发布门禁在 UTF-8 文档环境下的解析稳定性。
+
 <!-- aios-release-gate-rules:start -->
 ```yaml
 release_gate:

@@ -141,6 +141,98 @@ def main() -> int:
             )
         )
 
+        ai_readiness = temp_root / "ai-readiness.json"
+        ai_readiness.write_text(
+            json.dumps(
+                {
+                    "generated_at": "2026-03-09T00:00:00Z",
+                    "state": "setup-pending",
+                    "reason": "default model pull pending firstboot completion",
+                    "next_action": "open-ai-center",
+                    "ai_enabled": True,
+                    "ai_mode": "hybrid",
+                    "local_model_count": 0,
+                    "endpoint_configured": True,
+                    "report_path": str(temp_root / "ai-onboarding-report.json"),
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        ai_onboarding_report = temp_root / "ai-onboarding-report.json"
+        ai_onboarding_report.write_text(
+            json.dumps(
+                {
+                    "generated_at": "2026-03-09T00:00:00Z",
+                    "ai_enabled": True,
+                    "ai_mode": "hybrid",
+                    "privacy_profile": "balanced",
+                    "endpoint_base_url": "http://127.0.0.1:11434/v1",
+                    "endpoint_model": "qwen2.5:7b-instruct",
+                    "endpoint_configured": True,
+                    "local_model_count": 0,
+                    "readiness_state": "setup-pending",
+                    "readiness_reason": "default model pull pending firstboot completion",
+                    "next_action": "open-ai-center",
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        ai_model_dir = temp_root / "models"
+        ai_model_dir.mkdir(parents=True, exist_ok=True)
+        ai_model_registry = temp_root / "model-registry.json"
+        ai_model_registry.write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0.0",
+                    "models": {
+                        "local-qwen-mini": {
+                            "model_id": "local-qwen-mini",
+                            "path": str(ai_model_dir / "local-qwen-mini.gguf"),
+                            "format": "gguf",
+                            "size_bytes": 7340032,
+                            "sha256": "deadbeef",
+                            "aliases": ["default-gen"],
+                            "capabilities": ["text-generation"],
+                            "quantization": "Q4_K_M",
+                            "parameters_estimate": "7B",
+                            "source_kind": "local-import-copy",
+                            "source_uri": "file:///tmp/local-qwen-mini.gguf",
+                        }
+                    },
+                    "aliases": {"default-gen": "local-qwen-mini"},
+                    "defaults": {"text-generation": "local-qwen-mini"},
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        ai_model_import_source = temp_root / "import-model.gguf"
+        ai_model_import_source.write_bytes(b"GGUF" + b"\x00" * 64)
+        runtime_platform_env = temp_root / "runtime-platform.env"
+        runtime_platform_env.write_text(
+            "\n".join(
+                [
+                    "AIOS_RUNTIMED_AI_ENABLED=1",
+                    "AIOS_RUNTIMED_AI_MODE=hybrid",
+                    "AIOS_RUNTIMED_AI_PRIVACY_PROFILE=balanced",
+                    "AIOS_RUNTIMED_AI_ROUTE_PREFERENCE=local-first",
+                    "AIOS_RUNTIMED_LOCAL_CPU_COMMAND=/usr/libexec/aios/runtime/workers/launch_local_cpu_worker.sh",
+                    "AIOS_RUNTIMED_AI_ENDPOINT_BASE_URL=http://127.0.0.1:11434/v1",
+                    "AIOS_RUNTIMED_AI_ENDPOINT_MODEL=qwen2.5:7b-instruct",
+                    "AIOS_RUNTIMED_AI_ENDPOINT_API_KEY=panel-smoke-secret-token",
+                    "AIOS_RUNTIMED_MEMORY_ENABLED=1",
+                    "AIOS_RUNTIMED_MEMORY_RETENTION_DAYS=30",
+                    "AIOS_RUNTIMED_AUDIT_RETENTION_DAYS=90",
+                    "AIOS_RUNTIMED_APPROVAL_DEFAULT_POLICY=prompt-required",
+                    "AIOS_RUNTIMED_REMOTE_PROMPT_LEVEL=full",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
         compositor_runtime_state = temp_root / "compositor-runtime-state.json"
         compositor_runtime_state.write_text(
             json.dumps(
@@ -877,6 +969,16 @@ def main() -> int:
             "session-1",
             "--task-id",
             "task-1",
+            "--ai-readiness",
+            str(ai_readiness),
+            "--ai-onboarding-report",
+            str(ai_onboarding_report),
+            "--runtime-platform-env",
+            str(runtime_platform_env),
+            "--model-dir",
+            str(ai_model_dir),
+            "--model-registry",
+            str(ai_model_registry),
             "--compositor-runtime-state",
             str(compositor_runtime_state),
             "--compositor-window-state",
@@ -894,6 +996,11 @@ def main() -> int:
         require(task_model["meta"]["provider_selected_id"] == "system.files.local", "task panel provider selection mismatch")
         require(task_model["meta"]["provider_candidate_count"] == 1, "task panel provider candidate count mismatch")
         require(task_model["meta"]["data_source_status"] == "ready", "task panel data-source status mismatch")
+        require(task_model["meta"]["ai_readiness_state"] == "setup-pending", "task panel AI readiness state mismatch")
+        require(task_model["meta"]["ai_readiness_next_action"] == "open-ai-center", "task panel AI next action mismatch")
+        require(task_model["meta"]["task_inference_route"] == "local", "task panel inference route mismatch")
+        require(task_model["meta"]["task_model_source"] == "local-qwen-mini", "task panel model source mismatch")
+        require(task_model["meta"]["ai_route_preference"] == "local-first", "task panel AI route preference mismatch")
         require(task_model["meta"]["compositor_data_status"] == "ready", "task panel compositor status mismatch")
         require(task_model["meta"]["active_workspace_id"] == "workspace-2", "task panel workspace id mismatch")
         require(task_model["meta"]["managed_window_count"] == 2, "task panel managed window count mismatch")
@@ -910,6 +1017,14 @@ def main() -> int:
         )
         require(len(minimized_section["items"]) == 1, "task panel minimized section mismatch")
         require(minimized_section["items"][0]["action"]["action_id"] == "restore-window", "task panel minimized action mismatch")
+        ai_section = next(
+            section for section in task_model["sections"] if section["section_id"] == "ai-readiness"
+        )
+        ai_section_items = {item["label"]: item["value"] for item in ai_section["items"]}
+        require(ai_section_items["state"] == "Setup Pending", "task panel AI section state mismatch")
+        require(ai_section_items["current_route"] == "Local Model", "task panel AI section route mismatch")
+        require(ai_section_items["current_model"] == "local-qwen-mini", "task panel AI section model mismatch")
+        require(ai_section["items"][-1]["action"]["action_id"] == "open-ai-center", "task panel AI action mismatch")
         require(
             "approved" in task_model["meta"]["recent_task_event_states"],
             "task panel recent event states mismatch",
@@ -938,17 +1053,734 @@ def main() -> int:
         )
 
         output = run_python(
+            ROOT / "aios/shell/components/ai-center/panel.py",
+            "model",
+            "--ai-readiness",
+            str(ai_readiness),
+            "--ai-onboarding-report",
+            str(ai_onboarding_report),
+            "--model-dir",
+            str(ai_model_dir),
+            "--model-registry",
+            str(ai_model_registry),
+            "--browser-remote-registry",
+            str(browser_remote_registry),
+            "--office-remote-registry",
+            str(office_remote_registry),
+            "--mcp-remote-registry",
+            str(mcp_remote_registry),
+            "--provider-registry-state-dir",
+            str(provider_registry_state_dir),
+        )
+        ai_center_model = json.loads(output)
+        require(ai_center_model["panel_id"] == "ai-center-panel", "ai center panel id mismatch")
+        require(ai_center_model["meta"]["ai_mode"] == "hybrid", "ai center mode mismatch")
+        require(ai_center_model["meta"]["readiness_state"] == "setup-pending", "ai center readiness mismatch")
+        require(ai_center_model["meta"]["local_model_count"] == 1, "ai center effective model count mismatch")
+        require(
+            ai_center_model["meta"]["reported_local_model_count"] == 0,
+            "ai center reported model count mismatch",
+        )
+        require(
+            ai_center_model["meta"]["inventory_local_model_count"] == 1,
+            "ai center inventory model count mismatch",
+        )
+        require(
+            ai_center_model["meta"]["default_text_generation_model"] == "local-qwen-mini",
+            "ai center default text model mismatch",
+        )
+        require(
+            ai_center_model["meta"]["endpoint_model"] == "qwen2.5:7b-instruct",
+            "ai center endpoint model mismatch",
+        )
+        require(
+            ai_center_model["meta"]["recommended_model_count"] >= 4,
+            "ai center recommended catalog count mismatch",
+        )
+        require(
+            ai_center_model["meta"]["remote_governance_matched_entry_count"] == 3,
+            "ai center remote governance matched count mismatch",
+        )
+        require(
+            ai_center_model["meta"]["remote_governance_issue_count"] >= 3,
+            "ai center remote governance issue count mismatch",
+        )
+        require(
+            ai_center_model["meta"]["diagnostics_count"] >= 1,
+            "ai center diagnostics count mismatch",
+        )
+        ai_center_inventory = next(
+            section for section in ai_center_model["sections"] if section["section_id"] == "model-inventory"
+        )
+        ai_center_inventory_items = {item["label"]: item["value"] for item in ai_center_inventory["items"]}
+        require(
+            ai_center_inventory_items["Default Text Model"] == "local-qwen-mini",
+            "ai center inventory section default mismatch",
+        )
+        ai_center_models = next(
+            section for section in ai_center_model["sections"] if section["section_id"] == "registered-models"
+        )
+        require(len(ai_center_models["items"]) == 1, "ai center registered models section mismatch")
+        require(
+            ai_center_models["items"][0]["label"] == "local-qwen-mini",
+            "ai center registered model id mismatch",
+        )
+        ai_center_recommended = next(
+            section for section in ai_center_model["sections"] if section["section_id"] == "recommended-summary"
+        )
+        ai_center_recommended_items = {
+            item["label"]: item["value"] for item in ai_center_recommended["items"]
+        }
+        require(
+            ai_center_recommended_items["Recommended Models"] >= 4,
+            "ai center recommended summary mismatch",
+        )
+        ai_center_ecosystem = next(
+            section for section in ai_center_model["sections"] if section["section_id"] == "external-ecosystem"
+        )
+        ai_center_ecosystem_items = {
+            item["label"]: item["value"] for item in ai_center_ecosystem["items"]
+        }
+        require(
+            ai_center_ecosystem_items["Matched Remotes"] == 3,
+            "ai center ecosystem matched remotes mismatch",
+        )
+
+        output = run_python(
+            ROOT / "aios/shell/components/ai-center/panel.py",
+            "action",
+            "--ai-readiness",
+            str(ai_readiness),
+            "--ai-onboarding-report",
+            str(ai_onboarding_report),
+            "--model-dir",
+            str(ai_model_dir),
+            "--model-registry",
+            str(ai_model_registry),
+            "--browser-remote-registry",
+            str(browser_remote_registry),
+            "--office-remote-registry",
+            str(office_remote_registry),
+            "--mcp-remote-registry",
+            str(mcp_remote_registry),
+            "--provider-registry-state-dir",
+            str(provider_registry_state_dir),
+            "--action",
+            "open-model-library",
+        )
+        ai_center_action = json.loads(output)
+        require(ai_center_action["enabled"] is True, "ai center model library action disabled")
+        require(ai_center_action["target_component"] == "model-library", "ai center target component mismatch")
+        require(ai_center_action["target_route"] is None, "ai center target route mismatch")
+
+        output = run_python(
+            ROOT / "aios/shell/components/ai-center/panel.py",
+            "action",
+            "--ai-readiness",
+            str(ai_readiness),
+            "--ai-onboarding-report",
+            str(ai_onboarding_report),
+            "--model-dir",
+            str(ai_model_dir),
+            "--model-registry",
+            str(ai_model_registry),
+            "--browser-remote-registry",
+            str(browser_remote_registry),
+            "--office-remote-registry",
+            str(office_remote_registry),
+            "--mcp-remote-registry",
+            str(mcp_remote_registry),
+            "--provider-registry-state-dir",
+            str(provider_registry_state_dir),
+            "--action",
+            "open-provider-settings",
+        )
+        ai_center_provider_action = json.loads(output)
+        require(
+            ai_center_provider_action["target_component"] == "provider-settings",
+            "ai center provider settings target mismatch",
+        )
+        require(
+            ai_center_provider_action["target_route"] is None,
+            "ai center provider settings route mismatch",
+        )
+
+        output = run_python(
+            ROOT / "aios/shell/components/ai-center/panel.py",
+            "action",
+            "--ai-readiness",
+            str(ai_readiness),
+            "--ai-onboarding-report",
+            str(ai_onboarding_report),
+            "--model-dir",
+            str(ai_model_dir),
+            "--model-registry",
+            str(ai_model_registry),
+            "--browser-remote-registry",
+            str(browser_remote_registry),
+            "--office-remote-registry",
+            str(office_remote_registry),
+            "--mcp-remote-registry",
+            str(mcp_remote_registry),
+            "--provider-registry-state-dir",
+            str(provider_registry_state_dir),
+            "--action",
+            "open-privacy-memory",
+        )
+        ai_center_privacy_action = json.loads(output)
+        require(
+            ai_center_privacy_action["target_component"] == "privacy-memory",
+            "ai center privacy memory target mismatch",
+        )
+        require(
+            ai_center_privacy_action["target_route"] is None,
+            "ai center privacy memory route mismatch",
+        )
+
+        output = run_python(
+            ROOT / "aios/shell/components/ai-center/panel.py",
+            "action",
+            "--ai-readiness",
+            str(ai_readiness),
+            "--ai-onboarding-report",
+            str(ai_onboarding_report),
+            "--model-dir",
+            str(ai_model_dir),
+            "--model-registry",
+            str(ai_model_registry),
+            "--browser-remote-registry",
+            str(browser_remote_registry),
+            "--office-remote-registry",
+            str(office_remote_registry),
+            "--mcp-remote-registry",
+            str(mcp_remote_registry),
+            "--provider-registry-state-dir",
+            str(provider_registry_state_dir),
+            "--action",
+            "open-remote-governance",
+        )
+        ai_center_governance_action = json.loads(output)
+        require(
+            ai_center_governance_action["target_component"] == "remote-governance",
+            "ai center remote governance target mismatch",
+        )
+
+        output = run_python(
+            ROOT / "aios/shell/components/provider-settings/panel.py",
+            "model",
+            "--ai-readiness",
+            str(ai_readiness),
+            "--ai-onboarding-report",
+            str(ai_onboarding_report),
+            "--runtime-platform-env",
+            str(runtime_platform_env),
+        )
+        provider_settings_model = json.loads(output)
+        require(
+            provider_settings_model["panel_id"] == "provider-settings-panel",
+            "provider settings panel id mismatch",
+        )
+        require(
+            provider_settings_model["meta"]["provider_enabled"] is True,
+            "provider settings enabled mismatch",
+        )
+        require(
+            provider_settings_model["meta"]["route_preference"] == "local-first",
+            "provider settings route preference mismatch",
+        )
+        require(
+            provider_settings_model["meta"]["endpoint_source"] == "runtime-platform-env",
+            "provider settings endpoint source mismatch",
+        )
+        require(
+            provider_settings_model["meta"]["endpoint_api_key_configured"] is True,
+            "provider settings api key configured mismatch",
+        )
+        require(
+            provider_settings_model["meta"]["endpoint_api_key_masked"] != "panel-smoke-secret-token",
+            "provider settings api key must be masked",
+        )
+        require(
+            provider_settings_model["meta"]["local_cpu_enabled"] is True,
+            "provider settings local cpu mismatch",
+        )
+
+        output = run_python(
+            ROOT / "aios/shell/components/provider-settings/panel.py",
+            "action",
+            "--ai-readiness",
+            str(ai_readiness),
+            "--ai-onboarding-report",
+            str(ai_onboarding_report),
+            "--runtime-platform-env",
+            str(runtime_platform_env),
+            "--action",
+            "route-remote-first",
+        )
+        provider_settings_action = json.loads(output)
+        require(
+            provider_settings_action["status"] == "saved",
+            "provider settings action status mismatch",
+        )
+        require(
+            provider_settings_action["route_preference"] == "remote-first",
+            "provider settings action route mismatch",
+        )
+
+        output = run_python(
+            ROOT / "aios/shell/components/provider-settings/panel.py",
+            "model",
+            "--ai-readiness",
+            str(ai_readiness),
+            "--ai-onboarding-report",
+            str(ai_onboarding_report),
+            "--runtime-platform-env",
+            str(runtime_platform_env),
+        )
+        provider_settings_model_after_route = json.loads(output)
+        require(
+            provider_settings_model_after_route["meta"]["route_preference"] == "remote-first",
+            "provider settings route persistence mismatch",
+        )
+
+        output = run_python(
+            ROOT / "aios/shell/components/privacy-memory/panel.py",
+            "model",
+            "--runtime-platform-env",
+            str(runtime_platform_env),
+        )
+        privacy_memory_model = json.loads(output)
+        require(
+            privacy_memory_model["panel_id"] == "privacy-memory-panel",
+            "privacy memory panel id mismatch",
+        )
+        require(
+            privacy_memory_model["meta"]["memory_enabled"] is True,
+            "privacy memory enabled mismatch",
+        )
+        require(
+            privacy_memory_model["meta"]["memory_retention_days"] == 30,
+            "privacy memory retention mismatch",
+        )
+        require(
+            privacy_memory_model["meta"]["audit_retention_days"] == 90,
+            "privacy audit retention mismatch",
+        )
+        require(
+            privacy_memory_model["meta"]["approval_default_policy"] == "prompt-required",
+            "privacy approval policy mismatch",
+        )
+        require(
+            privacy_memory_model["meta"]["remote_prompt_level"] == "full",
+            "privacy remote prompt level mismatch",
+        )
+
+        output = run_python(
+            ROOT / "aios/shell/components/privacy-memory/panel.py",
+            "action",
+            "--runtime-platform-env",
+            str(runtime_platform_env),
+            "--action",
+            "remote-prompt-summary",
+        )
+        privacy_memory_action = json.loads(output)
+        require(
+            privacy_memory_action["status"] == "saved",
+            "privacy memory action status mismatch",
+        )
+        require(
+            privacy_memory_action["remote_prompt_level"] == "summary",
+            "privacy memory action prompt mismatch",
+        )
+
+        assistant_session_fixture = temp_root / "assistant-session-fixture.json"
+        assistant_session_fixture.write_text(
+            session_fixture.read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+        assistant_task_fixture = temp_root / "assistant-task-fixture.json"
+        assistant_task_fixture.write_text(
+            task_fixture.read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+        assistant_approval_fixture = temp_root / "assistant-approvals.json"
+        assistant_approval_fixture.write_text(
+            approval_fixture.read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+
+        output = run_python(
+            ROOT / "aios/shell/components/system-assistant/panel.py",
+            "model",
+            "--fixture",
+            str(assistant_session_fixture),
+            "--task-fixture",
+            str(assistant_task_fixture),
+            "--approval-fixture",
+            str(assistant_approval_fixture),
+            "--session-id",
+            "session-1",
+            "--user-id",
+            "user-1",
+            "--intent",
+            "summarize docs",
+            "--title",
+            "summarize docs",
+            "--ai-readiness",
+            str(ai_readiness),
+            "--ai-onboarding-report",
+            str(ai_onboarding_report),
+            "--model-dir",
+            str(ai_model_dir),
+            "--model-registry",
+            str(ai_model_registry),
+            "--runtime-platform-env",
+            str(runtime_platform_env),
+        )
+        system_assistant_model = json.loads(output)
+        require(
+            system_assistant_model["panel_id"] == "system-assistant-panel",
+            "system assistant panel id mismatch",
+        )
+        require(
+            system_assistant_model["meta"]["resolved_session_id"] == "session-1",
+            "system assistant session mismatch",
+        )
+        require(
+            system_assistant_model["meta"]["task_count"] == 2,
+            "system assistant task count mismatch",
+        )
+        require(
+            system_assistant_model["meta"]["pending_approval_count"] == 1,
+            "system assistant pending approval mismatch",
+        )
+        require(
+            system_assistant_model["meta"]["default_text_generation_model"] == "local-qwen-mini",
+            "system assistant default model mismatch",
+        )
+        require(
+            system_assistant_model["meta"]["route_preference"] == "remote-first",
+            "system assistant route preference mismatch",
+        )
+        require(
+            system_assistant_model["meta"]["approval_default_policy"] == "prompt-required",
+            "system assistant approval policy mismatch",
+        )
+        require(
+            system_assistant_model["meta"]["remote_prompt_level"] == "summary",
+            "system assistant remote prompt mismatch",
+        )
+
+        output = run_python(
+            ROOT / "aios/shell/components/system-assistant/panel.py",
+            "action",
+            "--fixture",
+            str(assistant_session_fixture),
+            "--task-fixture",
+            str(assistant_task_fixture),
+            "--approval-fixture",
+            str(assistant_approval_fixture),
+            "--session-id",
+            "session-1",
+            "--user-id",
+            "user-1",
+            "--intent",
+            "summarize docs",
+            "--title",
+            "summarize docs",
+            "--ai-readiness",
+            str(ai_readiness),
+            "--ai-onboarding-report",
+            str(ai_onboarding_report),
+            "--model-dir",
+            str(ai_model_dir),
+            "--model-registry",
+            str(ai_model_registry),
+            "--runtime-platform-env",
+            str(runtime_platform_env),
+            "--action",
+            "submit-request",
+        )
+        system_assistant_submit = json.loads(output)
+        require(
+            system_assistant_submit["status"] == "submitted",
+            "system assistant low-risk submit status mismatch",
+        )
+        require(
+            system_assistant_submit["target_component"] == "task-surface",
+            "system assistant low-risk route mismatch",
+        )
+        require(
+            system_assistant_submit["approval_required"] is False,
+            "system assistant low-risk approval mismatch",
+        )
+        require(
+            system_assistant_submit["task"]["task_id"] == "task-3",
+            "system assistant low-risk task id mismatch",
+        )
+        require(
+            system_assistant_submit["task"]["title"] == "summarize docs",
+            "system assistant low-risk title mismatch",
+        )
+
+        output = run_python(
+            ROOT / "aios/shell/components/system-assistant/panel.py",
+            "action",
+            "--fixture",
+            str(assistant_session_fixture),
+            "--task-fixture",
+            str(assistant_task_fixture),
+            "--approval-fixture",
+            str(assistant_approval_fixture),
+            "--session-id",
+            "session-1",
+            "--user-id",
+            "user-1",
+            "--intent",
+            "share screen with support",
+            "--title",
+            "share screen with support",
+            "--ai-readiness",
+            str(ai_readiness),
+            "--ai-onboarding-report",
+            str(ai_onboarding_report),
+            "--model-dir",
+            str(ai_model_dir),
+            "--model-registry",
+            str(ai_model_registry),
+            "--runtime-platform-env",
+            str(runtime_platform_env),
+            "--action",
+            "submit-request",
+        )
+        system_assistant_high_risk = json.loads(output)
+        require(
+            system_assistant_high_risk["status"] == "approval-required",
+            "system assistant high-risk submit status mismatch",
+        )
+        require(
+            system_assistant_high_risk["target_component"] == "approval-panel",
+            "system assistant high-risk route mismatch",
+        )
+        require(
+            system_assistant_high_risk["approval_required"] is True,
+            "system assistant high-risk approval flag mismatch",
+        )
+        require(
+            system_assistant_high_risk["task"]["task_id"] == "task-4",
+            "system assistant high-risk task id mismatch",
+        )
+        require(
+            system_assistant_high_risk["approval_ref"] == "approval-2",
+            "system assistant high-risk approval ref mismatch",
+        )
+        require(
+            system_assistant_high_risk["capability_id"] == "device.capture.screen.read",
+            "system assistant high-risk capability mismatch",
+        )
+
+        output = run_python(
+            ROOT / "aios/shell/components/model-library/panel.py",
+            "model",
+            "--ai-readiness",
+            str(ai_readiness),
+            "--ai-onboarding-report",
+            str(ai_onboarding_report),
+            "--model-dir",
+            str(ai_model_dir),
+            "--model-registry",
+            str(ai_model_registry),
+            "--import-source",
+            str(ai_model_import_source),
+        )
+        model_library_model = json.loads(output)
+        require(model_library_model["panel_id"] == "model-library-panel", "model library panel id mismatch")
+        require(model_library_model["meta"]["local_model_count"] == 1, "model library initial count mismatch")
+        require(
+            model_library_model["meta"]["default_text_generation_model"] == "local-qwen-mini",
+            "model library initial default mismatch",
+        )
+        require(
+            model_library_model["meta"]["import_source_ready"] is True,
+            "model library import source readiness mismatch",
+        )
+        require(
+            model_library_model["meta"]["recommended_model_count"] >= 4,
+            "model library recommended catalog count mismatch",
+        )
+        require(
+            model_library_model["meta"]["recommended_catalog_status"] == "ready",
+            "model library recommended catalog status mismatch",
+        )
+        require(
+            any(action.get("action_id") == "import-local-model" and action.get("enabled") for action in model_library_model["actions"]),
+            "model library import action missing",
+        )
+
+        output = run_python(
+            ROOT / "aios/shell/components/model-library/panel.py",
+            "action",
+            "--ai-readiness",
+            str(ai_readiness),
+            "--ai-onboarding-report",
+            str(ai_onboarding_report),
+            "--model-dir",
+            str(ai_model_dir),
+            "--model-registry",
+            str(ai_model_registry),
+            "--import-source",
+            str(ai_model_import_source),
+            "--action",
+            "import-local-model",
+        )
+        model_library_import = json.loads(output)
+        require(model_library_import["status"] == "imported", "model library import status mismatch")
+        require(model_library_import["local_model_count"] == 2, "model library import count mismatch")
+        require(
+            model_library_import["imported"]["model_id"] == "import-model",
+            "model library imported model id mismatch",
+        )
+
+        output = run_python(
+            ROOT / "aios/shell/components/model-library/panel.py",
+            "model",
+            "--ai-readiness",
+            str(ai_readiness),
+            "--ai-onboarding-report",
+            str(ai_onboarding_report),
+            "--model-dir",
+            str(ai_model_dir),
+            "--model-registry",
+            str(ai_model_registry),
+            "--import-source",
+            str(ai_model_import_source),
+        )
+        imported_library_model = json.loads(output)
+        require(imported_library_model["meta"]["local_model_count"] == 2, "model library imported count mismatch")
+        registered_models_section = next(
+            section for section in imported_library_model["sections"] if section["section_id"] == "registered-models"
+        )
+        require(len(registered_models_section["items"]) == 2, "model library registered models mismatch")
+        default_actions_section = next(
+            section for section in imported_library_model["sections"] if section["section_id"] == "default-actions"
+        )
+        require(
+            any(item["action"]["model_id"] == "import-model" for item in default_actions_section["items"]),
+            "model library default action for imported model missing",
+        )
+
+        output = run_python(
+            ROOT / "aios/shell/components/model-library/panel.py",
+            "action",
+            "--ai-readiness",
+            str(ai_readiness),
+            "--ai-onboarding-report",
+            str(ai_onboarding_report),
+            "--model-dir",
+            str(ai_model_dir),
+            "--model-registry",
+            str(ai_model_registry),
+            "--import-source",
+            str(ai_model_import_source),
+            "--action",
+            "set-default-model",
+            "--model-id",
+            "import-model",
+            "--capability",
+            "text-generation",
+        )
+        model_library_default = json.loads(output)
+        require(model_library_default["status"] == "default-updated", "model library default update mismatch")
+        require(
+            model_library_default["model_id"] == "import-model",
+            "model library default model id mismatch",
+        )
+
+        output = run_python(
+            ROOT / "aios/shell/components/model-library/panel.py",
+            "model",
+            "--ai-readiness",
+            str(ai_readiness),
+            "--ai-onboarding-report",
+            str(ai_onboarding_report),
+            "--model-dir",
+            str(ai_model_dir),
+            "--model-registry",
+            str(ai_model_registry),
+            "--import-source",
+            str(ai_model_import_source),
+        )
+        default_switched_model = json.loads(output)
+        require(
+            default_switched_model["meta"]["default_text_generation_model"] == "import-model",
+            "model library switched default mismatch",
+        )
+
+        output = run_python(
+            ROOT / "aios/shell/components/model-library/panel.py",
+            "action",
+            "--ai-readiness",
+            str(ai_readiness),
+            "--ai-onboarding-report",
+            str(ai_onboarding_report),
+            "--model-dir",
+            str(ai_model_dir),
+            "--model-registry",
+            str(ai_model_registry),
+            "--import-source",
+            str(ai_model_import_source),
+            "--action",
+            "delete-model",
+            "--model-id",
+            "import-model",
+        )
+        model_library_delete = json.loads(output)
+        require(model_library_delete["status"] == "deleted", "model library delete status mismatch")
+        require(model_library_delete["local_model_count"] == 1, "model library delete count mismatch")
+
+        output = run_python(
+            ROOT / "aios/shell/components/model-library/panel.py",
+            "model",
+            "--ai-readiness",
+            str(ai_readiness),
+            "--ai-onboarding-report",
+            str(ai_onboarding_report),
+            "--model-dir",
+            str(ai_model_dir),
+            "--model-registry",
+            str(ai_model_registry),
+            "--import-source",
+            str(ai_model_import_source),
+        )
+        deleted_library_model = json.loads(output)
+        require(deleted_library_model["meta"]["local_model_count"] == 1, "model library post-delete count mismatch")
+        require(
+            deleted_library_model["meta"]["default_text_generation_model"] == "local-qwen-mini",
+            "model library post-delete default mismatch",
+        )
+
+        output = run_python(
             ROOT / "aios/shell/components/approval-panel/panel.py",
             "model",
             "--fixture",
             str(approval_fixture),
             "--session-id",
             "session-1",
+            "--runtime-platform-env",
+            str(runtime_platform_env),
         )
         approval_model = json.loads(output)
         require(approval_model["panel_id"] == "approval-panel-shell", "approval panel id mismatch")
         require(approval_model["meta"]["approval_count"] == 1, "approval panel count mismatch")
         require(approval_model["meta"]["data_source_status"] == "ready", "approval panel data-source status mismatch")
+        require(
+            approval_model["meta"]["approval_default_policy"] == "prompt-required",
+            "approval panel policy mismatch",
+        )
+        require(
+            approval_model["meta"]["remote_prompt_level"] == "summary",
+            "approval panel remote prompt mismatch",
+        )
 
         output = run_python(
             ROOT / "aios/shell/components/approval-panel/panel.py",
@@ -957,6 +1789,8 @@ def main() -> int:
             str(temp_root / "missing-policyd.sock"),
             "--session-id",
             "session-missing",
+            "--runtime-platform-env",
+            str(runtime_platform_env),
         )
         approval_fallback_model = json.loads(output)
         require(
@@ -1001,6 +1835,16 @@ def main() -> int:
             str(provider_registry_state_dir),
             "--approval-fixture",
             str(approval_fixture),
+            "--ai-readiness",
+            str(ai_readiness),
+            "--ai-onboarding-report",
+            str(ai_onboarding_report),
+            "--runtime-platform-env",
+            str(runtime_platform_env),
+            "--model-dir",
+            str(ai_model_dir),
+            "--model-registry",
+            str(ai_model_registry),
             "--compositor-runtime-state",
             str(compositor_runtime_state),
             "--compositor-window-state",
@@ -1008,10 +1852,11 @@ def main() -> int:
         )
         notification_model = json.loads(output)
         require(notification_model["panel_id"] == "notification-center-panel", "notification panel id mismatch")
-        require(notification_model["meta"]["notification_count"] == 13, "notification panel count mismatch")
+        require(notification_model["meta"]["notification_count"] == 14, "notification panel count mismatch")
         require(notification_model["meta"]["severity_summary"]["high"] == 5, "notification panel severity mismatch")
         require(notification_model["meta"]["source_summary"]["shell"] == 2, "notification panel shell source mismatch")
         require(notification_model["meta"]["source_summary"]["compositor"] == 2, "notification panel compositor source mismatch")
+        require(notification_model["meta"]["source_summary"]["ai"] == 1, "notification panel AI source mismatch")
         require(notification_model["meta"]["kind_summary"]["panel-action-error"] == 1, "notification panel shell error kind mismatch")
         require(notification_model["meta"]["operator_audit_issue_count"] == 4, "notification panel operator audit issue mismatch")
         require(notification_model["meta"]["operator_audit_task_count"] == 4, "notification panel operator audit task mismatch")
@@ -1040,6 +1885,11 @@ def main() -> int:
             notification_model["meta"]["remote_governance_source_counts"].get("mcp") == 1,
             "notification panel remote governance mcp source mismatch",
         )
+        require(notification_model["meta"]["ai_readiness_state"] == "setup-pending", "notification panel AI readiness state mismatch")
+        require(notification_model["meta"]["ai_readiness_next_action"] == "open-ai-center", "notification panel AI next action mismatch")
+        require(notification_model["meta"]["ai_current_route"] == "cloud", "notification panel AI route mismatch")
+        require(notification_model["meta"]["ai_current_model"] == "qwen2.5:7b-instruct", "notification panel AI model mismatch")
+        require(notification_model["meta"]["ai_route_preference"] == "remote-first", "notification panel AI route preference mismatch")
         remote_governance_section = next(
             section for section in notification_model["sections"] if section["section_id"] == "remote-governance"
         )
@@ -1065,6 +1915,14 @@ def main() -> int:
         require(window_manager_items["Workspace"] == "workspace-2", "notification panel workspace section mismatch")
         require(window_manager_items["Minimized"] == 1, "notification panel minimized section mismatch")
         require(window_manager_items["Output Status"] == "uninitialized", "notification panel output status mismatch")
+        ai_readiness_section = next(
+            section for section in notification_model["sections"] if section["section_id"] == "ai-readiness"
+        )
+        ai_readiness_items = {item["label"]: item["value"] for item in ai_readiness_section["items"]}
+        require(ai_readiness_items["State"] == "Setup Pending", "notification panel AI section state mismatch")
+        require(ai_readiness_items["Current Route"] == "Cloud Model", "notification panel AI section route mismatch")
+        require(ai_readiness_items["Current Model"] == "qwen2.5:7b-instruct", "notification panel AI section model mismatch")
+        require(ai_readiness_items["Next Action"] == "open-ai-center", "notification panel AI section action mismatch")
 
         output = run_python(
             ROOT / "aios/shell/components/notification-center/panel.py",
@@ -1093,6 +1951,10 @@ def main() -> int:
             str(provider_registry_state_dir),
             "--approval-fixture",
             str(approval_fixture),
+            "--ai-readiness",
+            str(ai_readiness),
+            "--ai-onboarding-report",
+            str(ai_onboarding_report),
             "--compositor-runtime-state",
             str(compositor_runtime_state),
             "--compositor-window-state",
@@ -1134,6 +1996,52 @@ def main() -> int:
             str(provider_registry_state_dir),
             "--approval-fixture",
             str(approval_fixture),
+            "--ai-readiness",
+            str(ai_readiness),
+            "--ai-onboarding-report",
+            str(ai_onboarding_report),
+            "--compositor-runtime-state",
+            str(compositor_runtime_state),
+            "--compositor-window-state",
+            str(compositor_window_state),
+            "--action",
+            "open-ai-center",
+        )
+        notification_ai_action = json.loads(output)
+        require(notification_ai_action["enabled"] is True, "notification panel AI action disabled")
+        require(notification_ai_action["target_component"] == "ai-center", "notification panel AI action target mismatch")
+
+        output = run_python(
+            ROOT / "aios/shell/components/notification-center/panel.py",
+            "action",
+            "--recovery-surface",
+            str(recovery_surface),
+            "--indicator-state",
+            str(indicator_state),
+            "--backend-state",
+            str(backend_state),
+            "--policy-audit-log",
+            str(policy_audit_log),
+            "--runtime-events-log",
+            str(runtime_events_log),
+            "--remote-audit-log",
+            str(remote_audit_log),
+            "--compat-observability-log",
+            str(compat_observability_log),
+            "--browser-remote-registry",
+            str(browser_remote_registry),
+            "--office-remote-registry",
+            str(office_remote_registry),
+            "--mcp-remote-registry",
+            str(mcp_remote_registry),
+            "--provider-registry-state-dir",
+            str(provider_registry_state_dir),
+            "--approval-fixture",
+            str(approval_fixture),
+            "--ai-readiness",
+            str(ai_readiness),
+            "--ai-onboarding-report",
+            str(ai_onboarding_report),
             "--compositor-runtime-state",
             str(compositor_runtime_state),
             "--compositor-window-state",
@@ -1168,6 +2076,8 @@ def main() -> int:
             "task-compat-1",
             "--write-report",
             str(temp_root / "operator-audit-report.json"),
+            "--runtime-platform-env",
+            str(runtime_platform_env),
         )
         operator_audit_model = json.loads(output)
         require(operator_audit_model["panel_id"] == "operator-audit-panel", "operator audit panel id mismatch")
@@ -1195,6 +2105,14 @@ def main() -> int:
             operator_audit_model["meta"]["filtered_source_counts"]["compat"] == 1,
             "operator audit panel filtered source count mismatch",
         )
+        require(
+            operator_audit_model["meta"]["audit_retention_days"] == 90,
+            "operator audit panel audit retention mismatch",
+        )
+        require(
+            operator_audit_model["meta"]["remote_prompt_level"] == "summary",
+            "operator audit panel remote prompt mismatch",
+        )
 
         output = run_python(
             ROOT / "aios/shell/components/operator-audit/panel.py",
@@ -1218,6 +2136,8 @@ def main() -> int:
             "--issue-only",
             "--fleet-id",
             "fleet-office",
+            "--runtime-platform-env",
+            str(runtime_platform_env),
         )
         operator_audit_governance_model = json.loads(output)
         require(
@@ -1258,6 +2178,8 @@ def main() -> int:
             str(provider_registry_state_dir),
             "--fleet-id",
             "fleet-office",
+            "--runtime-platform-env",
+            str(runtime_platform_env),
             "--action",
             "inspect-remote-governance",
         )

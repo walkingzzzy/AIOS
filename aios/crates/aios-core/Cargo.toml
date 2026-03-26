@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+aios-contracts = { path = "../aios-contracts" }
 anyhow.workspace = true
 chrono.workspace = true
 jsonschema.workspace = true

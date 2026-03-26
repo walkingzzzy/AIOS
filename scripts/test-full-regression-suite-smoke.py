@@ -12,6 +12,7 @@ from jsonschema import Draft202012Validator
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OUTPUT_PREFIX = ROOT / "out" / "validation" / "full-regression-report"
 SCHEMA_PATH = ROOT / "aios" / "observability" / "schemas" / "full-regression-report.schema.json"
+UTF8 = "utf-8"
 
 
 def parse_args() -> argparse.Namespace:
@@ -31,7 +32,7 @@ def require(condition: bool, message: str) -> None:
 
 
 def load_json(path: Path):
-    return json.loads(path.read_text())
+    return json.loads(path.read_text(encoding=UTF8))
 
 
 def main() -> int:
@@ -75,7 +76,7 @@ def main() -> int:
     require(any(step["name"] == "Run full system delivery validation" for step in report["steps"]), "missing system delivery validation step")
     require(any(step["name"] == "Build governance evidence index" for step in report["steps"]), "missing governance evidence index step")
     require(any(step["name"] == "Run release gate" for step in report["steps"]), "missing release gate step")
-    require("AIOS Full Regression Report" in markdown_report.read_text(), "markdown report title missing")
+    require("AIOS Full Regression Report" in markdown_report.read_text(encoding=UTF8), "markdown report title missing")
 
     print(
         json.dumps(

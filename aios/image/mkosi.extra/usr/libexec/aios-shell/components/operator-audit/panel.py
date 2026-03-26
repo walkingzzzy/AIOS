@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
+import sys
 import time
 from pathlib import Path
+from types import ModuleType
 
 from prototype import (
     FILTER_FIELDS,
@@ -26,6 +29,40 @@ SEVERITY_TONES = {
     "medium": "warning",
     "info": "neutral",
 }
+_PRIVACY_MEMORY_PROTOTYPE_MODULE: ModuleType | None = None
+
+
+def _load_module(module_name: str, path: Path) -> ModuleType:
+    module = sys.modules.get(module_name)
+    if module is not None:
+        return module
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"unable to load module from {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_privacy_memory_prototype_module() -> ModuleType:
+    global _PRIVACY_MEMORY_PROTOTYPE_MODULE
+    if _PRIVACY_MEMORY_PROTOTYPE_MODULE is not None:
+        return _PRIVACY_MEMORY_PROTOTYPE_MODULE
+    module_path = Path(__file__).resolve().parents[1] / "privacy-memory" / "prototype.py"
+    _PRIVACY_MEMORY_PROTOTYPE_MODULE = _load_module(
+        "aios_shell_privacy_memory_prototype",
+        module_path,
+    )
+    return _PRIVACY_MEMORY_PROTOTYPE_MODULE
+
+
+def default_runtime_platform_env_path() -> Path:
+    return load_privacy_memory_prototype_module().default_runtime_platform_env_path()
+
+
+def build_privacy_memory_state(runtime_platform_env_path: Path | None) -> dict:
+    return load_privacy_memory_prototype_module().build_privacy_memory_state(runtime_platform_env_path)
 
 
 def tone_for(severity: str | None) -> str:
@@ -46,12 +83,13 @@ def active_filters(audit: dict) -> dict[str, object]:
     }
 
 
-def build_model(audit: dict, *, issue_only: bool, limit: int) -> dict:
+def build_model(audit: dict, *, issue_only: bool, limit: int, privacy_memory: dict | None = None) -> dict:
     issues = list(audit.get("issues", []))
     recent_records = list(audit.get("recent_records", []))
     remote_governance = audit.get("remote_governance") or {}
     governance_issues = list(audit.get("governance_issues", []))
     filters = active_filters(audit)
+    privacy_memory = privacy_memory or {}
     if issue_only:
         recent_records = issues
     status = "ready"
@@ -115,6 +153,11 @@ def build_model(audit: dict, *, issue_only: bool, limit: int) -> dict:
             },
             {"label": "Sources", "value": len(audit.get("source_counts", {})), "tone": "neutral"},
             {"label": "Tasks", "value": len(audit.get("task_ids", [])), "tone": "neutral"},
+            {
+                "label": "Audit Retention",
+                "value": f"{privacy_memory.get('audit_retention_days')}d",
+                "tone": "neutral",
+            },
         ],
         "actions": actions,
         "sections": [
@@ -166,6 +209,43 @@ def build_model(audit: dict, *, issue_only: bool, limit: int) -> dict:
                 ]
                 + filter_items,
                 "empty_state": "No active query filters",
+            },
+            {
+                "section_id": "governance-defaults",
+                "title": "Governance Defaults",
+                "items": [
+                    {
+                        "label": "Default High-Risk Policy",
+                        "value": privacy_memory.get("approval_default_policy_label") or "Unknown",
+                        "tone": "neutral",
+                    },
+                    {
+                        "label": "Remote Prompt Level",
+                        "value": privacy_memory.get("remote_prompt_level_label") or "Unknown",
+                        "tone": "warning" if privacy_memory.get("remote_prompt_level") == "minimal" else "neutral",
+                    },
+                    {
+                        "label": "Memory Enabled",
+                        "value": privacy_memory.get("memory_enabled", True),
+                        "tone": "positive" if privacy_memory.get("memory_enabled", True) else "neutral",
+                    },
+                    {
+                        "label": "Memory Retention Days",
+                        "value": privacy_memory.get("memory_retention_days"),
+                        "tone": "neutral",
+                    },
+                    {
+                        "label": "Audit Retention Days",
+                        "value": privacy_memory.get("audit_retention_days"),
+                        "tone": "neutral",
+                    },
+                    {
+                        "label": "Runtime Platform Env",
+                        "value": privacy_memory.get("runtime_platform_env_path") or "-",
+                        "tone": "neutral",
+                    },
+                ],
+                "empty_state": "No governance defaults available",
             },
             {
                 "section_id": "recent-records",
@@ -293,6 +373,15 @@ def build_model(audit: dict, *, issue_only: bool, limit: int) -> dict:
             "query": audit.get("query", {}),
             "issue_only": issue_only,
             "limit": limit,
+            "memory_enabled": privacy_memory.get("memory_enabled", True),
+            "memory_retention_days": privacy_memory.get("memory_retention_days"),
+            "audit_retention_days": privacy_memory.get("audit_retention_days"),
+            "approval_default_policy": privacy_memory.get("approval_default_policy"),
+            "approval_default_policy_label": privacy_memory.get("approval_default_policy_label"),
+            "remote_prompt_level": privacy_memory.get("remote_prompt_level"),
+            "remote_prompt_level_label": privacy_memory.get("remote_prompt_level_label"),
+            "runtime_platform_env_path": privacy_memory.get("runtime_platform_env_path"),
+            "runtime_platform_env_exists": privacy_memory.get("runtime_platform_env_exists", False),
         },
     }
 
@@ -355,6 +444,7 @@ def main() -> int:
     parser.add_argument("--attestation-mode")
     parser.add_argument("--control-plane-status")
     parser.add_argument("--write-report", type=Path)
+    parser.add_argument("--runtime-platform-env", type=Path, default=default_runtime_platform_env_path())
     parser.add_argument("--action")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--interval", type=float, default=2.0)
@@ -427,7 +517,12 @@ def main() -> int:
             filters=filters,
             report_path=args.write_report,
         )
-        model = build_model(audit, issue_only=args.issue_only, limit=limit)
+        model = build_model(
+            audit,
+            issue_only=args.issue_only,
+            limit=limit,
+            privacy_memory=build_privacy_memory_state(args.runtime_platform_env),
+        )
         selected = next((item for item in model["actions"] if item["action_id"] == args.action), None)
         if selected is None:
             raise SystemExit(f"unknown action: {args.action}")
@@ -462,7 +557,12 @@ def main() -> int:
                 filters=filters,
                 report_path=args.write_report,
             )
-            model = build_model(audit, issue_only=args.issue_only, limit=limit)
+            model = build_model(
+                audit,
+                issue_only=args.issue_only,
+                limit=limit,
+                privacy_memory=build_privacy_memory_state(args.runtime_platform_env),
+            )
             if args.json:
                 print(json.dumps(model, indent=2, ensure_ascii=False))
             else:
@@ -486,7 +586,12 @@ def main() -> int:
         filters=filters,
         report_path=args.write_report,
     )
-    model = build_model(audit, issue_only=args.issue_only, limit=limit)
+    model = build_model(
+        audit,
+        issue_only=args.issue_only,
+        limit=limit,
+        privacy_memory=build_privacy_memory_state(args.runtime_platform_env),
+    )
     if args.command == "model" or args.json:
         print(json.dumps(model, indent=2, ensure_ascii=False))
     else:

@@ -7,11 +7,14 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
+
+from host_exec import bash_command, bash_path
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_PLATFORM = "generic-x86_64-uefi"
@@ -301,12 +304,13 @@ def prepare_recovery_overlay(
 
 def run_build(script: Path, output_dir: Path, overlay_dir: Path) -> None:
     env = os.environ.copy()
-    env["AIOS_IMAGE_EXTRA_OVERLAY_DIR"] = str(overlay_dir)
+    env["AIOS_IMAGE_EXTRA_OVERLAY_DIR"] = bash_path(overlay_dir)
+    env["AIOS_PYTHON_BIN"] = sys.executable
     if "installer" in script.name:
-        env["AIOS_INSTALLER_IMAGE_OUTPUT_DIR"] = str(output_dir)
+        env["AIOS_INSTALLER_IMAGE_OUTPUT_DIR"] = bash_path(output_dir)
     elif "recovery" in script.name:
-        env["AIOS_RECOVERY_IMAGE_OUTPUT_DIR"] = str(output_dir)
-    subprocess.run(["bash", str(script)], cwd=ROOT, check=True, env=env)
+        env["AIOS_RECOVERY_IMAGE_OUTPUT_DIR"] = bash_path(output_dir)
+    subprocess.run(bash_command(script), cwd=ROOT, check=True, env=env)
 
 
 def copy_artifact(source: Path, destination_dir: Path, destination_name: str) -> dict[str, object]:

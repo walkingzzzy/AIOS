@@ -21,6 +21,11 @@ import shellctl
 SURFACE_ORDER = [
     "launcher",
     "task-surface",
+    "system-assistant",
+    "ai-center",
+    "provider-settings",
+    "privacy-memory",
+    "model-library",
     "approval-panel",
     "portal-chooser",
     "notification-center",
@@ -34,6 +39,11 @@ SURFACE_ORDER_INDEX = {name: index for index, name in enumerate(SURFACE_ORDER)}
 ROLE_BY_COMPONENT = {
     "launcher": "dock",
     "task-surface": "workspace",
+    "system-assistant": "panel",
+    "ai-center": "panel",
+    "provider-settings": "panel",
+    "privacy-memory": "panel",
+    "model-library": "panel",
     "approval-panel": "modal",
     "portal-chooser": "modal",
     "recovery-surface": "modal",
@@ -45,6 +55,11 @@ ROLE_BY_COMPONENT = {
 BASE_STACK_RANK = {
     "launcher": 140,
     "task-surface": 120,
+    "system-assistant": 210,
+    "ai-center": 200,
+    "provider-settings": 203,
+    "privacy-memory": 204,
+    "model-library": 205,
     "approval-panel": 280,
     "portal-chooser": 320,
     "recovery-surface": 340,
@@ -271,6 +286,33 @@ def panel_context_args(args: argparse.Namespace, component: str) -> list[str] | 
             command.extend(["--state", args.task_state_filter])
         if args.limit is not None:
             command.extend(["--limit", str(args.limit)])
+        return command
+
+    if component == "system-assistant":
+        if args.launcher_fixture is not None:
+            command.extend(["--fixture", str(args.launcher_fixture)])
+        if args.task_fixture is not None:
+            command.extend(["--task-fixture", str(args.task_fixture)])
+        if args.approval_fixture is not None:
+            command.extend(["--approval-fixture", str(args.approval_fixture)])
+        if args.session_id:
+            command.extend(["--session-id", args.session_id])
+        if args.user_id:
+            command.extend(["--user-id", args.user_id])
+        if args.task_state:
+            command.extend(["--task-state", args.task_state])
+        return command
+
+    if component == "ai-center":
+        return command
+
+    if component == "provider-settings":
+        return command
+
+    if component == "privacy-memory":
+        return command
+
+    if component == "model-library":
         return command
 
     if component == "approval-panel":

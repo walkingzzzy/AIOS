@@ -104,6 +104,12 @@ def main() -> int:
         recovery_surface = temp_root / "recovery-surface.json"
         indicator_state = temp_root / "indicator-state.json"
         backend_state = temp_root / "backend-state.json"
+        ai_readiness = temp_root / "ai-readiness.json"
+        ai_onboarding_report = temp_root / "ai-onboarding-report.json"
+        ai_model_dir = temp_root / "models"
+        ai_model_registry = temp_root / "model-registry.json"
+        ai_model_import_source = temp_root / "import-model.gguf"
+        runtime_platform_env = temp_root / "runtime-platform.env"
         compositor_runtime_state = temp_root / "compositor-runtime-state.json"
         compositor_window_state = temp_root / "compositor-window-state.json"
         panel_action_log = temp_root / "panel-action-events.jsonl"
@@ -309,6 +315,82 @@ def main() -> int:
                 "notes": ["available_backends=2"],
             },
         )
+        ai_model_dir.mkdir(parents=True, exist_ok=True)
+        write_json(
+            ai_readiness,
+            {
+                "generated_at": "2026-03-09T00:00:00Z",
+                "state": "setup-pending",
+                "reason": "default model pull pending firstboot completion",
+                "next_action": "open-ai-center",
+                "ai_enabled": True,
+                "ai_mode": "hybrid",
+                "local_model_count": 0,
+                "endpoint_configured": True,
+                "report_path": str(ai_onboarding_report),
+            },
+        )
+        write_json(
+            ai_onboarding_report,
+            {
+                "generated_at": "2026-03-09T00:00:00Z",
+                "ai_enabled": True,
+                "ai_mode": "hybrid",
+                "privacy_profile": "balanced",
+                "endpoint_base_url": "http://127.0.0.1:11434/v1",
+                "endpoint_model": "qwen2.5:7b-instruct",
+                "endpoint_configured": True,
+                "local_model_count": 0,
+                "readiness_state": "setup-pending",
+                "readiness_reason": "default model pull pending firstboot completion",
+                "next_action": "open-ai-center",
+            },
+        )
+        ai_model_import_source.write_bytes(b"GGUF" + b"\x00" * 64)
+        runtime_platform_env.write_text(
+            "\n".join(
+                [
+                    "AIOS_RUNTIMED_AI_ENABLED=1",
+                    "AIOS_RUNTIMED_AI_MODE=hybrid",
+                    "AIOS_RUNTIMED_AI_PRIVACY_PROFILE=balanced",
+                    "AIOS_RUNTIMED_AI_ROUTE_PREFERENCE=local-first",
+                    "AIOS_RUNTIMED_LOCAL_CPU_COMMAND=/usr/libexec/aios/runtime/workers/launch_local_cpu_worker.sh",
+                    "AIOS_RUNTIMED_AI_ENDPOINT_BASE_URL=http://127.0.0.1:11434/v1",
+                    "AIOS_RUNTIMED_AI_ENDPOINT_MODEL=qwen2.5:7b-instruct",
+                    "AIOS_RUNTIMED_AI_ENDPOINT_API_KEY=acceptance-secret-token",
+                    "AIOS_RUNTIMED_MEMORY_ENABLED=1",
+                    "AIOS_RUNTIMED_MEMORY_RETENTION_DAYS=30",
+                    "AIOS_RUNTIMED_AUDIT_RETENTION_DAYS=90",
+                    "AIOS_RUNTIMED_APPROVAL_DEFAULT_POLICY=prompt-required",
+                    "AIOS_RUNTIMED_REMOTE_PROMPT_LEVEL=full",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        write_json(
+            ai_model_registry,
+            {
+                "schema_version": "1.0.0",
+                "models": {
+                    "local-qwen-mini": {
+                        "model_id": "local-qwen-mini",
+                        "path": str(ai_model_dir / "local-qwen-mini.gguf"),
+                        "format": "gguf",
+                        "size_bytes": 7340032,
+                        "sha256": "deadbeef",
+                        "aliases": ["default-gen"],
+                        "capabilities": ["text-generation"],
+                        "quantization": "Q4_K_M",
+                        "parameters_estimate": "7B",
+                        "source_kind": "local-import-copy",
+                        "source_uri": "file:///tmp/local-qwen-mini.gguf",
+                    }
+                },
+                "aliases": {"default-gen": "local-qwen-mini"},
+                "defaults": {"text-generation": "local-qwen-mini"},
+            },
+        )
         write_json(
             compositor_runtime_state,
             {
@@ -434,6 +516,11 @@ def main() -> int:
                 "components": {
                     "launcher": True,
                     "task_surface": True,
+                    "system_assistant": True,
+                    "ai_center": True,
+                    "provider_settings": True,
+                    "privacy_memory": True,
+                    "model_library": True,
                     "approval_panel": True,
                     "portal_chooser": True,
                     "notification_center": True,
@@ -445,6 +532,12 @@ def main() -> int:
                     "sessiond_socket": "/tmp/missing-sessiond.sock",
                     "policyd_socket": "/tmp/missing-policyd.sock",
                     "updated_socket": "/tmp/missing-updated.sock",
+                    "ai_readiness_path": str(ai_readiness),
+                    "ai_onboarding_report_path": str(ai_onboarding_report),
+                    "runtime_platform_env_path": str(runtime_platform_env),
+                    "ai_model_dir": str(ai_model_dir),
+                    "ai_model_registry": str(ai_model_registry),
+                    "ai_model_import_source": str(ai_model_import_source),
                     "recovery_surface_model": str(recovery_surface),
                     "capture_indicator_state": str(indicator_state),
                     "device_backend_state": str(backend_state),
@@ -503,7 +596,44 @@ def main() -> int:
             )
             component_map = {surface["component"]: surface for surface in snapshot["surfaces"]}
             require(component_map["task-surface"]["model"]["meta"]["managed_window_count"] == 2, "shell acceptance task panel window count mismatch")
+            require(component_map["task-surface"]["model"]["meta"]["task_inference_route"] == "local", "shell acceptance task route mismatch")
+            require(component_map["task-surface"]["model"]["meta"]["task_model_source"] == "local-qwen-mini", "shell acceptance task model mismatch")
             require(component_map["notification-center"]["model"]["meta"]["compositor_minimized_window_count"] == 1, "shell acceptance notification compositor mismatch")
+            require(component_map["notification-center"]["model"]["meta"]["ai_current_model"] == "local-qwen-mini", "shell acceptance notification AI model mismatch")
+            require(
+                component_map["system-assistant"]["model"]["meta"]["default_text_generation_model"] == "local-qwen-mini",
+                "shell acceptance system assistant model mismatch",
+            )
+            require(
+                component_map["system-assistant"]["model"]["meta"]["pending_approval_count"] == 1,
+                "shell acceptance system assistant approval mismatch",
+            )
+            require(component_map["ai-center"]["model"]["meta"]["local_model_count"] == 1, "shell acceptance ai center model count mismatch")
+            require(
+                component_map["provider-settings"]["model"]["meta"]["route_preference"] == "local-first",
+                "shell acceptance provider settings route mismatch",
+            )
+            require(
+                component_map["provider-settings"]["model"]["meta"]["endpoint_api_key_configured"] is True,
+                "shell acceptance provider settings api key mismatch",
+            )
+            require(
+                component_map["privacy-memory"]["model"]["meta"]["memory_retention_days"] == 30,
+                "shell acceptance privacy memory retention mismatch",
+            )
+            require(
+                component_map["approval-panel"]["model"]["meta"]["approval_default_policy"] == "prompt-required",
+                "shell acceptance approval policy mismatch",
+            )
+            require(component_map["model-library"]["model"]["meta"]["local_model_count"] == 1, "shell acceptance model library count mismatch")
+            require(
+                component_map["model-library"]["model"]["meta"]["import_source_ready"] is True,
+                "shell acceptance model library import source mismatch",
+            )
+            require(
+                component_map["ai-center"]["model"]["meta"]["default_text_generation_model"] == "local-qwen-mini",
+                "shell acceptance ai center default model mismatch",
+            )
             launcher_meta = component_map["launcher"]["model"]["meta"]
             require(launcher_meta["restore_available"] is True, "launcher restore availability mismatch")
             require(launcher_meta["restore_target_component"] == "task-surface", "launcher restore target mismatch")
@@ -583,6 +713,262 @@ def main() -> int:
                 next(action for action in component_map["notification-center"]["model"]["actions"] if action.get("action_id") == "review-approvals"),
             )
             require(notification_review["result"]["target_component"] == "approval-panel", "notification route mismatch")
+
+            notification_ai_center = shell_desktop_gtk.dispatch_panel_action(
+                loaded_profile,
+                action_args,
+                snapshot,
+                "notification-center",
+                next(action for action in component_map["notification-center"]["model"]["actions"] if action.get("action_id") == "open-ai-center"),
+            )
+            require(
+                notification_ai_center["result"]["target_component"] == "ai-center",
+                "notification ai center route mismatch",
+            )
+
+            system_assistant_ai_center = shell_desktop_gtk.dispatch_panel_action(
+                loaded_profile,
+                action_args,
+                snapshot,
+                "system-assistant",
+                next(action for action in component_map["system-assistant"]["model"]["actions"] if action.get("action_id") == "open-ai-center"),
+            )
+            require(
+                system_assistant_ai_center["result"]["target_component"] == "ai-center",
+                "system assistant ai center route mismatch",
+            )
+
+            system_assistant_approval = shell_desktop_gtk.dispatch_panel_action(
+                loaded_profile,
+                action_args,
+                snapshot,
+                "system-assistant",
+                next(action for action in component_map["system-assistant"]["model"]["actions"] if action.get("action_id") == "open-approval-panel"),
+            )
+            require(
+                system_assistant_approval["result"]["target_component"] == "approval-panel",
+                "system assistant approval route mismatch",
+            )
+
+            ai_center_open_library = shell_desktop_gtk.dispatch_panel_action(
+                loaded_profile,
+                action_args,
+                snapshot,
+                "ai-center",
+                next(action for action in component_map["ai-center"]["model"]["actions"] if action.get("action_id") == "open-model-library"),
+            )
+            require(
+                ai_center_open_library["result"]["target_component"] == "model-library",
+                "ai center model library route mismatch",
+            )
+
+            ai_center_open_provider = shell_desktop_gtk.dispatch_panel_action(
+                loaded_profile,
+                action_args,
+                snapshot,
+                "ai-center",
+                next(action for action in component_map["ai-center"]["model"]["actions"] if action.get("action_id") == "open-provider-settings"),
+            )
+            require(
+                ai_center_open_provider["result"]["target_component"] == "provider-settings",
+                "ai center provider settings route mismatch",
+            )
+
+            ai_center_open_privacy = shell_desktop_gtk.dispatch_panel_action(
+                loaded_profile,
+                action_args,
+                snapshot,
+                "ai-center",
+                next(action for action in component_map["ai-center"]["model"]["actions"] if action.get("action_id") == "open-privacy-memory"),
+            )
+            require(
+                ai_center_open_privacy["result"]["target_component"] == "privacy-memory",
+                "ai center privacy memory route mismatch",
+            )
+
+            provider_settings_route = shell_desktop_gtk.dispatch_panel_action(
+                loaded_profile,
+                action_args,
+                snapshot,
+                "provider-settings",
+                next(action for action in component_map["provider-settings"]["model"]["actions"] if action.get("action_id") == "route-remote-first"),
+            )
+            require(
+                provider_settings_route["result"]["status"] == "saved",
+                "provider settings dispatch status mismatch",
+            )
+            require(
+                provider_settings_route["result"]["route_preference"] == "remote-first",
+                "provider settings dispatch route mismatch",
+            )
+
+            privacy_memory_route = shell_desktop_gtk.dispatch_panel_action(
+                loaded_profile,
+                action_args,
+                snapshot,
+                "privacy-memory",
+                next(action for action in component_map["privacy-memory"]["model"]["actions"] if action.get("action_id") == "remote-prompt-summary"),
+            )
+            require(
+                privacy_memory_route["result"]["status"] == "saved",
+                "privacy memory dispatch status mismatch",
+            )
+            require(
+                privacy_memory_route["result"]["remote_prompt_level"] == "summary",
+                "privacy memory dispatch prompt mismatch",
+            )
+
+            model_library_import = shell_desktop_gtk.dispatch_panel_action(
+                loaded_profile,
+                action_args,
+                snapshot,
+                "model-library",
+                next(action for action in component_map["model-library"]["model"]["actions"] if action.get("action_id") == "import-local-model"),
+            )
+            require(model_library_import["result"]["status"] == "imported", "model library import dispatch mismatch")
+            require(
+                model_library_import["result"]["local_model_count"] == 2,
+                "model library import dispatch count mismatch",
+            )
+
+            imported_snapshot = json.loads(
+                run_python(
+                    ROOT / "aios/shell/runtime/shell_session.py",
+                    "snapshot",
+                    "--json",
+                    "--profile",
+                    str(profile),
+                    "--desktop-host",
+                    "gtk",
+                    "--session-backend",
+                    "compositor",
+                    "--session-id",
+                    "session-1",
+                    "--task-id",
+                    "task-1",
+                    "--launcher-fixture",
+                    str(launcher_fixture),
+                    "--task-fixture",
+                    str(task_fixture),
+                    "--approval-fixture",
+                    str(approval_fixture),
+                    "--chooser-fixture",
+                    str(chooser_fixture),
+                )
+            )
+            imported_components = {surface["component"]: surface for surface in imported_snapshot["surfaces"]}
+            require(
+                imported_components["model-library"]["model"]["meta"]["local_model_count"] == 2,
+                "model library imported snapshot mismatch",
+            )
+            model_default_actions = next(
+                section
+                for section in imported_components["model-library"]["model"]["sections"]
+                if section["section_id"] == "default-actions"
+            )
+            imported_default_action = next(
+                item["action"]
+                for item in model_default_actions["items"]
+                if item["action"].get("model_id") == "import-model"
+            )
+            model_library_default = shell_desktop_gtk.dispatch_panel_action(
+                loaded_profile,
+                action_args,
+                imported_snapshot,
+                "model-library",
+                imported_default_action,
+            )
+            require(
+                model_library_default["result"]["status"] == "default-updated",
+                "model library default dispatch mismatch",
+            )
+
+            default_snapshot = json.loads(
+                run_python(
+                    ROOT / "aios/shell/runtime/shell_session.py",
+                    "snapshot",
+                    "--json",
+                    "--profile",
+                    str(profile),
+                    "--desktop-host",
+                    "gtk",
+                    "--session-backend",
+                    "compositor",
+                    "--session-id",
+                    "session-1",
+                    "--task-id",
+                    "task-1",
+                    "--launcher-fixture",
+                    str(launcher_fixture),
+                    "--task-fixture",
+                    str(task_fixture),
+                    "--approval-fixture",
+                    str(approval_fixture),
+                    "--chooser-fixture",
+                    str(chooser_fixture),
+                )
+            )
+            default_components = {surface["component"]: surface for surface in default_snapshot["surfaces"]}
+            require(
+                default_components["ai-center"]["model"]["meta"]["default_text_generation_model"] == "import-model",
+                "ai center imported default snapshot mismatch",
+            )
+            delete_actions_section = next(
+                section
+                for section in default_components["model-library"]["model"]["sections"]
+                if section["section_id"] == "delete-actions"
+            )
+            imported_delete_action = next(
+                item["action"]
+                for item in delete_actions_section["items"]
+                if item["action"].get("model_id") == "import-model"
+            )
+            model_library_delete = shell_desktop_gtk.dispatch_panel_action(
+                loaded_profile,
+                action_args,
+                default_snapshot,
+                "model-library",
+                imported_delete_action,
+            )
+            require(
+                model_library_delete["result"]["status"] == "deleted",
+                "model library delete dispatch mismatch",
+            )
+
+            deleted_snapshot = json.loads(
+                run_python(
+                    ROOT / "aios/shell/runtime/shell_session.py",
+                    "snapshot",
+                    "--json",
+                    "--profile",
+                    str(profile),
+                    "--desktop-host",
+                    "gtk",
+                    "--session-backend",
+                    "compositor",
+                    "--session-id",
+                    "session-1",
+                    "--task-id",
+                    "task-1",
+                    "--launcher-fixture",
+                    str(launcher_fixture),
+                    "--task-fixture",
+                    str(task_fixture),
+                    "--approval-fixture",
+                    str(approval_fixture),
+                    "--chooser-fixture",
+                    str(chooser_fixture),
+                )
+            )
+            deleted_components = {surface["component"]: surface for surface in deleted_snapshot["surfaces"]}
+            require(
+                deleted_components["model-library"]["model"]["meta"]["local_model_count"] == 1,
+                "model library deleted snapshot count mismatch",
+            )
+            require(
+                deleted_components["ai-center"]["model"]["meta"]["default_text_generation_model"] == "local-qwen-mini",
+                "ai center deleted snapshot default mismatch",
+            )
 
             capture_review = shell_desktop_gtk.dispatch_panel_action(
                 loaded_profile,

@@ -17,9 +17,13 @@ import time
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
 WORKER_SCRIPT = REPO_ROOT / "aios" / "runtime" / "workers" / "local_cpu_worker.py"
+
+from aios.runtime.workers.local_cpu_worker import _env_int, _env_truthy
 
 WORKER_CONTRACT = "runtime-worker-v1"
 BACKEND_ID = "local-cpu"
@@ -34,6 +38,7 @@ def _invoke_worker(
 ) -> subprocess.CompletedProcess[str]:
     env = {**os.environ}
     env["AIOS_WORKER_BACKEND"] = "echo"
+    env["AIOS_WORKER_ALLOW_ECHO_FALLBACK"] = "1"
     env.pop("AIOS_WORKER_MODEL_PATH", None)
     if env_overrides:
         env.update(env_overrides)
@@ -212,6 +217,70 @@ class TestLocalCpuWorkerSmoke(unittest.TestCase):
         )
         resp = json.loads(result.stdout)
         self.assertTrue(resp.get("worker_error", False) or resp.get("rejected", False))
+
+    def test_product_mode_without_echo_fallback_returns_not_ready(self) -> None:
+        result = _invoke_worker(
+            _make_request(),
+            env_overrides={
+                "AIOS_WORKER_PRODUCT_MODE": "1",
+                "AIOS_WORKER_ALLOW_ECHO_FALLBACK": "0",
+            },
+        )
+        self.assertEqual(result.returncode, 0)
+        resp = json.loads(result.stdout)
+        self.assertEqual(resp["route_state"], "local-cpu-not-ready")
+        self.assertEqual(resp.get("provider_status"), "unavailable")
+        self.assertTrue(resp.get("worker_error", False))
+        self.assertTrue(resp["rejected"])
+        self.assertIn("AI is not ready", resp.get("reason", ""))
+        self.assertIn("product_mode=true", resp.get("notes", []))
+        self.assertIn("echo_fallback_enabled=false", resp.get("notes", []))
+
+    def test_product_mode_rejects_explicit_echo_backend_without_override(self) -> None:
+        result = _invoke_worker(
+            _make_request(),
+            env_overrides={
+                "AIOS_RUNTIMED_PRODUCT_MODE": "1",
+                "AIOS_WORKER_BACKEND": "echo",
+                "AIOS_WORKER_ALLOW_ECHO_FALLBACK": "0",
+            },
+        )
+        self.assertEqual(result.returncode, 0)
+        resp = json.loads(result.stdout)
+        self.assertEqual(resp["route_state"], "local-cpu-not-ready")
+        self.assertTrue(resp["rejected"])
+        self.assertEqual(resp.get("worker_error_class"), "unavailable")
+
+    def test_non_product_mode_can_still_use_echo_fallback(self) -> None:
+        result = _invoke_worker(
+            _make_request(),
+            env_overrides={
+                "AIOS_WORKER_PRODUCT_MODE": "0",
+                "AIOS_RUNTIMED_PRODUCT_MODE": "0",
+                "AIOS_WORKER_BACKEND": "echo",
+                "AIOS_WORKER_ALLOW_ECHO_FALLBACK": "1",
+            },
+        )
+        self.assertEqual(result.returncode, 0)
+        resp = json.loads(result.stdout)
+        self.assertEqual(resp["route_state"], "local-cpu-echo")
+        self.assertEqual(resp.get("provider_status"), "degraded")
+
+    def test_env_int_uses_default_when_unset(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(_env_int("AIOS_WORKER_MAX_TOKENS", 256), 256)
+
+    def test_env_int_parses_valid_integer(self) -> None:
+        with mock.patch.dict(os.environ, {"AIOS_WORKER_MAX_TOKENS": "512"}, clear=True):
+            self.assertEqual(_env_int("AIOS_WORKER_MAX_TOKENS", 256), 512)
+
+    def test_env_int_falls_back_for_invalid_integer(self) -> None:
+        with mock.patch.dict(os.environ, {"AIOS_WORKER_MAX_TOKENS": "not-an-int"}, clear=True):
+            self.assertEqual(_env_int("AIOS_WORKER_MAX_TOKENS", 256), 256)
+
+    def test_env_truthy_does_not_treat_numeric_strings_as_integers(self) -> None:
+        with mock.patch.dict(os.environ, {"AIOS_WORKER_ALLOW_ECHO_FALLBACK": "256"}, clear=True):
+            self.assertFalse(_env_truthy("AIOS_WORKER_ALLOW_ECHO_FALLBACK"))
 
     # ------------------------------------------------------------------
     # Estimated latency is present

@@ -1,0 +1,13 @@
+component_id: privacy-memory
+status: in_progress
+kind: shell-panel
+owner: aios-shell
+consumes:
+  - aios-runtime.platform.env
+capabilities:
+  - show_privacy_memory_configuration
+  - persist_privacy_memory_configuration
+  - reflect_governance_defaults
+entrypoint: client.py
+prototype_entrypoint: prototype.py
+panel_entrypoint: panel.py

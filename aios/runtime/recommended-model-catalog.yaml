@@ -1,0 +1,80 @@
+schema_version: "1.0.0"
+catalog_id: "aios-official-recommended-models"
+catalog_label: "AIOS Official Recommended Models"
+models:
+  - model_id: "qwen2-5-7b-instruct"
+    display_name: "Qwen2.5 7B Instruct"
+    description: "AIOS 默认推荐的本地通用对话模型，适合 system-assistant 与 task-surface。"
+    capabilities:
+      - "text-generation"
+    formats:
+      - "gguf"
+    aliases:
+      - "qwen2.5:7b-instruct"
+      - "qwen2.5-7b-instruct"
+      - "qwen2-5-7b"
+    distribution_strategy: "manual-import"
+    recommended_modes:
+      - "local"
+      - "hybrid"
+    default_recommended: true
+    sources:
+      - kind: "local-file"
+        value: "qwen2.5-7b-instruct.gguf"
+        display: "手动导入本地 GGUF"
+      - kind: "openai-compatible"
+        value: "qwen2.5:7b-instruct"
+        display: "通过兼容远端 endpoint 使用"
+  - model_id: "phi-4-mini-instruct"
+    display_name: "Phi-4 Mini Instruct"
+    description: "适合厂商预装镜像和开发样机的小体积默认聊天模型。"
+    capabilities:
+      - "text-generation"
+    formats:
+      - "gguf"
+    aliases:
+      - "phi-4-mini"
+    distribution_strategy: "preload"
+    recommended_modes:
+      - "local"
+    sources:
+      - kind: "preload-image"
+        value: "vendor-image-slot"
+        display: "由厂商镜像预置"
+  - model_id: "bge-small-en-v1-5"
+    display_name: "BGE Small EN v1.5"
+    description: "AIOS 默认推荐的本地 embedding 模型，适合轻量检索与记忆索引。"
+    capabilities:
+      - "embedding"
+    formats:
+      - "safetensors"
+    aliases:
+      - "bge-small-en"
+      - "bge-small"
+    distribution_strategy: "firstboot-download"
+    recommended_modes:
+      - "local"
+      - "hybrid"
+    default_recommended: true
+    sources:
+      - kind: "firstboot-download"
+        value: "bge-small-en-v1.5"
+        display: "首启批准后下载"
+  - model_id: "jina-reranker-v2-base-multilingual"
+    display_name: "Jina Reranker v2 Base Multilingual"
+    description: "AIOS 默认推荐的 reranking 模型，适合多语种检索重排。"
+    capabilities:
+      - "reranking"
+    formats:
+      - "safetensors"
+    aliases:
+      - "jina-reranker-v2"
+    distribution_strategy: "manual-import"
+    recommended_modes:
+      - "local"
+      - "hybrid"
+    default_recommended: true
+    sources:
+      - kind: "local-file"
+        value: "jina-reranker-v2-base-multilingual/"
+        display: "手动导入本地模型目录"

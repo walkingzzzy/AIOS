@@ -522,8 +522,9 @@ pub fn build_router(state: AppState) -> Arc<RpcRouter> {
             } else {
                 None
             };
-        let route = crate::clients::resolve_route(&submit_state, Some("local-cpu".to_string()))
+        let route = crate::clients::resolve_route(&submit_state, None)
             .map_err(|error| RpcError::Internal(error.to_string()))?;
+        let memory_route = memory_route_for_capability(&primary_capability, &route);
         let mut runtime_preview = if primary_capability == methods::RUNTIME_INFER_SUBMIT
             && policy.decision.decision == "allowed"
             && provider_resolution.selected.is_some()
@@ -754,7 +755,7 @@ pub fn build_router(state: AppState) -> Arc<RpcRouter> {
             &request.intent,
             &plan,
             Some(&provider_resolution),
-            Some(&route),
+            memory_route,
             portal_handle
                 .as_ref()
                 .map(|handle| handle.handle_id.as_str()),
@@ -783,7 +784,7 @@ pub fn build_router(state: AppState) -> Arc<RpcRouter> {
             &request.intent,
             &primary_capability,
             Some(&provider_resolution),
-            Some(&route),
+            memory_route,
             Some(&policy),
         )
         .map_err(|error| RpcError::Internal(error.to_string()))?;
@@ -1638,6 +1639,14 @@ fn primary_capability(plan: Option<&AgentPlan>) -> Option<&str> {
             .or_else(|| first_step_capability(item))
     })
 }
+
+fn memory_route_for_capability<'a>(
+    primary_capability: &str,
+    route: &'a aios_contracts::RuntimeRouteResolveResponse,
+) -> Option<&'a aios_contracts::RuntimeRouteResolveResponse> {
+    (primary_capability == methods::RUNTIME_INFER_SUBMIT).then_some(route)
+}
+
 fn working_memory_value(payload: &Value, key: &str) -> Option<Value> {
     payload.get(key).filter(|value| !value.is_null()).cloned()
 }
@@ -1761,6 +1770,19 @@ mod tests {
             Some(json!({"selected_backend": "local-cpu"}))
         );
         assert_eq!(working_memory_value(&payload, "policy"), None);
+    }
+
+    #[test]
+    fn memory_route_is_only_persisted_for_runtime_capability() {
+        let route = aios_contracts::RuntimeRouteResolveResponse {
+            selected_backend: "local-cpu".to_string(),
+            route_state: "local-wrapper".to_string(),
+            degraded: false,
+            reason: "ok".to_string(),
+        };
+
+        assert!(memory_route_for_capability(methods::RUNTIME_INFER_SUBMIT, &route).is_some());
+        assert!(memory_route_for_capability("system.file.write", &route).is_none());
     }
 
     #[test]

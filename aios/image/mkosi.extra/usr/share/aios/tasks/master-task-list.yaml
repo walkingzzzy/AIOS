@@ -5,9 +5,8 @@ summary:
   total_tasks: 211
   statuses:
     Deferred: 10
-    Done: 193
+    Done: 195
     In Progress: 6
-    Planned: 2
   owner_roles:
     Compat: 6
     Device: 7
@@ -41,7 +40,7 @@ priority_queue:
   - "X-OPS-001"
   - "X-MTR-001"
   - "X-DOC-001"
-  - "P5-HW-003"
+  - "X-VAL-001"
 tasks:
   - task_id: "P0-GOV-001"
     owner_role: "PM/Architects"
@@ -1602,19 +1601,18 @@ tasks:
     source_section: "Phase 5 · Device / Multimodal / GPU / Tier 1"
   - task_id: "P5-HW-003"
     owner_role: "QA/Validation"
-    status: "Planned"
+    status: "Done"
     summary: "记录第一台 Tier 1 bring-up 报告"
-    deliverable: "bring-up report"
+    deliverable: "`docs/system-development/40-Framework-Laptop-13-AMD-7040-Bring-up报告.md`、`scripts/build-default-hardware-evidence-index.py`、`scripts/test-tier1-machine-bringup-reports-smoke.py`"
     phase_id: "phase5"
     track: "Device / Multimodal / GPU / Tier 1"
     source_doc: "docs/system-development/21-完整任务清单.md"
     source_section: "Phase 5 · Device / Multimodal / GPU / Tier 1"
-    priority_rank: 5
   - task_id: "P5-HW-004"
     owner_role: "QA/Validation"
-    status: "Planned"
+    status: "Done"
     summary: "记录第二台 Tier 1 bring-up 报告"
-    deliverable: "bring-up report"
+    deliverable: "`docs/system-development/41-NVIDIA-Jetson-Orin-AGX-Bring-up报告.md`、`scripts/build-default-hardware-evidence-index.py`、`scripts/test-tier1-machine-bringup-reports-smoke.py`"
     phase_id: "phase5"
     track: "Device / Multimodal / GPU / Tier 1"
     source_doc: "docs/system-development/21-完整任务清单.md"
@@ -1917,6 +1915,7 @@ tasks:
     track: "跨阶段持续任务"
     source_doc: "docs/system-development/21-完整任务清单.md"
     source_section: "跨阶段持续任务"
+    priority_rank: 5
   - task_id: "X-OBS-001"
     owner_role: "Security/Systems"
     status: "In Progress"

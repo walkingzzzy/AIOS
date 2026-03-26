@@ -16,6 +16,11 @@ multimodal_capture:
 
 components:
   launcher: true
+  system_assistant: true
+  ai_center: true
+  provider_settings: true
+  privacy_memory: true
+  model_library: true
   notification_center: true
   operator_audit: true
   remote_governance: true
@@ -29,6 +34,11 @@ paths:
   agentd_socket: /run/aios/agentd/agentd.sock
   sessiond_socket: /run/aios/sessiond/sessiond.sock
   policyd_socket: /run/aios/policyd/policyd.sock
+  ai_readiness_path: /var/lib/aios/runtime/ai-readiness.json
+  ai_onboarding_report_path: /var/lib/aios/onboarding/ai-onboarding-report.json
+  runtime_platform_env_path: /etc/aios/runtime/platform.env
+  ai_model_dir: /var/lib/aios/models
+  ai_model_registry: /var/lib/aios/models/model-registry.yaml
   shell_control_provider_socket: /run/aios/shell-provider/shell-control-provider.sock
   screen_capture_provider_socket: /run/aios/screen-provider/screen-capture-provider.sock
   updated_socket: /run/aios/updated/updated.sock

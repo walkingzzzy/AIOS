@@ -117,9 +117,18 @@ impl Scheduler {
 
         let selected_backend =
             self.ensure_executable_backend(&requested_backend, request.allow_remote);
+        let selected_readiness =
+            crate::backend::readiness(&selected_backend, &self.backend_commands);
+        let selected_is_executable = selected_readiness
+            .as_ref()
+            .map(|readiness| readiness.is_available())
+            .unwrap_or(false);
         let degraded = selected_backend != self.runtime_profile.default_backend
             || selected_backend != requested_backend;
         let route_state = match selected_backend.as_str() {
+            "local-cpu" if !selected_is_executable => "setup-pending",
+            "attested-remote" if !selected_is_executable => "remote-disabled",
+            _ if !selected_is_executable => "capability-rejected",
             "attested-remote" => {
                 if degraded {
                     "degraded-remote"
@@ -146,7 +155,22 @@ impl Scheduler {
         }
         .to_string();
 
-        let reason = if selected_backend != requested_backend {
+        let reason = if !selected_is_executable {
+            let readiness_reason = selected_readiness
+                .map(|readiness| readiness.reason)
+                .unwrap_or_else(|| "selected backend is not executable".to_string());
+            if selected_backend != requested_backend {
+                format!(
+                    "selected {} instead of requested {} but backend is not executable: {}",
+                    selected_backend, requested_backend, readiness_reason
+                )
+            } else {
+                format!(
+                    "selected {} but backend is not executable: {}",
+                    selected_backend, readiness_reason
+                )
+            }
+        } else if selected_backend != requested_backend {
             let fallback_reason =
                 self.non_executable_backend_reason(&requested_backend, request.allow_remote);
             format!(
@@ -189,7 +213,10 @@ impl Scheduler {
         let estimated_latency_ms = self.estimate_latency_ms(request);
 
         if estimated_latency_ms > self.runtime_profile.timeout_ms {
-            if self.runtime_profile.cpu_fallback && route.selected_backend != "local-cpu" {
+            if self.runtime_profile.cpu_fallback
+                && route.selected_backend != "local-cpu"
+                && self.backend_is_executable("local-cpu", true)
+            {
                 return self.fallback_response(
                     request,
                     "local-cpu",
@@ -259,6 +286,7 @@ impl Scheduler {
         if self.runtime_profile.cpu_fallback
             && route.selected_backend != "local-cpu"
             && error.fallback_backend == Some("local-cpu")
+            && self.backend_is_executable("local-cpu", true)
         {
             let route_state = match error.class {
                 BackendFailureClass::Timeout => "timeout-fallback-local-cpu",
@@ -308,6 +336,7 @@ impl Scheduler {
         if self.runtime_profile.cpu_fallback
             && requested_backend != "local-cpu"
             && self.is_backend_allowed("local-cpu")
+            && self.backend_is_executable("local-cpu", allow_remote)
         {
             return "local-cpu".to_string();
         }
@@ -319,6 +348,10 @@ impl Scheduler {
         }
 
         self.first_allowed_backend_for_policy(allow_remote)
+            .or_else(|| {
+                self.backend_allowed_under_policy(requested_backend, allow_remote)
+                    .then(|| requested_backend.to_string())
+            })
             .unwrap_or_else(|| self.runtime_profile.default_backend.clone())
     }
 
@@ -351,24 +384,20 @@ impl Scheduler {
     }
 
     fn first_allowed_backend_for_policy(&self, allow_remote: bool) -> Option<String> {
-        if self.backend_allowed_under_policy(&self.runtime_profile.default_backend, allow_remote) {
+        if self.backend_is_executable(&self.runtime_profile.default_backend, allow_remote) {
             return Some(self.runtime_profile.default_backend.clone());
         }
 
         self.runtime_profile
             .allowed_backends
             .iter()
-            .find(|backend_id| self.backend_allowed_under_policy(backend_id, allow_remote))
+            .find(|backend_id| self.backend_is_executable(backend_id, allow_remote))
             .cloned()
     }
 
     fn backend_is_executable(&self, backend_id: &str, allow_remote: bool) -> bool {
         if !self.backend_allowed_under_policy(backend_id, allow_remote) {
             return false;
-        }
-
-        if backend_id == "local-cpu" {
-            return true;
         }
 
         crate::backend::readiness(backend_id, &self.backend_commands)

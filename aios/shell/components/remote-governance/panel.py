@@ -7,11 +7,15 @@ import time
 from pathlib import Path
 
 from prototype import (
+    apply_remote_registration_request,
     default_browser_remote_registry,
+    default_remote_registration_request_path,
     default_office_remote_registry,
     default_mcp_remote_registry,
     default_provider_registry_state_dir,
     load_remote_governance,
+    load_remote_registration_request,
+    promote_remote_registration_request,
 )
 
 
@@ -40,7 +44,13 @@ def header_status(governance: dict) -> tuple[str, str]:
     return "idle", "neutral"
 
 
-def build_model(governance: dict, *, issue_only: bool, limit: int) -> dict:
+def build_model(
+    governance: dict,
+    request_summary: dict[str, object],
+    *,
+    issue_only: bool,
+    limit: int,
+) -> dict:
     status, tone = header_status(governance)
     matched_entry_count = governance.get("matched_entry_count", 0)
     issue_count = governance.get("issue_count", 0)
@@ -48,6 +58,8 @@ def build_model(governance: dict, *, issue_only: bool, limit: int) -> dict:
     promoted_count = governance.get("control_plane_registered_count", 0)
     filtered_status_counts = governance.get("filtered_status_counts", {})
     stale_or_revoked = filtered_status_counts.get("stale", 0) + filtered_status_counts.get("revoked", 0)
+    request_ready = bool(request_summary.get("ready", False))
+    request_status = request_summary.get("source_status") or "missing"
 
     return {
         "component_id": "remote-governance",
@@ -73,6 +85,11 @@ def build_model(governance: dict, *, issue_only: bool, limit: int) -> dict:
                 "value": stale_or_revoked,
                 "tone": "warning" if stale_or_revoked else "neutral",
             },
+            {
+                "label": "Request",
+                "value": "ready" if request_ready else request_status,
+                "tone": "positive" if request_ready else tone_for("medium" if request_status == "ready" else None),
+            },
         ],
         "actions": [
             {"action_id": "refresh", "label": "Refresh Governance", "enabled": True, "tone": "neutral"},
@@ -82,8 +99,83 @@ def build_model(governance: dict, *, issue_only: bool, limit: int) -> dict:
                 "enabled": issue_count > 0,
                 "tone": "warning",
             },
+            {
+                "action_id": "register-remote-request",
+                "label": "Register Remote Request",
+                "enabled": request_ready,
+                "tone": "positive" if request_ready else "warning",
+            },
+            {
+                "action_id": "promote-remote-request",
+                "label": "Promote Remote Request",
+                "enabled": request_ready,
+                "tone": "positive" if request_ready else "warning",
+            },
+            {
+                "action_id": "register-and-promote-request",
+                "label": "Register + Promote",
+                "enabled": request_ready,
+                "tone": "positive" if request_ready else "warning",
+            },
         ],
         "sections": [
+            {
+                "section_id": "request",
+                "title": "Remote Registration Request",
+                "items": [
+                    {
+                        "label": "Source Path",
+                        "value": request_summary.get("source_path") or "-",
+                        "tone": "neutral",
+                    },
+                    {
+                        "label": "Status",
+                        "value": request_status,
+                        "tone": "positive" if request_ready else "warning",
+                    },
+                    {
+                        "label": "Provider Kind",
+                        "value": request_summary.get("provider_kind") or "-",
+                        "tone": "neutral",
+                    },
+                    {
+                        "label": "Provider Ref",
+                        "value": request_summary.get("provider_ref") or "-",
+                        "tone": "neutral",
+                    },
+                    {
+                        "label": "Endpoint",
+                        "value": request_summary.get("endpoint") or "-",
+                        "tone": "neutral",
+                    },
+                    {
+                        "label": "Capabilities",
+                        "value": ", ".join(request_summary.get("capabilities") or []) or "-",
+                        "tone": "neutral",
+                    },
+                    {
+                        "label": "Display Name",
+                        "value": request_summary.get("display_name") or "-",
+                        "tone": "neutral",
+                    },
+                    {
+                        "label": "Control Plane ID",
+                        "value": request_summary.get("control_plane_provider_id") or "-",
+                        "tone": "neutral",
+                    },
+                    {
+                        "label": "Errors",
+                        "value": ", ".join(request_summary.get("errors") or []) or "-",
+                        "tone": "warning" if request_summary.get("errors") else "neutral",
+                    },
+                    {
+                        "label": "Warnings",
+                        "value": ", ".join(request_summary.get("warnings") or []) or "-",
+                        "tone": "warning" if request_summary.get("warnings") else "neutral",
+                    },
+                ],
+                "empty_state": "No remote registration request configured",
+            },
             {
                 "section_id": "issues",
                 "title": "Governance Issues",
@@ -163,6 +255,15 @@ def build_model(governance: dict, *, issue_only: bool, limit: int) -> dict:
             "attestation_modes": governance.get("attestation_modes", []),
             "control_plane_provider_ids": governance.get("control_plane_provider_ids", []),
             "control_plane_registered_count": promoted_count,
+            "request_source_status": request_status,
+            "request_source_path": request_summary.get("source_path"),
+            "request_ready": request_ready,
+            "request_provider_kind": request_summary.get("provider_kind"),
+            "request_provider_ref": request_summary.get("provider_ref"),
+            "request_endpoint": request_summary.get("endpoint"),
+            "request_capabilities": request_summary.get("capabilities") or [],
+            "request_errors": request_summary.get("errors") or [],
+            "request_warnings": request_summary.get("warnings") or [],
             "issue_only": issue_only,
             "limit": limit,
             "query": governance.get("query", {}),
@@ -221,6 +322,8 @@ def main() -> int:
     parser.add_argument("--office-remote-registry", type=Path, default=default_office_remote_registry())
     parser.add_argument("--mcp-remote-registry", type=Path, default=default_mcp_remote_registry())
     parser.add_argument("--provider-registry-state-dir", type=Path, default=default_provider_registry_state_dir())
+    parser.add_argument("--remote-registration-request", type=Path, default=default_remote_registration_request_path())
+    parser.add_argument("--agent-socket", type=Path)
     parser.add_argument("--issue-only", action="store_true")
     parser.add_argument("--limit", type=int, default=10)
     parser.add_argument("--source")
@@ -267,7 +370,8 @@ def main() -> int:
             issue_only=issue_only,
             report_path=args.write_report,
         )
-        return build_model(governance, issue_only=issue_only, limit=limit)
+        request_summary = load_remote_registration_request(args.remote_registration_request)
+        return build_model(governance, request_summary, issue_only=issue_only, limit=limit)
 
     if args.command == "action":
         if not args.action:
@@ -286,8 +390,53 @@ def main() -> int:
             "matched_entry_count": model["meta"]["matched_entry_count"],
             "issue_count": model["meta"]["issue_count"],
             "fleet_count": model["meta"]["fleet_count"],
+            "request_ready": model["meta"].get("request_ready", False),
+            "request_source_status": model["meta"].get("request_source_status"),
+            "request_provider_ref": model["meta"].get("request_provider_ref"),
             "filters": (model.get("meta") or {}).get("query", {}).get("filters", {}),
         }
+        if args.action == "register-remote-request" and selected.get("enabled", False):
+            request_summary = load_remote_registration_request(args.remote_registration_request)
+            result.update(
+                apply_remote_registration_request(
+                    request_summary,
+                    browser_remote_registry=args.browser_remote_registry,
+                    office_remote_registry=args.office_remote_registry,
+                    mcp_remote_registry=args.mcp_remote_registry,
+                )
+            )
+        elif args.action == "promote-remote-request" and selected.get("enabled", False):
+            request_summary = load_remote_registration_request(args.remote_registration_request)
+            result.update(
+                promote_remote_registration_request(
+                    request_summary,
+                    browser_remote_registry=args.browser_remote_registry,
+                    office_remote_registry=args.office_remote_registry,
+                    mcp_remote_registry=args.mcp_remote_registry,
+                    provider_registry_state_dir=args.provider_registry_state_dir,
+                    agent_socket=args.agent_socket,
+                )
+            )
+        elif args.action == "register-and-promote-request" and selected.get("enabled", False):
+            request_summary = load_remote_registration_request(args.remote_registration_request)
+            registration_result = apply_remote_registration_request(
+                request_summary,
+                browser_remote_registry=args.browser_remote_registry,
+                office_remote_registry=args.office_remote_registry,
+                mcp_remote_registry=args.mcp_remote_registry,
+            )
+            promotion_result = promote_remote_registration_request(
+                request_summary,
+                browser_remote_registry=args.browser_remote_registry,
+                office_remote_registry=args.office_remote_registry,
+                mcp_remote_registry=args.mcp_remote_registry,
+                provider_registry_state_dir=args.provider_registry_state_dir,
+                agent_socket=args.agent_socket,
+            )
+            result.update(registration_result)
+            result["registration"] = registration_result.get("registration")
+            result["registration_status"] = registration_result.get("status")
+            result.update(promotion_result)
         print(json.dumps(result, indent=2, ensure_ascii=False))
         return 0
 

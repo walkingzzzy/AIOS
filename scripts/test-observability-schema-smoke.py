@@ -12,8 +12,20 @@ from jsonschema import Draft202012Validator
 
 ROOT = Path(__file__).resolve().parent.parent
 SCHEMA_DIR = ROOT / "aios" / "observability" / "schemas"
+OVERLAY_SCHEMA_DIR = (
+    ROOT
+    / "aios"
+    / "image"
+    / "mkosi.extra"
+    / "usr"
+    / "share"
+    / "aios"
+    / "schemas"
+    / "observability"
+)
 SAMPLE_DIR = ROOT / "aios" / "observability" / "samples"
 DEFAULT_OUTPUT_PREFIX = ROOT / "out" / "validation" / "observability-schema-validation-report"
+UTF8 = "utf-8"
 
 EXPECTED_SCHEMAS = {
     "audit-event.schema.json": "audit-event.sample.json",
@@ -61,7 +73,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def load_json(path: Path) -> Any:
-    return json.loads(path.read_text())
+    return json.loads(path.read_text(encoding=UTF8))
 
 
 def result(name: str, status: str, detail: str) -> dict[str, str]:
@@ -79,6 +91,19 @@ def validate_sample(schema_path: Path, sample_path: Path) -> dict[str, str]:
     sample = load_json(sample_path)
     Draft202012Validator(schema, format_checker=Draft202012Validator.FORMAT_CHECKER).validate(sample)
     return result(sample_path.name, "passed", f"sample matches {schema_path.name}")
+
+
+def validate_overlay_sync(schema_path: Path) -> dict[str, str]:
+    overlay_path = OVERLAY_SCHEMA_DIR / schema_path.name
+    if not overlay_path.exists():
+        raise RuntimeError(f"overlay schema missing: {overlay_path}")
+    if schema_path.read_text(encoding=UTF8) != overlay_path.read_text(encoding=UTF8):
+        raise RuntimeError(f"overlay schema out of sync: {schema_path} != {overlay_path}")
+    return result(
+        f"{schema_path.name}:overlay-sync",
+        "passed",
+        f"overlay schema matches source: {overlay_path}",
+    )
 
 
 def validate_correlation_fields(schema_path: Path) -> dict[str, str]:
@@ -135,12 +160,12 @@ def render_markdown(report: dict[str, Any]) -> str:
 
 def write_report(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding=UTF8)
 
 
 def write_markdown(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content + "\n")
+    path.write_text(content + "\n", encoding=UTF8)
 
 
 def main() -> int:
@@ -162,6 +187,7 @@ def main() -> int:
 
         for validator in (
             lambda: validate_schema(schema_path),
+            lambda: validate_overlay_sync(schema_path),
             lambda: validate_sample(schema_path, sample_path),
             lambda: validate_correlation_fields(schema_path),
             lambda: validate_optional_artifact(schema_path),

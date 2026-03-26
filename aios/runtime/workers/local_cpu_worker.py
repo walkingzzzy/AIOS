@@ -11,6 +11,8 @@ Environment variables:
   AIOS_WORKER_MODEL_PATH  - Path to a local model file (GGUF, safetensors, etc.)
   AIOS_WORKER_BACKEND     - Backend to use: llama-cpp | transformers | echo  (auto-detected if unset)
   AIOS_WORKER_MAX_TOKENS  - Maximum tokens to generate (default: 256)
+  AIOS_WORKER_PRODUCT_MODE - Treat missing model/runtime dependencies as product-facing not-ready state
+  AIOS_WORKER_ALLOW_ECHO_FALLBACK - Explicitly allow echo fallback for smoke/dev usage
 """
 
 from __future__ import annotations
@@ -21,16 +23,19 @@ import signal
 import sys
 import time
 import traceback
+from pathlib import Path
 from typing import Any
 
 WORKER_CONTRACT = "runtime-worker-v1"
 BACKEND_ID = "local-cpu"
 ROUTE_STATE_OK = "local-cpu-worker-v1"
 ROUTE_STATE_ECHO = "local-cpu-echo"
+ROUTE_STATE_UNAVAILABLE = "local-cpu-not-ready"
 ROUTE_STATE_ERROR = "local-cpu-worker-error"
 
 REQUEST_REQUIRED_FIELDS = {"backend_id", "session_id", "task_id", "prompt", "timeout_ms"}
 RESPONSE_REQUIRED_FIELDS = {"worker_contract", "backend_id", "route_state", "content", "rejected", "degraded"}
+MODEL_EXTENSIONS = {".gguf", ".safetensors", ".bin"}
 
 
 def _env_int(name: str, default: int) -> int:
@@ -41,6 +46,11 @@ def _env_int(name: str, default: int) -> int:
         return int(raw)
     except ValueError:
         return default
+
+
+def _env_truthy(name: str) -> bool:
+    raw = os.environ.get(name, "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
 
 
 def _now_ms() -> int:
@@ -106,6 +116,20 @@ def _make_error(
     )
 
 
+def _make_unavailable(reason: str, *, notes: list[str] | None = None) -> dict[str, Any]:
+    return _make_response(
+        "",
+        route_state=ROUTE_STATE_UNAVAILABLE,
+        rejected=True,
+        degraded=True,
+        reason=reason,
+        provider_status="unavailable",
+        worker_error=True,
+        worker_error_class="unavailable",
+        notes=notes,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Backend implementations
 # ---------------------------------------------------------------------------
@@ -113,6 +137,8 @@ def _make_error(
 def _detect_backend() -> str:
     explicit = os.environ.get("AIOS_WORKER_BACKEND", "").strip().lower()
     if explicit in ("llama-cpp", "transformers", "echo"):
+        if explicit == "echo" and not _allow_echo_fallback():
+            return "unavailable"
         return explicit
 
     try:
@@ -125,10 +151,61 @@ def _detect_backend() -> str:
         return "transformers"
     except ImportError:
         pass
-    return "echo"
+    if _allow_echo_fallback():
+        return "echo"
+    return "unavailable"
+
+
+def _product_mode_enabled() -> bool:
+    return _env_truthy("AIOS_WORKER_PRODUCT_MODE") or _env_truthy("AIOS_RUNTIMED_PRODUCT_MODE")
+
+
+def _allow_echo_fallback() -> bool:
+    return _env_truthy("AIOS_WORKER_ALLOW_ECHO_FALLBACK")
+
+
+def _resolve_model_path(model_path: str | None) -> str | None:
+    if model_path:
+        return model_path
+
+    model_dir = Path(os.environ.get("AIOS_MODEL_DIR", "/var/lib/aios/models"))
+    if not model_dir.is_dir():
+        return None
+
+    for candidate in sorted(model_dir.rglob("*")):
+        if candidate.is_file() and candidate.suffix.lower() in MODEL_EXTENSIONS:
+            return str(candidate)
+    return None
+
+
+def _infer_unavailable(_prompt: str, model_path: str | None, _max_tokens: int) -> dict[str, Any]:
+    resolved_model_path = _resolve_model_path(model_path)
+    notes = [
+        f"product_mode={str(_product_mode_enabled()).lower()}",
+        f"echo_fallback_enabled={str(_allow_echo_fallback()).lower()}",
+    ]
+    if resolved_model_path:
+        notes.append(f"model_path={resolved_model_path}")
+        reason = (
+            "a local model is present, but no supported CPU backend runtime is installed; "
+            "install llama-cpp-python or transformers, or configure a remote route"
+        )
+    elif _product_mode_enabled():
+        reason = (
+            "AI is not ready: no local model is configured and echo fallback is disabled in product mode"
+        )
+        notes.append("remediation=import-local-model-or-configure-remote-endpoint")
+    else:
+        reason = (
+            "no supported CPU backend runtime is available and echo fallback is disabled"
+        )
+        notes.append("remediation=enable-dev-echo-or-install-runtime")
+    return _make_unavailable(reason, notes=notes)
 
 
 def _infer_echo(prompt: str, _model_path: str | None, _max_tokens: int) -> dict[str, Any]:
+    if not _allow_echo_fallback():
+        return _infer_unavailable(prompt, _model_path, _max_tokens)
     return _make_response(
         f"[echo] received prompt ({len(prompt)} chars)",
         route_state=ROUTE_STATE_ECHO,
@@ -141,10 +218,11 @@ def _infer_echo(prompt: str, _model_path: str | None, _max_tokens: int) -> dict[
 
 
 def _infer_llama_cpp(prompt: str, model_path: str | None, max_tokens: int) -> dict[str, Any]:
+    model_path = _resolve_model_path(model_path)
     if not model_path:
         return _make_error(
-            "AIOS_WORKER_MODEL_PATH is required for llama-cpp backend",
-            notes=["backend=llama-cpp", "missing_model_path=true"],
+            "AIOS_WORKER_MODEL_PATH is required for llama-cpp backend or a model must exist under AIOS_MODEL_DIR",
+            notes=["backend=llama-cpp", "missing_model_path=true", "model_autodiscovery=false"],
         )
     if not os.path.isfile(model_path):
         return _make_error(
@@ -183,10 +261,11 @@ def _infer_llama_cpp(prompt: str, model_path: str | None, max_tokens: int) -> di
 
 
 def _infer_transformers(prompt: str, model_path: str | None, max_tokens: int) -> dict[str, Any]:
+    model_path = _resolve_model_path(model_path)
     if not model_path:
         return _make_error(
-            "AIOS_WORKER_MODEL_PATH is required for transformers backend",
-            notes=["backend=transformers", "missing_model_path=true"],
+            "AIOS_WORKER_MODEL_PATH is required for transformers backend or a model must exist under AIOS_MODEL_DIR",
+            notes=["backend=transformers", "missing_model_path=true", "model_autodiscovery=false"],
         )
     try:
         from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -225,6 +304,7 @@ BACKENDS = {
     "echo": _infer_echo,
     "llama-cpp": _infer_llama_cpp,
     "transformers": _infer_transformers,
+    "unavailable": _infer_unavailable,
 }
 
 

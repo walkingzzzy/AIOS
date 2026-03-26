@@ -349,6 +349,7 @@ mod tests {
             ui_tree_state_path: state_root.join("ui-tree-state.json"),
             default_resolution: "1920x1080".to_string(),
             approval_mode: "metadata-only".to_string(),
+            product_mode: false,
             approved_sessions: vec!["session-1".to_string()],
             approved_tasks: Vec::new(),
             screen_capture_command: None,

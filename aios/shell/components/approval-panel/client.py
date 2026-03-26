@@ -1,21 +1,65 @@
 #!/usr/bin/env python3
 import argparse
+import importlib.util
 import json
+import sys
 from pathlib import Path
+from types import ModuleType
 
 from prototype import default_agent_socket, default_socket, fixture_call, print_list, rpc_call
+_PRIVACY_MEMORY_PROTOTYPE_MODULE: ModuleType | None = None
 
 
-def build_summary(result: dict) -> dict:
+def _load_module(module_name: str, path: Path) -> ModuleType:
+    module = sys.modules.get(module_name)
+    if module is not None:
+        return module
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"unable to load module from {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_privacy_memory_prototype_module() -> ModuleType:
+    global _PRIVACY_MEMORY_PROTOTYPE_MODULE
+    if _PRIVACY_MEMORY_PROTOTYPE_MODULE is not None:
+        return _PRIVACY_MEMORY_PROTOTYPE_MODULE
+    module_path = Path(__file__).resolve().parents[1] / "privacy-memory" / "prototype.py"
+    _PRIVACY_MEMORY_PROTOTYPE_MODULE = _load_module(
+        "aios_shell_privacy_memory_prototype",
+        module_path,
+    )
+    return _PRIVACY_MEMORY_PROTOTYPE_MODULE
+
+
+def default_runtime_platform_env_path() -> Path:
+    return load_privacy_memory_prototype_module().default_runtime_platform_env_path()
+
+
+def build_privacy_memory_state(runtime_platform_env_path: Path | None) -> dict:
+    return load_privacy_memory_prototype_module().build_privacy_memory_state(runtime_platform_env_path)
+
+
+def build_summary(result: dict, privacy_memory: dict | None = None) -> dict:
     approvals = result.get("approvals", [])
     by_status: dict[str, int] = {}
     by_lane: dict[str, int] = {}
+    privacy_memory = privacy_memory or {}
     for item in approvals:
         status = item.get("status", "unknown")
         lane = item.get("approval_lane", "unknown")
         by_status[status] = by_status.get(status, 0) + 1
         by_lane[lane] = by_lane.get(lane, 0) + 1
-    return {"total": len(approvals), "by_status": by_status, "by_lane": by_lane}
+    return {
+        "total": len(approvals),
+        "by_status": by_status,
+        "by_lane": by_lane,
+        "approval_default_policy": privacy_memory.get("approval_default_policy"),
+        "remote_prompt_level": privacy_memory.get("remote_prompt_level"),
+    }
 
 
 def print_record(record: dict) -> None:
@@ -46,6 +90,7 @@ def main() -> int:
     parser.add_argument("--approval-lane", default="high-risk")
     parser.add_argument("--execution-location", default="local")
     parser.add_argument("--status")
+    parser.add_argument("--runtime-platform-env", type=Path, default=default_runtime_platform_env_path())
     parser.add_argument("--resolver", default="shell-approval-panel")
     parser.add_argument("--reason")
     parser.add_argument("--json", action="store_true")
@@ -96,7 +141,7 @@ def main() -> int:
         )
 
     if command == "summary":
-        summary = build_summary(result)
+        summary = build_summary(result, build_privacy_memory_state(args.runtime_platform_env))
         if args.json:
             print(json.dumps(summary, indent=2, ensure_ascii=False))
         else:

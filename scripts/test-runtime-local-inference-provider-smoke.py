@@ -12,6 +12,7 @@ import tempfile
 import textwrap
 import threading
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from aios_cargo_bins import default_aios_bin_dir, resolve_binary_path
@@ -304,6 +305,107 @@ def make_env(root: Path) -> dict[str, str]:
     return env
 
 
+def launch_mock_openai_server(expected_token: str) -> tuple[ThreadingHTTPServer, list[dict], threading.Thread]:
+    requests_log: list[dict] = []
+
+    def embedding_for_text(text: str) -> list[float]:
+        lowered = text.strip().lower()
+        if "provider health" in lowered:
+            return [1.0, 0.0, 0.0, 0.0]
+        if "device metadata" in lowered:
+            return [0.0, 1.0, 0.0, 0.0]
+        if "screen capture" in lowered:
+            return [0.0, 0.9, 0.1, 0.0]
+        if "shell notification" in lowered:
+            return [0.0, 0.0, 1.0, 0.0]
+        seed = max(1, sum(ord(ch) for ch in lowered))
+        values = [((seed >> shift) & 0xFF) / 255.0 for shift in (0, 8, 16, 24)]
+        norm = sum(value * value for value in values) ** 0.5 or 1.0
+        return [value / norm for value in values]
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            if self.path not in {"/v1/chat/completions", "/v1/embeddings"}:
+                self.send_error(404, "unknown path")
+                return
+
+            content_length = int(self.headers.get("Content-Length", "0"))
+            payload = json.loads(self.rfile.read(content_length).decode("utf-8") or "{}")
+            authorization = self.headers.get("Authorization")
+            requests_log.append(
+                {
+                    "path": self.path,
+                    "authorization": authorization,
+                    "payload": payload,
+                }
+            )
+            if authorization != f"Bearer {expected_token}":
+                self.send_response(401)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(
+                    json.dumps(
+                        {"error": {"message": "missing or invalid bearer token"}},
+                        ensure_ascii=False,
+                    ).encode("utf-8")
+                )
+                return
+
+            if self.path == "/v1/chat/completions":
+                prompt = (
+                    ((payload.get("messages") or [{}])[0] or {}).get("content")
+                    or "empty-prompt"
+                )
+                response = {
+                    "id": "chatcmpl-smoke",
+                    "object": "chat.completion",
+                    "model": payload.get("model") or "remote-smoke-model",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "content": f"remote completion for {prompt}",
+                            },
+                        }
+                    ],
+                    "usage": {"total_tokens": 42},
+                }
+            else:
+                raw_input = payload.get("input") or []
+                if isinstance(raw_input, str):
+                    normalized_inputs = [raw_input]
+                else:
+                    normalized_inputs = [str(item) for item in raw_input]
+                response = {
+                    "object": "list",
+                    "model": payload.get("model") or "remote-embedding-model",
+                    "data": [
+                        {
+                            "object": "embedding",
+                            "index": index,
+                            "embedding": embedding_for_text(item),
+                        }
+                        for index, item in enumerate(normalized_inputs)
+                    ],
+                    "usage": {"total_tokens": 21 + len(normalized_inputs)},
+                }
+            encoded = json.dumps(response, ensure_ascii=False).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(encoded)))
+            self.end_headers()
+            self.wfile.write(encoded)
+
+        def log_message(self, format: str, *args) -> None:  # noqa: A003
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, requests_log, thread
+
+
 def main() -> int:
     args = parse_args()
     if not unix_rpc_supported():
@@ -325,6 +427,7 @@ def main() -> int:
     env = make_env(temp_root)
     provider_observability_log = Path(env["AIOS_RUNTIME_LOCAL_INFERENCE_PROVIDER_OBSERVABILITY_LOG"])
     processes: dict[str, subprocess.Popen] = {}
+    remote_server: ThreadingHTTPServer | None = None
     failed = False
 
     try:
@@ -627,6 +730,224 @@ def main() -> int:
         )
         require(degraded_health.get("status") == "unavailable", "runtime local inference provider health was not downgraded after runtimed outage")
 
+        if processes["provider"].poll() is None:
+            processes["provider"].send_signal(signal.SIGINT)
+            processes["provider"].wait(timeout=5)
+
+        remote_readiness = temp_root / "state" / "remote-ai-readiness.json"
+        remote_readiness.write_text(
+            json.dumps(
+                {
+                    "generated_at": "2026-03-25T00:00:00Z",
+                    "state": "hybrid-remote-only",
+                    "reason": "remote endpoint is ready while local model inventory is empty",
+                    "next_action": "none",
+                    "ai_enabled": True,
+                    "ai_mode": "hybrid",
+                    "local_model_count": 0,
+                    "endpoint_configured": True,
+                    "report_path": str(temp_root / "state" / "remote-ai-report.json"),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        remote_report = temp_root / "state" / "remote-ai-report.json"
+        remote_report.write_text(
+            json.dumps(
+                {
+                    "generated_at": "2026-03-25T00:00:00Z",
+                    "ai_enabled": True,
+                    "ai_mode": "hybrid",
+                    "endpoint_base_url": "http://127.0.0.1:11434/v1",
+                    "endpoint_model": "remote-smoke-model",
+                    "endpoint_configured": True,
+                    "local_model_count": 0,
+                    "readiness_state": "hybrid-remote-only",
+                    "readiness_reason": "remote endpoint is ready while local model inventory is empty",
+                    "next_action": "none",
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        remote_server, remote_requests, remote_thread = launch_mock_openai_server("remote-smoke-token")
+        remote_base_url = f"http://127.0.0.1:{remote_server.server_port}/v1"
+        remote_env = env.copy()
+        remote_env.update(
+            {
+                "AIOS_RUNTIME_LOCAL_INFERENCE_PROVIDER_RUNTIME_DIR": str(temp_root / "run" / "rli-remote"),
+                "AIOS_RUNTIME_LOCAL_INFERENCE_PROVIDER_STATE_DIR": str(temp_root / "state" / "rli-remote"),
+                "AIOS_RUNTIME_LOCAL_INFERENCE_PROVIDER_SOCKET_PATH": str(temp_root / "run" / "rli-remote" / "rli.sock"),
+                "AIOS_RUNTIME_LOCAL_INFERENCE_PROVIDER_OBSERVABILITY_LOG": str(temp_root / "state" / "rli-remote" / "observability.jsonl"),
+                "AIOS_RUNTIME_LOCAL_INFERENCE_PROVIDER_REMOTE_BASE_URL": remote_base_url,
+                "AIOS_RUNTIME_LOCAL_INFERENCE_PROVIDER_REMOTE_MODEL": "remote-smoke-model",
+                "AIOS_RUNTIME_LOCAL_INFERENCE_PROVIDER_REMOTE_EMBEDDING_MODEL": "remote-embedding-model",
+                "AIOS_RUNTIME_LOCAL_INFERENCE_PROVIDER_REMOTE_RERANK_MODEL": "remote-rerank-model",
+                "AIOS_RUNTIME_LOCAL_INFERENCE_PROVIDER_REMOTE_API_KEY": "remote-smoke-token",
+                "AIOS_RUNTIME_LOCAL_INFERENCE_PROVIDER_AI_READINESS_PATH": str(remote_readiness),
+                "AIOS_RUNTIME_LOCAL_INFERENCE_PROVIDER_AI_ONBOARDING_REPORT_PATH": str(remote_report),
+            }
+        )
+        processes["provider-remote"] = launch(binaries["provider"], remote_env)
+        remote_provider_socket = Path(remote_env["AIOS_RUNTIME_LOCAL_INFERENCE_PROVIDER_SOCKET_PATH"])
+        wait_for_socket(remote_provider_socket, args.timeout)
+        remote_provider_health = wait_for_health(remote_provider_socket, args.timeout)
+        remote_notes = note_map(remote_provider_health)
+        require(
+            remote_notes.get("remote_endpoint_configured") == "true",
+            "runtime local inference provider health missing remote endpoint flag",
+        )
+        require(
+            remote_notes.get("remote_embedding_endpoint_configured") == "true",
+            "runtime local inference provider health missing remote embedding endpoint flag",
+        )
+        require(
+            remote_notes.get("remote_rerank_endpoint_configured") == "true",
+            "runtime local inference provider health missing remote rerank endpoint flag",
+        )
+        require(
+            remote_notes.get("remote_embedding_model") == "remote-embedding-model",
+            "runtime local inference provider health missing remote embedding model",
+        )
+        require(
+            remote_notes.get("remote_rerank_model") == "remote-rerank-model",
+            "runtime local inference provider health missing remote rerank model",
+        )
+        available_health = wait_for_provider_health(
+            sockets["agentd"],
+            "runtime.local.inference",
+            "available",
+            args.timeout,
+        )
+        require(
+            available_health.get("status") == "available",
+            "runtime local inference provider did not recover available health via remote endpoint",
+        )
+        remote_response = rpc_call(
+            remote_provider_socket,
+            "runtime.infer.submit",
+            {
+                "session_id": "session-runtime-provider",
+                "task_id": "task-runtime-provider",
+                "prompt": "Serve request through remote endpoint",
+                "model": "remote-smoke-model",
+                "execution_token": token,
+            },
+            timeout=args.timeout,
+        )
+        require(remote_response.get("backend_id") == "openai-compatible-remote", "remote fallback backend id mismatch")
+        require(remote_response.get("route_state") == "hybrid-remote-only", "remote fallback route_state mismatch")
+        require("remote completion for Serve request through remote endpoint" in remote_response.get("content", ""), "remote fallback content mismatch")
+        require(remote_response.get("runtime_service_id") == "openai-compatible-endpoint", "remote fallback runtime service id mismatch")
+        require(remote_response.get("provider_status") == "available", "remote fallback provider status mismatch")
+        require(
+            any(note == "remote_total_tokens=42" for note in remote_response.get("notes", [])),
+            "remote fallback notes missing token usage",
+        )
+        require(
+            remote_requests
+            and remote_requests[0]["authorization"] == "Bearer remote-smoke-token",
+            "remote fallback did not send bearer token",
+        )
+        require(
+            ((remote_requests[0]["payload"].get("messages") or [{}])[0] or {}).get("content")
+            == "Serve request through remote endpoint",
+            "remote fallback prompt mismatch",
+        )
+
+        remote_embed_response = rpc_call(
+            remote_provider_socket,
+            "runtime.embed.vectorize",
+            {
+                "session_id": "session-runtime-provider",
+                "task_id": "task-runtime-provider",
+                "inputs": [
+                    "provider health summary",
+                    "device metadata stream",
+                ],
+                "execution_token": embed_token,
+            },
+            timeout=args.timeout,
+        )
+        require(
+            remote_embed_response.get("backend_id") == "openai-compatible-remote-embedding",
+            "remote embedding backend mismatch",
+        )
+        require(
+            remote_embed_response.get("route_state") == "provider-remote-embedding",
+            "remote embedding route_state mismatch",
+        )
+        require(
+            remote_embed_response.get("vector_dimension") == 4,
+            "remote embedding vector dimension mismatch",
+        )
+        require(
+            len(remote_embed_response.get("embeddings", [])) == 2,
+            "remote embedding count mismatch",
+        )
+        require(
+            any(note == "provider_algorithm=openai-compatible-embedding-v1" for note in remote_embed_response.get("notes", [])),
+            "remote embedding notes missing remote algorithm marker",
+        )
+        require(
+            any(note == "embedding_model=remote-embedding-model" for note in remote_embed_response.get("notes", [])),
+            "remote embedding notes missing configured embedding model",
+        )
+
+        remote_rerank_response = rpc_call(
+            remote_provider_socket,
+            "runtime.rerank.score",
+            {
+                "session_id": "session-runtime-provider",
+                "task_id": "task-runtime-provider",
+                "query": "provider health summary",
+                "documents": [
+                    "provider health summary with audit notes",
+                    "screen capture backend readiness matrix",
+                    "shell notification center updates",
+                ],
+                "top_k": 2,
+                "execution_token": rerank_token,
+            },
+            timeout=args.timeout,
+        )
+        require(
+            remote_rerank_response.get("backend_id") == "openai-compatible-remote-rerank",
+            "remote rerank backend mismatch",
+        )
+        require(
+            remote_rerank_response.get("route_state") == "provider-remote-rerank",
+            "remote rerank route_state mismatch",
+        )
+        require(
+            len(remote_rerank_response.get("results", [])) == 2,
+            "remote rerank top_k mismatch",
+        )
+        require(
+            (remote_rerank_response.get("results") or [{}])[0].get("document_index") == 0,
+            "remote rerank top document mismatch",
+        )
+        require(
+            any(note == "provider_algorithm=cosine-similarity-via-embedding-v1" for note in remote_rerank_response.get("notes", [])),
+            "remote rerank notes missing remote algorithm marker",
+        )
+        require(
+            any(note == "rerank_model=remote-rerank-model" for note in remote_rerank_response.get("notes", [])),
+            "remote rerank notes missing configured rerank model",
+        )
+
+        embedding_requests = [item for item in remote_requests if item["path"] == "/v1/embeddings"]
+        require(len(embedding_requests) >= 2, "remote endpoint did not receive embedding requests")
+        require(
+            embedding_requests[0]["payload"].get("model") == "remote-embedding-model",
+            "remote embedding request model mismatch",
+        )
+        require(
+            embedding_requests[1]["payload"].get("model") == "remote-rerank-model",
+            "remote rerank request model mismatch",
+        )
+
         print(
             json.dumps(
                 {
@@ -642,6 +963,10 @@ def main() -> int:
                     "budget_error": budget_error,
                     "outage_route_state": unavailable.get("route_state"),
                     "outage_provider_status": unavailable.get("provider_status"),
+                    "remote_route_state": remote_response.get("route_state"),
+                    "remote_provider_status": remote_response.get("provider_status"),
+                    "remote_embedding_backend_id": remote_embed_response.get("backend_id"),
+                    "remote_rerank_backend_id": remote_rerank_response.get("backend_id"),
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -654,6 +979,9 @@ def main() -> int:
         return 1
     finally:
         terminate(list(processes.values()))
+        if remote_server is not None:
+            remote_server.shutdown()
+            remote_server.server_close()
         if failed:
             print_logs(processes)
         if args.keep_state:

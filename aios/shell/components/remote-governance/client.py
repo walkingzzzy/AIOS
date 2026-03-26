@@ -7,14 +7,16 @@ from pathlib import Path
 
 from prototype import (
     default_browser_remote_registry,
+    default_remote_registration_request_path,
     default_office_remote_registry,
     default_mcp_remote_registry,
     default_provider_registry_state_dir,
     load_remote_governance,
+    load_remote_registration_request,
 )
 
 
-def build_summary(governance: dict) -> dict:
+def build_summary(governance: dict, request_summary: dict) -> dict:
     return {
         "entry_count": governance.get("entry_count", 0),
         "matched_entry_count": governance.get("matched_entry_count", 0),
@@ -28,6 +30,9 @@ def build_summary(governance: dict) -> dict:
         "control_plane_provider_ids": governance.get("control_plane_provider_ids", []),
         "query": governance.get("query", {}),
         "artifact_paths": governance.get("artifact_paths", {}),
+        "request_source_status": request_summary.get("source_status"),
+        "request_ready": request_summary.get("ready", False),
+        "request_provider_ref": request_summary.get("provider_ref"),
     }
 
 
@@ -38,6 +43,8 @@ def main() -> int:
     parser.add_argument("--office-remote-registry", type=Path, default=default_office_remote_registry())
     parser.add_argument("--mcp-remote-registry", type=Path, default=default_mcp_remote_registry())
     parser.add_argument("--provider-registry-state-dir", type=Path, default=default_provider_registry_state_dir())
+    parser.add_argument("--remote-registration-request", type=Path, default=default_remote_registration_request_path())
+    parser.add_argument("--agent-socket", type=Path)
     parser.add_argument("--limit", type=int, default=8)
     parser.add_argument("--source")
     parser.add_argument("--severity")
@@ -78,9 +85,10 @@ def main() -> int:
         issue_only=args.issue_only,
         report_path=args.write_report,
     )
+    request_summary = load_remote_registration_request(args.remote_registration_request)
 
     if args.command == "summary":
-        summary = build_summary(governance)
+        summary = build_summary(governance, request_summary)
         if args.json:
             print(json.dumps(summary, indent=2, ensure_ascii=False))
         else:

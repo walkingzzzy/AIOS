@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
+import sys
 import time
 from pathlib import Path
+from types import ModuleType
 
 from prototype import default_agent_socket, default_socket, fixture_call, rpc_call
 
@@ -34,6 +37,28 @@ WINDOW_ACTION_IDS = {
     "send-window-active-output",
 }
 
+AI_READY_TONES = {
+    "local-ready": "positive",
+    "hybrid-ready": "positive",
+    "cloud-ready": "positive",
+    "hybrid-remote-only": "warning",
+    "setup-pending": "warning",
+    "not-ready": "critical",
+    "disabled": "neutral",
+}
+
+ROUTE_TONES = {
+    "local": "positive",
+    "cloud": "warning",
+    "hybrid": "neutral",
+    "pending": "warning",
+    "disabled": "neutral",
+    "unknown": "neutral",
+}
+
+_AI_CENTER_PROTOTYPE_MODULE: ModuleType | None = None
+_PROVIDER_SETTINGS_PROTOTYPE_MODULE: ModuleType | None = None
+
 
 def tone_for(state: str | None) -> str:
     if not state:
@@ -49,6 +74,65 @@ def default_compositor_runtime_state() -> Path | None:
 def default_compositor_window_state() -> Path | None:
     value = os.environ.get("AIOS_SHELL_COMPOSITOR_WINDOW_STATE_PATH")
     return Path(value) if value else None
+
+
+def default_ai_readiness_path() -> Path:
+    value = os.environ.get("AIOS_SHELL_AI_READINESS_PATH")
+    return Path(value) if value else Path("/var/lib/aios/runtime/ai-readiness.json")
+
+
+def default_ai_onboarding_report_path() -> Path:
+    value = os.environ.get("AIOS_SHELL_AI_ONBOARDING_REPORT_PATH")
+    return Path(value) if value else Path("/var/lib/aios/onboarding/ai-onboarding-report.json")
+
+
+def _load_module(module_name: str, path: Path) -> ModuleType:
+    module = sys.modules.get(module_name)
+    if module is not None:
+        return module
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"unable to load module from {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_ai_center_prototype_module() -> ModuleType:
+    global _AI_CENTER_PROTOTYPE_MODULE
+    if _AI_CENTER_PROTOTYPE_MODULE is not None:
+        return _AI_CENTER_PROTOTYPE_MODULE
+    module_path = Path(__file__).resolve().parents[1] / "ai-center" / "prototype.py"
+    _AI_CENTER_PROTOTYPE_MODULE = _load_module(
+        "aios_shell_task_surface_ai_center_prototype",
+        module_path,
+    )
+    return _AI_CENTER_PROTOTYPE_MODULE
+
+
+def load_provider_settings_prototype_module() -> ModuleType:
+    global _PROVIDER_SETTINGS_PROTOTYPE_MODULE
+    if _PROVIDER_SETTINGS_PROTOTYPE_MODULE is not None:
+        return _PROVIDER_SETTINGS_PROTOTYPE_MODULE
+    module_path = Path(__file__).resolve().parents[1] / "provider-settings" / "prototype.py"
+    _PROVIDER_SETTINGS_PROTOTYPE_MODULE = _load_module(
+        "aios_shell_task_surface_provider_settings_prototype",
+        module_path,
+    )
+    return _PROVIDER_SETTINGS_PROTOTYPE_MODULE
+
+
+def default_runtime_platform_env_path() -> Path:
+    return load_provider_settings_prototype_module().default_runtime_platform_env_path()
+
+
+def default_model_dir() -> Path:
+    return load_ai_center_prototype_module().default_model_dir()
+
+
+def default_model_registry() -> Path:
+    return load_ai_center_prototype_module().default_model_registry()
 
 
 def parse_int(value, default: int = 0) -> int:
@@ -70,6 +154,227 @@ def load_json_payload(path: Path | None) -> tuple[dict, str | None]:
     if isinstance(payload, dict):
         return payload, None
     return {}, f"invalid-json-object:{path}"
+
+
+def ai_tone_for(state: str | None) -> str:
+    if not state:
+        return "neutral"
+    return AI_READY_TONES.get(state, "neutral")
+
+
+def ai_state_label(state: str | None) -> str:
+    labels = {
+        "local-ready": "Local Ready",
+        "hybrid-ready": "Hybrid Ready",
+        "cloud-ready": "Cloud Ready",
+        "hybrid-remote-only": "Remote Only",
+        "setup-pending": "Setup Pending",
+        "not-ready": "Not Ready",
+        "disabled": "Disabled",
+    }
+    return labels.get(state or "", state or "Unknown")
+
+
+def route_label(route_kind: str) -> str:
+    labels = {
+        "local": "Local Model",
+        "cloud": "Cloud Model",
+        "hybrid": "Hybrid Route",
+        "pending": "Setup Pending",
+        "disabled": "Disabled",
+        "unknown": "Unresolved",
+    }
+    return labels.get(route_kind, route_kind or "Unresolved")
+
+
+def load_ai_readiness_summary(readiness_path: Path | None, report_path: Path | None) -> dict:
+    readiness_payload, readiness_error = load_json_payload(readiness_path)
+    report_payload, report_error = load_json_payload(report_path)
+    has_source = bool(readiness_payload or report_payload)
+    errors = [error for error in (readiness_error, report_error) if error]
+    source_status = "ready" if has_source else "unavailable"
+    if has_source and errors:
+        source_status = "partial"
+
+    state = readiness_payload.get("state") or report_payload.get("readiness_state")
+    reason = readiness_payload.get("reason") or report_payload.get("readiness_reason")
+    next_action = readiness_payload.get("next_action") or report_payload.get("next_action")
+    ai_mode = readiness_payload.get("ai_mode") or report_payload.get("ai_mode")
+    local_model_count = readiness_payload.get("local_model_count")
+    if local_model_count is None:
+        local_model_count = report_payload.get("local_model_count")
+    endpoint_configured = readiness_payload.get("endpoint_configured")
+    if endpoint_configured is None:
+        endpoint_configured = report_payload.get("endpoint_configured")
+
+    action_map = {
+        "open-ai-center": "Open AI Center",
+        "import-local-model": "Import Local Model",
+        "configure-remote-endpoint": "Configure Remote Endpoint",
+        "auto-pull-default-model": "Pull Default Model",
+        "enable-ai": "Enable AI",
+    }
+
+    return {
+        "state": state,
+        "state_label": ai_state_label(state),
+        "tone": ai_tone_for(state),
+        "reason": reason,
+        "next_action": next_action,
+        "next_action_label": action_map.get(next_action, next_action or "Review AI Setup"),
+        "ai_mode": ai_mode,
+        "local_model_count": parse_int(local_model_count, 0),
+        "endpoint_configured": bool(endpoint_configured),
+        "endpoint_base_url": report_payload.get("endpoint_base_url"),
+        "endpoint_model": report_payload.get("endpoint_model"),
+        "has_source": has_source,
+        "source_status": source_status,
+        "source_error": "; ".join(errors) if errors else None,
+        "readiness_path": str(readiness_path) if readiness_path else None,
+        "report_path": readiness_payload.get("report_path") or str(report_path) if report_path else None,
+    }
+
+
+def normalize_execution_location(value: str | None) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def classify_current_route_kind(
+    execution_location: str | None,
+    provider_settings_state: dict,
+    readiness_summary: dict,
+    effective_local_model_count: int = 0,
+) -> str:
+    if provider_settings_state.get("provider_enabled") is False:
+        return "disabled"
+
+    normalized_execution_location = normalize_execution_location(execution_location)
+    if normalized_execution_location:
+        if "remote" in normalized_execution_location or "cloud" in normalized_execution_location:
+            return "cloud"
+        if "local" in normalized_execution_location or "device" in normalized_execution_location:
+            return "local"
+
+    readiness_state = str(readiness_summary.get("state") or "").strip().lower()
+    route_preference = provider_settings_state.get("route_preference")
+    local_model_count = max(
+        parse_int(readiness_summary.get("local_model_count"), 0),
+        parse_int(effective_local_model_count, 0),
+    )
+    endpoint_configured = bool(provider_settings_state.get("endpoint_configured"))
+
+    if readiness_state == "local-ready":
+        return "local"
+    if readiness_state in {"cloud-ready", "hybrid-remote-only"}:
+        return "cloud"
+    if route_preference in {"remote-first", "remote-only"} and endpoint_configured:
+        return "cloud"
+    if route_preference == "local-first" and local_model_count > 0:
+        return "local"
+    if readiness_state == "hybrid-ready":
+        if local_model_count > 0:
+            return "local"
+        if endpoint_configured:
+            return "cloud"
+        return "hybrid"
+    if local_model_count > 0:
+        return "local"
+    if endpoint_configured:
+        return "cloud"
+    if readiness_state in {"setup-pending", "not-ready"}:
+        return "pending"
+    return "unknown"
+
+
+def model_source_label(
+    route_kind: str,
+    readiness_summary: dict,
+    provider_settings_state: dict,
+    ai_center_state: dict,
+) -> str:
+    default_text_model = ai_center_state.get("default_text_generation_model")
+    endpoint_model = (
+        provider_settings_state.get("endpoint_model")
+        or readiness_summary.get("endpoint_model")
+    )
+    local_model_count = parse_int(
+        ai_center_state.get("effective_local_model_count"),
+        parse_int(readiness_summary.get("local_model_count"), 0),
+    )
+
+    if route_kind == "local":
+        if default_text_model:
+            return default_text_model
+        if local_model_count > 0:
+            return f"local-models:{local_model_count}"
+    if route_kind == "cloud":
+        if endpoint_model:
+            return endpoint_model
+        return "remote-endpoint"
+    if default_text_model:
+        return default_text_model
+    if endpoint_model:
+        return endpoint_model
+    if local_model_count > 0:
+        return f"local-models:{local_model_count}"
+    if provider_settings_state.get("provider_enabled") is False:
+        return "disabled"
+    return "unconfigured"
+
+
+def build_ai_execution_summary(
+    readiness_path: Path | None,
+    report_path: Path | None,
+    runtime_platform_env_path: Path | None,
+    model_dir: Path | None,
+    model_registry: Path | None,
+    ai_readiness_summary: dict | None,
+    selected_provider: dict | None,
+) -> dict:
+    provider_settings_module = load_provider_settings_prototype_module()
+    ai_center_module = load_ai_center_prototype_module()
+    provider_settings_state = provider_settings_module.build_provider_settings_state(
+        readiness_path,
+        report_path,
+        runtime_platform_env_path,
+    )
+    ai_center_state = ai_center_module.build_ai_center_state(
+        readiness_path,
+        report_path,
+        model_dir,
+        model_registry,
+    )
+    readiness_summary = (
+        ai_readiness_summary
+        or provider_settings_state.get("readiness")
+        or ai_center_state.get("readiness")
+        or {}
+    )
+    current_route_kind = classify_current_route_kind(
+        (selected_provider or {}).get("execution_location"),
+        provider_settings_state,
+        readiness_summary,
+        parse_int(ai_center_state.get("effective_local_model_count"), 0),
+    )
+    return {
+        "provider_settings_state": provider_settings_state,
+        "ai_center_state": ai_center_state,
+        "current_route_kind": current_route_kind,
+        "current_route_label": route_label(current_route_kind),
+        "current_route_tone": ROUTE_TONES.get(current_route_kind, "neutral"),
+        "current_model": model_source_label(
+            current_route_kind,
+            readiness_summary,
+            provider_settings_state,
+            ai_center_state,
+        ),
+        "route_preference": provider_settings_state.get("route_preference"),
+        "route_preference_label": provider_settings_state.get("route_preference_label"),
+        "provider_enabled": provider_settings_state.get("provider_enabled"),
+        "runtime_platform_env_path": provider_settings_state.get("runtime_platform_env_path"),
+        "default_text_generation_model": ai_center_state.get("default_text_generation_model"),
+        "effective_local_model_count": ai_center_state.get("effective_local_model_count"),
+    }
 
 
 def derive_managed_windows(window_payload: dict, runtime_session: dict) -> list[dict]:
@@ -711,6 +1016,8 @@ def build_model(
     provider_resolution: dict | None,
     provider_resolution_error: str | None,
     capability_id: str | None,
+    ai_readiness_summary: dict | None,
+    ai_execution_summary: dict | None,
     compositor_summary: dict | None,
     data_source_error: str | None = None,
 ) -> dict:
@@ -718,6 +1025,8 @@ def build_model(
     summary = build_summary(tasks)
     plan = (plan_result or {}).get("plan") or {}
     task_events = task_events_result.get("events", [])
+    ai_readiness_summary = ai_readiness_summary or {}
+    ai_execution_summary = ai_execution_summary or {}
     compositor_summary = compositor_summary or {}
 
     task_items = [
@@ -821,6 +1130,9 @@ def build_model(
 
     selected_provider = (provider_resolution or {}).get("selected") or {}
     provider_candidates = (provider_resolution or {}).get("candidates") or []
+    task_route_label = ai_execution_summary.get("current_route_label", "Unresolved")
+    task_route_tone = ai_execution_summary.get("current_route_tone", "neutral")
+    task_model_source = ai_execution_summary.get("current_model", "unconfigured")
 
     provider_route_items = []
     if capability_id:
@@ -834,6 +1146,21 @@ def build_model(
     if selected_provider:
         provider_route_items.extend(
             [
+                {
+                    "label": "task_inference_route",
+                    "value": task_route_label,
+                    "tone": task_route_tone,
+                },
+                {
+                    "label": "task_model_source",
+                    "value": task_model_source,
+                    "tone": task_route_tone,
+                },
+                {
+                    "label": "route_policy",
+                    "value": ai_execution_summary.get("route_preference_label") or "-",
+                    "tone": "neutral",
+                },
                 {
                     "label": "provider_id",
                     "value": selected_provider.get("provider_id"),
@@ -866,6 +1193,26 @@ def build_model(
                 {
                     "label": "score",
                     "value": selected_provider.get("score", 0),
+                    "tone": "neutral",
+                },
+            ]
+        )
+    elif ai_execution_summary:
+        provider_route_items.extend(
+            [
+                {
+                    "label": "task_inference_route",
+                    "value": task_route_label,
+                    "tone": task_route_tone,
+                },
+                {
+                    "label": "task_model_source",
+                    "value": task_model_source,
+                    "tone": task_route_tone,
+                },
+                {
+                    "label": "route_policy",
+                    "value": ai_execution_summary.get("route_preference_label") or "-",
                     "tone": "neutral",
                 },
             ]
@@ -1053,6 +1400,85 @@ def build_model(
         }
         for item in minimized_windows
     ]
+    ai_items = []
+    if ai_readiness_summary.get("has_source"):
+        ai_items.append(
+            {
+                "label": "state",
+                "value": ai_readiness_summary.get("state_label") or "Unknown",
+                "tone": ai_readiness_summary.get("tone", "neutral"),
+            }
+        )
+        if ai_readiness_summary.get("reason"):
+            ai_items.append(
+                {
+                    "label": "reason",
+                    "value": ai_readiness_summary.get("reason"),
+                    "tone": ai_readiness_summary.get("tone", "neutral"),
+                }
+            )
+        ai_items.append(
+            {
+                "label": "mode",
+                "value": ai_readiness_summary.get("ai_mode") or "-",
+                "tone": "neutral",
+            }
+        )
+        ai_items.append(
+            {
+                "label": "current_route",
+                "value": ai_execution_summary.get("current_route_label") or "Unresolved",
+                "tone": ai_execution_summary.get("current_route_tone", "neutral"),
+            }
+        )
+        ai_items.append(
+            {
+                "label": "current_model",
+                "value": ai_execution_summary.get("current_model") or "unconfigured",
+                "tone": ai_execution_summary.get("current_route_tone", "neutral"),
+            }
+        )
+        ai_items.append(
+            {
+                "label": "route_policy",
+                "value": ai_execution_summary.get("route_preference_label") or "-",
+                "tone": "neutral",
+            }
+        )
+        ai_items.append(
+            {
+                "label": "local_models",
+                "value": ai_readiness_summary.get("local_model_count", 0),
+                "tone": (
+                    "positive"
+                    if ai_readiness_summary.get("local_model_count", 0)
+                    else "warning"
+                ),
+            }
+        )
+        ai_items.append(
+            {
+                "label": "remote_endpoint",
+                "value": (
+                    ai_readiness_summary.get("endpoint_model")
+                    or ("configured" if ai_readiness_summary.get("endpoint_configured") else "missing")
+                ),
+                "tone": "positive" if ai_readiness_summary.get("endpoint_configured") else "warning",
+            }
+        )
+        if ai_readiness_summary.get("next_action") and ai_readiness_summary.get("next_action") != "none":
+            ai_items.append(
+                {
+                    "label": "next_action",
+                    "value": ai_readiness_summary.get("next_action"),
+                    "tone": "warning",
+                    "action": {
+                        "action_id": ai_readiness_summary.get("next_action"),
+                        "label": ai_readiness_summary.get("next_action_label") or "Open AI Center",
+                        "enabled": True,
+                    },
+                }
+            )
 
     return {
 
@@ -1083,6 +1509,11 @@ def build_model(
                 "tone": "positive" if selected_provider else ("warning" if capability_id else "neutral"),
             },
             {
+                "label": "Inference",
+                "value": task_route_label,
+                "tone": task_route_tone,
+            },
+            {
                 "label": "Workspace",
                 "value": active_workspace_id or "-",
                 "tone": "positive" if active_workspace_id else "neutral",
@@ -1096,6 +1527,11 @@ def build_model(
                 "label": "Minimized",
                 "value": compositor_summary.get("minimized_window_count", 0),
                 "tone": "warning" if compositor_summary.get("minimized_window_count", 0) else "neutral",
+            },
+            {
+                "label": "AI",
+                "value": ai_readiness_summary.get("state_label", "unknown"),
+                "tone": ai_readiness_summary.get("tone", "neutral"),
             },
         ],
         "actions": actions,
@@ -1137,6 +1573,12 @@ def build_model(
                 "empty_state": "No provider candidates available",
             },
             {
+                "section_id": "ai-readiness",
+                "title": "AI Readiness",
+                "items": ai_items,
+                "empty_state": "No AI readiness summary published",
+            },
+            {
                 "section_id": "workspace-overview",
                 "title": "Workspace Overview",
                 "items": workspace_items,
@@ -1174,6 +1616,29 @@ def build_model(
             "provider_candidate_count": len(provider_candidates),
             "provider_resolution_reason": (provider_resolution or {}).get("reason"),
             "provider_resolution_error": provider_resolution_error,
+            "task_inference_route": ai_execution_summary.get("current_route_kind"),
+            "task_inference_route_label": task_route_label,
+            "task_model_source": task_model_source,
+            "ai_readiness_state": ai_readiness_summary.get("state"),
+            "ai_readiness_label": ai_readiness_summary.get("state_label"),
+            "ai_readiness_reason": ai_readiness_summary.get("reason"),
+            "ai_readiness_next_action": ai_readiness_summary.get("next_action"),
+            "ai_readiness_mode": ai_readiness_summary.get("ai_mode"),
+            "ai_local_model_count": ai_readiness_summary.get("local_model_count", 0),
+            "ai_endpoint_configured": ai_readiness_summary.get("endpoint_configured", False),
+            "ai_endpoint_model": ai_readiness_summary.get("endpoint_model"),
+            "ai_data_status": ai_readiness_summary.get("source_status"),
+            "ai_data_error": ai_readiness_summary.get("source_error"),
+            "ai_readiness_path": ai_readiness_summary.get("readiness_path"),
+            "ai_onboarding_report_path": ai_readiness_summary.get("report_path"),
+            "ai_route_preference": ai_execution_summary.get("route_preference"),
+            "ai_route_preference_label": ai_execution_summary.get("route_preference_label"),
+            "ai_current_route": ai_execution_summary.get("current_route_kind"),
+            "ai_current_route_label": ai_execution_summary.get("current_route_label"),
+            "ai_current_model": ai_execution_summary.get("current_model"),
+            "ai_default_text_generation_model": ai_execution_summary.get("default_text_generation_model"),
+            "ai_provider_enabled": ai_execution_summary.get("provider_enabled"),
+            "runtime_platform_env_path": ai_execution_summary.get("runtime_platform_env_path"),
             "compositor_data_status": compositor_summary.get("data_status"),
             "compositor_data_error": compositor_summary.get("data_error"),
             "compositor_window_manager_status": compositor_summary.get("window_manager_status"),
@@ -1281,6 +1746,11 @@ def main() -> int:
     parser.add_argument("--output-id")
     parser.add_argument("--compositor-runtime-state", type=Path, default=default_compositor_runtime_state())
     parser.add_argument("--compositor-window-state", type=Path, default=default_compositor_window_state())
+    parser.add_argument("--ai-readiness", type=Path, default=default_ai_readiness_path())
+    parser.add_argument("--ai-onboarding-report", type=Path, default=default_ai_onboarding_report_path())
+    parser.add_argument("--runtime-platform-env", type=Path, default=default_runtime_platform_env_path())
+    parser.add_argument("--model-dir", type=Path, default=default_model_dir())
+    parser.add_argument("--model-registry", type=Path, default=default_model_registry())
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--interval", type=float, default=2.0)
     parser.add_argument("--iterations", type=int, default=1)
@@ -1366,6 +1836,19 @@ def main() -> int:
                 args.compositor_runtime_state,
                 args.compositor_window_state,
             )
+            ai_readiness_summary = load_ai_readiness_summary(
+                args.ai_readiness,
+                args.ai_onboarding_report,
+            )
+            ai_execution_summary = build_ai_execution_summary(
+                args.ai_readiness,
+                args.ai_onboarding_report,
+                args.runtime_platform_env,
+                args.model_dir,
+                args.model_registry,
+                ai_readiness_summary,
+                (provider_resolution or {}).get("selected") or {},
+            )
             model = build_model(
                 tasks_result,
                 focus_task,
@@ -1375,6 +1858,8 @@ def main() -> int:
                 provider_resolution,
                 provider_resolution_error,
                 capability_id,
+                ai_readiness_summary,
+                ai_execution_summary,
                 compositor_summary,
                 data_source_error,
             )
@@ -1425,6 +1910,19 @@ def main() -> int:
         args.compositor_runtime_state,
         args.compositor_window_state,
     )
+    ai_readiness_summary = load_ai_readiness_summary(
+        args.ai_readiness,
+        args.ai_onboarding_report,
+    )
+    ai_execution_summary = build_ai_execution_summary(
+        args.ai_readiness,
+        args.ai_onboarding_report,
+        args.runtime_platform_env,
+        args.model_dir,
+        args.model_registry,
+        ai_readiness_summary,
+        (provider_resolution or {}).get("selected") or {},
+    )
     model = build_model(
         tasks_result,
         focus_task,
@@ -1434,6 +1932,8 @@ def main() -> int:
         provider_resolution,
         provider_resolution_error,
         capability_id,
+        ai_readiness_summary,
+        ai_execution_summary,
         compositor_summary,
         data_source_error,
     )

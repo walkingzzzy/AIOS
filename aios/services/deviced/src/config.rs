@@ -32,6 +32,7 @@ pub struct Config {
     pub ui_tree_state_path: PathBuf,
     pub default_resolution: String,
     pub approval_mode: String,
+    pub product_mode: bool,
     pub approved_sessions: Vec<String>,
     pub approved_tasks: Vec<String>,
     pub screen_capture_command: Option<String>,
@@ -138,6 +139,8 @@ impl Config {
                 .unwrap_or_else(|_| "1920x1080".to_string()),
             approval_mode: std::env::var("AIOS_DEVICED_APPROVAL_MODE")
                 .unwrap_or_else(|_| "metadata-only".to_string()),
+            product_mode: env_flag_optional("AIOS_DEVICED_PRODUCT_MODE")
+                .unwrap_or_else(|| env_flag("AIOS_RUNTIMED_PRODUCT_MODE", false)),
             approved_sessions: env_list("AIOS_DEVICED_APPROVED_SESSION_IDS"),
             approved_tasks: env_list("AIOS_DEVICED_APPROVED_TASK_IDS"),
             screen_capture_command: std::env::var("AIOS_DEVICED_SCREEN_CAPTURE_COMMAND").ok(),
@@ -183,6 +186,12 @@ fn env_flag(name: &str, default: bool) -> bool {
         .ok()
         .map(|value| matches!(value.as_str(), "1" | "true" | "yes" | "on"))
         .unwrap_or(default)
+}
+
+fn env_flag_optional(name: &str) -> Option<bool> {
+    std::env::var(name)
+        .ok()
+        .map(|value| matches!(value.as_str(), "1" | "true" | "yes" | "on"))
 }
 
 fn env_u64(name: &str, default: u64) -> u64 {

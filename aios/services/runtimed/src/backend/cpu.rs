@@ -8,8 +8,8 @@ use std::{
 use aios_contracts::{RuntimeInferRequest, RuntimeInferResponse};
 
 use super::{
-    capability::BackendReadiness, wrapper, BackendExecutionError, BackendFailureClass,
-    RuntimeBackend,
+    capability::{env_truthy, BackendReadiness},
+    wrapper, BackendExecutionError, BackendFailureClass, RuntimeBackend,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -25,9 +25,14 @@ impl RuntimeBackend for LocalCpuBackend {
             Some(_) => {
                 BackendReadiness::available("configured-wrapper", "local-cpu wrapper configured")
             }
-            None => {
+            None if inline_worker_permitted() => {
                 BackendReadiness::available("built-in-worker", "local-cpu built-in worker ready")
             }
+            None => BackendReadiness::unavailable(
+                "not-configured",
+                "product-worker-required",
+                inline_worker_block_reason(),
+            ),
         }
     }
 
@@ -47,8 +52,52 @@ impl RuntimeBackend for LocalCpuBackend {
                 command,
                 default_route_state: "local-wrapper",
             }),
-            None => execute_inline_worker(request, estimated_latency_ms, timeout_ms),
+            None if inline_worker_permitted() => {
+                execute_inline_worker(request, estimated_latency_ms, timeout_ms)
+            }
+            None => Err(BackendExecutionError::new(
+                BackendFailureClass::Unavailable,
+                "backend-worker-required",
+                inline_worker_block_reason(),
+                None,
+            )),
         }
+    }
+}
+
+fn inline_worker_permitted() -> bool {
+    inline_worker_permitted_with_flags(
+        env_truthy("AIOS_RUNTIMED_PRODUCT_MODE"),
+        env_truthy("AIOS_RUNTIMED_ALLOW_INLINE_LOCAL_CPU"),
+    )
+}
+
+fn inline_worker_permitted_with_flags(product_mode: bool, allow_inline: bool) -> bool {
+    !product_mode || allow_inline
+}
+
+fn inline_worker_block_reason() -> String {
+    "local-cpu product mode requires AIOS_RUNTIMED_LOCAL_CPU_COMMAND; built-in worker is reserved for dev/test use"
+        .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::inline_worker_permitted_with_flags;
+
+    #[test]
+    fn inline_worker_is_allowed_outside_product_mode() {
+        assert!(inline_worker_permitted_with_flags(false, false));
+    }
+
+    #[test]
+    fn inline_worker_is_blocked_in_product_mode_without_override() {
+        assert!(!inline_worker_permitted_with_flags(true, false));
+    }
+
+    #[test]
+    fn inline_worker_can_be_explicitly_reenabled_in_product_mode() {
+        assert!(inline_worker_permitted_with_flags(true, true));
     }
 }
 

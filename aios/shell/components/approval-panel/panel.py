@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
+import sys
 import time
 from pathlib import Path
+from types import ModuleType
 
 from prototype import default_agent_socket, default_socket, fixture_call, rpc_call
 
@@ -14,6 +17,40 @@ STATUS_TONES = {
     "approved": "positive",
     "rejected": "critical",
 }
+_PRIVACY_MEMORY_PROTOTYPE_MODULE: ModuleType | None = None
+
+
+def _load_module(module_name: str, path: Path) -> ModuleType:
+    module = sys.modules.get(module_name)
+    if module is not None:
+        return module
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"unable to load module from {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_privacy_memory_prototype_module() -> ModuleType:
+    global _PRIVACY_MEMORY_PROTOTYPE_MODULE
+    if _PRIVACY_MEMORY_PROTOTYPE_MODULE is not None:
+        return _PRIVACY_MEMORY_PROTOTYPE_MODULE
+    module_path = Path(__file__).resolve().parents[1] / "privacy-memory" / "prototype.py"
+    _PRIVACY_MEMORY_PROTOTYPE_MODULE = _load_module(
+        "aios_shell_privacy_memory_prototype",
+        module_path,
+    )
+    return _PRIVACY_MEMORY_PROTOTYPE_MODULE
+
+
+def default_runtime_platform_env_path() -> Path:
+    return load_privacy_memory_prototype_module().default_runtime_platform_env_path()
+
+
+def build_privacy_memory_state(runtime_platform_env_path: Path | None) -> dict:
+    return load_privacy_memory_prototype_module().build_privacy_memory_state(runtime_platform_env_path)
 
 
 def tone_for(status: str | None) -> str:
@@ -72,11 +109,13 @@ def build_model(
     result: dict,
     session_id: str | None,
     task_id: str | None,
+    privacy_memory: dict | None = None,
     data_source_error: str | None = None,
 ) -> dict:
     approvals = result.get("approvals", [])
     summary = build_summary(approvals)
     focus = next((item for item in approvals if item.get("status") == "pending"), approvals[0] if approvals else None)
+    privacy_memory = privacy_memory or {}
 
     approval_items = [
         {
@@ -123,6 +162,11 @@ def build_model(
             {"label": "Total", "value": summary["total"], "tone": "neutral"},
             {"label": "Pending", "value": summary["by_status"].get("pending", 0), "tone": tone_for("pending")},
             {"label": "Lanes", "value": len(summary["by_lane"]), "tone": "neutral"},
+            {
+                "label": "Policy",
+                "value": privacy_memory.get("approval_default_policy_label") or "Unknown",
+                "tone": "neutral",
+            },
         ],
         "actions": actions,
         "sections": [
@@ -141,6 +185,43 @@ def build_model(
                 ],
                 "empty_state": "No approval lanes",
             },
+            {
+                "section_id": "policy-defaults",
+                "title": "Policy Defaults",
+                "items": [
+                    {
+                        "label": "Default High-Risk Policy",
+                        "value": privacy_memory.get("approval_default_policy_label") or "Unknown",
+                        "tone": "neutral",
+                    },
+                    {
+                        "label": "Remote Prompt Level",
+                        "value": privacy_memory.get("remote_prompt_level_label") or "Unknown",
+                        "tone": "warning" if privacy_memory.get("remote_prompt_level") == "minimal" else "neutral",
+                    },
+                    {
+                        "label": "Memory Enabled",
+                        "value": privacy_memory.get("memory_enabled", True),
+                        "tone": "positive" if privacy_memory.get("memory_enabled", True) else "neutral",
+                    },
+                    {
+                        "label": "Memory Retention Days",
+                        "value": privacy_memory.get("memory_retention_days"),
+                        "tone": "neutral",
+                    },
+                    {
+                        "label": "Audit Retention Days",
+                        "value": privacy_memory.get("audit_retention_days"),
+                        "tone": "neutral",
+                    },
+                    {
+                        "label": "Runtime Platform Env",
+                        "value": privacy_memory.get("runtime_platform_env_path") or "-",
+                        "tone": "neutral",
+                    },
+                ],
+                "empty_state": "No policy defaults available",
+            },
         ],
         "meta": {
             "session_id": session_id,
@@ -148,6 +229,15 @@ def build_model(
             "focus_approval_ref": (focus or {}).get("approval_ref"),
             "approval_count": len(approvals),
             "status_summary": summary["by_status"],
+            "memory_enabled": privacy_memory.get("memory_enabled", True),
+            "memory_retention_days": privacy_memory.get("memory_retention_days"),
+            "audit_retention_days": privacy_memory.get("audit_retention_days"),
+            "approval_default_policy": privacy_memory.get("approval_default_policy"),
+            "approval_default_policy_label": privacy_memory.get("approval_default_policy_label"),
+            "remote_prompt_level": privacy_memory.get("remote_prompt_level"),
+            "remote_prompt_level_label": privacy_memory.get("remote_prompt_level_label"),
+            "runtime_platform_env_path": privacy_memory.get("runtime_platform_env_path"),
+            "runtime_platform_env_exists": privacy_memory.get("runtime_platform_env_exists", False),
             "data_source_status": "ready" if data_source_error is None else "fallback-empty",
             "data_source_error": data_source_error,
         },
@@ -190,6 +280,7 @@ def main() -> int:
     parser.add_argument("--session-id")
     parser.add_argument("--task-id")
     parser.add_argument("--status")
+    parser.add_argument("--runtime-platform-env", type=Path, default=default_runtime_platform_env_path())
     parser.add_argument("--approval-ref")
     parser.add_argument("--resolver", default="shell-approval-panel")
     parser.add_argument("--reason")
@@ -225,7 +316,13 @@ def main() -> int:
                 args.task_id,
                 args.status,
             )
-            model = build_model(result, args.session_id, args.task_id, data_source_error)
+            model = build_model(
+                result,
+                args.session_id,
+                args.task_id,
+                build_privacy_memory_state(args.runtime_platform_env),
+                data_source_error,
+            )
             if args.json:
                 print(json.dumps(model, indent=2, ensure_ascii=False))
             else:
@@ -243,7 +340,13 @@ def main() -> int:
         args.task_id,
         args.status,
     )
-    model = build_model(result, args.session_id, args.task_id, data_source_error)
+    model = build_model(
+        result,
+        args.session_id,
+        args.task_id,
+        build_privacy_memory_state(args.runtime_platform_env),
+        data_source_error,
+    )
     if args.command == "model" or args.json:
         print(json.dumps(model, indent=2, ensure_ascii=False))
     else:

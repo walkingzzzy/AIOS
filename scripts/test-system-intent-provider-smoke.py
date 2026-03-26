@@ -349,6 +349,137 @@ def main() -> int:
         require("provider.fs.open" in heuristic_response.get("candidate_capabilities", []), "heuristic system intent response lost provider.fs.open capability")
         require("runtime.infer.submit" in heuristic_response.get("candidate_capabilities", []), "heuristic system intent response lost runtime.infer.submit capability")
 
+        chinese_file_intent = "打开 /tmp/中文报告.md 并总结重点"
+        chinese_file_session = rpc_call(
+            sockets["agentd"],
+            "agent.session.create",
+            {"user_id": "system-intent-smoke", "metadata": {"initial_intent": chinese_file_intent}},
+            timeout=args.timeout,
+        )
+        chinese_file_session_id = chinese_file_session["session"]["session_id"]
+        chinese_file_task_id = chinese_file_session["task"]["task_id"]
+        chinese_file_token = rpc_call(
+            sockets["policyd"],
+            "policy.token.issue",
+            {
+                "user_id": "system-intent-smoke",
+                "session_id": chinese_file_session_id,
+                "task_id": chinese_file_task_id,
+                "capability_id": "system.intent.execute",
+                "execution_location": "local",
+                "constraints": {},
+            },
+            timeout=args.timeout,
+        )
+        chinese_file_response = rpc_call(
+            sockets["provider"],
+            "system.intent.execute",
+            {"execution_token": chinese_file_token, "intent": chinese_file_intent},
+            timeout=args.timeout,
+        )
+        require(chinese_file_response.get("plan_source") == "provider-heuristic", "system intent provider did not use heuristic planning for chinese file intent")
+        require(chinese_file_response.get("route_preference") == "tool-calling", "system intent provider chinese file route preference mismatch")
+        require(chinese_file_response.get("next_action") == "inspect-bound-target", "system intent provider chinese file next_action mismatch")
+        require(
+            (chinese_file_response.get("candidate_capabilities") or [None])[0] == "provider.fs.open",
+            "system intent provider chinese file intent did not prioritize provider.fs.open",
+        )
+        require(
+            "runtime.infer.submit" in chinese_file_response.get("candidate_capabilities", []),
+            "system intent provider chinese file intent lost runtime inference capability",
+        )
+
+        chinese_browser_intent = "用浏览器打开 https://example.com 并提取标题"
+        chinese_browser_session = rpc_call(
+            sockets["agentd"],
+            "agent.session.create",
+            {"user_id": "system-intent-smoke", "metadata": {"initial_intent": chinese_browser_intent}},
+            timeout=args.timeout,
+        )
+        chinese_browser_session_id = chinese_browser_session["session"]["session_id"]
+        chinese_browser_task_id = chinese_browser_session["task"]["task_id"]
+        chinese_browser_token = rpc_call(
+            sockets["policyd"],
+            "policy.token.issue",
+            {
+                "user_id": "system-intent-smoke",
+                "session_id": chinese_browser_session_id,
+                "task_id": chinese_browser_task_id,
+                "capability_id": "system.intent.execute",
+                "execution_location": "local",
+                "constraints": {},
+            },
+            timeout=args.timeout,
+        )
+        chinese_browser_response = rpc_call(
+            sockets["provider"],
+            "system.intent.execute",
+            {"execution_token": chinese_browser_token, "intent": chinese_browser_intent},
+            timeout=args.timeout,
+        )
+        require(
+            (chinese_browser_response.get("candidate_capabilities") or [None])[0] == "compat.browser.navigate",
+            "system intent provider chinese browser intent did not prioritize compat.browser.navigate",
+        )
+        require(
+            "compat.browser.extract" in chinese_browser_response.get("candidate_capabilities", []),
+            "system intent provider chinese browser intent lost extract capability",
+        )
+        require(
+            "provider.fs.open" not in chinese_browser_response.get("candidate_capabilities", []),
+            "system intent provider chinese browser intent incorrectly added provider.fs.open",
+        )
+        require(
+            chinese_browser_response.get("next_action") == "open-browser-target",
+            "system intent provider chinese browser next_action mismatch",
+        )
+
+        chinese_delete_intent = "删除 /tmp/危险报告.txt 并清空回收站"
+        chinese_delete_session = rpc_call(
+            sockets["agentd"],
+            "agent.session.create",
+            {"user_id": "system-intent-smoke", "metadata": {"initial_intent": chinese_delete_intent}},
+            timeout=args.timeout,
+        )
+        chinese_delete_session_id = chinese_delete_session["session"]["session_id"]
+        chinese_delete_task_id = chinese_delete_session["task"]["task_id"]
+        chinese_delete_token = rpc_call(
+            sockets["policyd"],
+            "policy.token.issue",
+            {
+                "user_id": "system-intent-smoke",
+                "session_id": chinese_delete_session_id,
+                "task_id": chinese_delete_task_id,
+                "capability_id": "system.intent.execute",
+                "execution_location": "local",
+                "constraints": {},
+            },
+            timeout=args.timeout,
+        )
+        chinese_delete_response = rpc_call(
+            sockets["provider"],
+            "system.intent.execute",
+            {"execution_token": chinese_delete_token, "intent": chinese_delete_intent},
+            timeout=args.timeout,
+        )
+        require(chinese_delete_response.get("status") == "manual-review", "system intent provider chinese delete should require manual review")
+        require(chinese_delete_response.get("requires_handoff") is True, "system intent provider chinese delete should require handoff")
+        require(
+            (chinese_delete_response.get("candidate_capabilities") or [None])[0] == "system.file.bulk_delete",
+            "system intent provider chinese delete did not prioritize destructive capability",
+        )
+        require(
+            chinese_delete_response.get("next_action") == "request-destructive-approval",
+            "system intent provider chinese delete next_action mismatch",
+        )
+        require(
+            any(
+                item.get("capability_id") == "system.file.bulk_delete" and item.get("requires_approval") is True
+                for item in chinese_delete_response.get("actions", [])
+            ),
+            "system intent provider chinese delete did not expose approval-gated delete action",
+        )
+
         wrong_token = rpc_call(
             sockets["policyd"],
             "policy.token.issue",
@@ -388,6 +519,9 @@ def main() -> int:
                     "status": response.get("status"),
                     "plan_source": response.get("plan_source"),
                     "heuristic_plan_source": heuristic_response.get("plan_source"),
+                    "chinese_file_next_action": chinese_file_response.get("next_action"),
+                    "chinese_browser_primary": (chinese_browser_response.get("candidate_capabilities") or [None])[0],
+                    "chinese_delete_status": chinese_delete_response.get("status"),
                     "route_preference": response.get("route_preference"),
                     "next_action": response.get("next_action"),
                     "actions": actions,

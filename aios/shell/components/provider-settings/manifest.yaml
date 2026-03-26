@@ -1,0 +1,15 @@
+component_id: provider-settings
+status: in_progress
+kind: shell-panel
+owner: aios-shell
+consumes:
+  - aios-runtime.ai-readiness.json
+  - aios-onboarding.ai-onboarding-report.json
+  - aios-runtime.platform.env
+capabilities:
+  - show_provider_configuration
+  - persist_provider_configuration
+  - mask_endpoint_secret
+entrypoint: client.py
+prototype_entrypoint: prototype.py
+panel_entrypoint: panel.py

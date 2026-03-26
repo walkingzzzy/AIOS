@@ -12,6 +12,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_BUNDLE_DIR = ROOT / "out" / "aios-system-delivery"
 DEFAULT_RECOVERY_IMAGE_DIR = ROOT / "aios" / "image" / "recovery.output"
+UTF8 = "utf-8"
+LOCAL_CPU_WORKER_LAUNCHER = "/usr/libexec/aios/runtime/workers/launch_local_cpu_worker.sh"
 
 
 def parse_args() -> argparse.Namespace:
@@ -37,6 +39,45 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--vendor-id")
     parser.add_argument("--hardware-profile-id")
     parser.add_argument("--runtime-profile-path")
+    ai_group = parser.add_mutually_exclusive_group()
+    ai_group.add_argument("--ai-enabled", dest="ai_enabled", action="store_true")
+    ai_group.add_argument("--ai-disabled", dest="ai_enabled", action="store_false")
+    parser.set_defaults(ai_enabled=True)
+    parser.add_argument(
+        "--ai-mode",
+        choices=("local", "cloud", "hybrid", "later"),
+        default="hybrid",
+    )
+    parser.add_argument(
+        "--ai-privacy-profile",
+        choices=("strict-local", "balanced", "cloud-enhanced"),
+        default="balanced",
+    )
+    parser.add_argument(
+        "--ai-auto-pull-default-model",
+        action="store_true",
+        help="Allow firstboot onboarding to auto-pull the suggested default model",
+    )
+    parser.add_argument(
+        "--ai-auto-model-source",
+        default="ollama-library",
+        help="Suggested default model source written into installer/firstboot metadata",
+    )
+    parser.add_argument(
+        "--ai-auto-model-id",
+        default="qwen2.5:7b-instruct",
+        help="Suggested default model identifier written into installer/firstboot metadata",
+    )
+    parser.add_argument(
+        "--ai-endpoint-base-url",
+        default="",
+        help="Optional remote AI endpoint base URL recorded for firstboot onboarding",
+    )
+    parser.add_argument(
+        "--ai-endpoint-model",
+        default="",
+        help="Optional remote AI endpoint model recorded for firstboot onboarding",
+    )
     parser.add_argument("--esp-partlabel", default="AIOS-ESP")
     parser.add_argument("--root-partlabel", default="AIOS-root")
     parser.add_argument("--var-partlabel", default="AIOS-var")
@@ -71,11 +112,38 @@ def git_installer_version() -> str:
     return "local-dev"
 
 
+def resolve_bash_binary() -> Path | None:
+    if os.name == "nt":
+        candidates: list[Path] = []
+        for env_name in ("ProgramW6432", "ProgramFiles", "ProgramFiles(x86)"):
+            program_root = os.environ.get(env_name)
+            if not program_root:
+                continue
+            git_root = Path(program_root) / "Git"
+            candidates.extend([git_root / "bin" / "bash.exe", git_root / "usr" / "bin" / "bash.exe"])
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+        return None
+    resolved = shutil.which("bash")
+    return Path(resolved) if resolved else None
+
+
+def bash_path(path: Path) -> str:
+    if os.name != "nt":
+        return str(path)
+    resolved = path.resolve()
+    drive = resolved.drive.rstrip(":").lower()
+    if drive:
+        return f"/{drive}{resolved.as_posix()[2:]}"
+    return resolved.as_posix()
+
+
 def load_env(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
     if not path.exists():
         return values
-    for raw_line in path.read_text().splitlines():
+    for raw_line in path.read_text(encoding=UTF8).splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
@@ -87,20 +155,56 @@ def load_env(path: Path) -> dict[str, str]:
 def write_env(path: Path, values: dict[str, str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     rendered = "".join(f"{key}={value}\n" for key, value in values.items())
-    path.write_text(rendered)
+    path.write_text(rendered, encoding=UTF8)
+
+
+def env_flag(value: bool) -> str:
+    return "1" if value else "0"
+
+
+def build_ai_config(args: argparse.Namespace) -> dict[str, object]:
+    return {
+        "enabled": bool(args.ai_enabled),
+        "mode": args.ai_mode,
+        "privacy_profile": args.ai_privacy_profile,
+        "auto_pull_default_model": bool(args.ai_auto_pull_default_model),
+        "auto_model_source": args.ai_auto_model_source,
+        "auto_model_id": args.ai_auto_model_id,
+        "endpoint_base_url": args.ai_endpoint_base_url,
+        "endpoint_model": args.ai_endpoint_model,
+    }
 
 
 def write_runtime_platform_env(
     sysroot: Path,
     hardware_profile_id: str | None,
+    ai_config: dict[str, object],
     runtime_profile_path: str | None = None,
 ) -> Path:
     env_path = sysroot / "etc" / "aios" / "runtime" / "platform.env"
-    values: dict[str, str] = {}
+    values = load_env(env_path)
     if hardware_profile_id:
         values["AIOS_RUNTIMED_HARDWARE_PROFILE_ID"] = hardware_profile_id
     if runtime_profile_path:
         values["AIOS_RUNTIMED_RUNTIME_PROFILE"] = runtime_profile_path
+    values["AIOS_RUNTIMED_PRODUCT_MODE"] = "1"
+    values["AIOS_RUNTIMED_AI_ENABLED"] = env_flag(bool(ai_config["enabled"]))
+    values["AIOS_RUNTIMED_AI_MODE"] = str(ai_config["mode"])
+    values["AIOS_RUNTIMED_AI_PRIVACY_PROFILE"] = str(ai_config["privacy_profile"])
+    if ai_config.get("enabled") and ai_config.get("mode") in {"local", "hybrid"}:
+        values["AIOS_RUNTIMED_LOCAL_CPU_COMMAND"] = LOCAL_CPU_WORKER_LAUNCHER
+    else:
+        values.pop("AIOS_RUNTIMED_LOCAL_CPU_COMMAND", None)
+    endpoint_base_url = str(ai_config.get("endpoint_base_url") or "")
+    endpoint_model = str(ai_config.get("endpoint_model") or "")
+    if endpoint_base_url:
+        values["AIOS_RUNTIMED_AI_ENDPOINT_BASE_URL"] = endpoint_base_url
+    else:
+        values.pop("AIOS_RUNTIMED_AI_ENDPOINT_BASE_URL", None)
+    if endpoint_model:
+        values["AIOS_RUNTIMED_AI_ENDPOINT_MODEL"] = endpoint_model
+    else:
+        values.pop("AIOS_RUNTIMED_AI_ENDPOINT_MODEL", None)
     write_env(env_path, values)
     return env_path
 
@@ -157,13 +261,15 @@ def run_hook(
     if hook_path is None:
         return None
 
+    bash_binary = resolve_bash_binary()
     hook_path = hook_path.resolve()
     require(hook_path.exists(), f"missing {stage} hook: {hook_path}")
+    require(bash_binary is not None, f"usable bash runtime unavailable for {stage} hook: {hook_path}")
     env = os.environ.copy()
     env.update(
         {
             "AIOS_INSTALLER_HOOK_STAGE": stage,
-            "AIOS_INSTALLER_SYSROOT": str(sysroot),
+            "AIOS_INSTALLER_SYSROOT": bash_path(sysroot),
             "AIOS_INSTALLER_INSTALL_ID": install_id,
             "AIOS_INSTALLER_INSTALL_SOURCE": install_source,
             "AIOS_INSTALLER_INSTALLER_VERSION": installer_version,
@@ -179,7 +285,7 @@ def run_hook(
         env["AIOS_INSTALLER_HARDWARE_PROFILE_ID"] = hardware_profile_id
 
     completed = subprocess.run(
-        ["bash", str(hook_path)],
+        [str(bash_binary), bash_path(hook_path)],
         cwd=ROOT,
         text=True,
         capture_output=True,
@@ -209,6 +315,7 @@ def main() -> int:
     install_id = args.install_id or f"install-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
     installer_version = args.installer_version or git_installer_version()
     generated_at = datetime.now(timezone.utc).isoformat()
+    ai_config = build_ai_config(args)
     partition_strategy = {
         "esp_partlabel": args.esp_partlabel,
         "root_partlabel": args.root_partlabel,
@@ -237,10 +344,11 @@ def main() -> int:
     recovery_manifest_source = args.recovery_image_dir.resolve() / "recovery-image-manifest.json"
     recovery_manifest_target = sysroot / "etc" / "aios" / "installer" / "recovery-image-manifest.json"
     if recovery_manifest_source.exists():
-        recovery_manifest = json.loads(recovery_manifest_source.read_text())
+        recovery_manifest = json.loads(recovery_manifest_source.read_text(encoding=UTF8))
         recovery_manifest_target.parent.mkdir(parents=True, exist_ok=True)
         recovery_manifest_target.write_text(
-            json.dumps(recovery_manifest, indent=2, ensure_ascii=False) + "\n"
+            json.dumps(recovery_manifest, indent=2, ensure_ascii=False) + "\n",
+            encoding=UTF8,
         )
 
     install_manifest = {
@@ -257,6 +365,7 @@ def main() -> int:
         "vendor_id": args.vendor_id,
         "hardware_profile_id": args.hardware_profile_id,
         "partition_strategy": partition_strategy,
+        "ai_config": ai_config,
         "firmware_hooks": {
             "pre_install": pre_install_hook,
             "post_install": None,
@@ -269,7 +378,8 @@ def main() -> int:
     install_manifest_path = sysroot / "etc" / "aios" / "installer" / "install-manifest.json"
     install_manifest_path.parent.mkdir(parents=True, exist_ok=True)
     install_manifest_path.write_text(
-        json.dumps(install_manifest, indent=2, ensure_ascii=False) + "\n"
+        json.dumps(install_manifest, indent=2, ensure_ascii=False) + "\n",
+        encoding=UTF8,
     )
 
     env_path = sysroot / "etc" / "aios" / "firstboot" / "aios-firstboot.env"
@@ -283,8 +393,30 @@ def main() -> int:
             "AIOS_FIRSTBOOT_INSTALL_SLOT": args.slot,
             "AIOS_FIRSTBOOT_BOOT_BACKEND": args.boot_backend,
             "AIOS_FIRSTBOOT_INSTALL_MANIFEST": "/etc/aios/installer/install-manifest.json",
+            "AIOS_FIRSTBOOT_AI_ENABLED": env_flag(bool(ai_config["enabled"])),
+            "AIOS_FIRSTBOOT_AI_MODE": str(ai_config["mode"]),
+            "AIOS_FIRSTBOOT_AI_PRIVACY_PROFILE": str(ai_config["privacy_profile"]),
+            "AIOS_FIRSTBOOT_AI_AUTO_PULL_DEFAULT_MODEL": env_flag(
+                bool(ai_config["auto_pull_default_model"])
+            ),
         }
     )
+    if ai_config.get("auto_model_source"):
+        env_values["AIOS_FIRSTBOOT_AI_AUTO_MODEL_SOURCE"] = str(ai_config["auto_model_source"])
+    else:
+        env_values.pop("AIOS_FIRSTBOOT_AI_AUTO_MODEL_SOURCE", None)
+    if ai_config.get("auto_model_id"):
+        env_values["AIOS_FIRSTBOOT_AI_AUTO_MODEL_ID"] = str(ai_config["auto_model_id"])
+    else:
+        env_values.pop("AIOS_FIRSTBOOT_AI_AUTO_MODEL_ID", None)
+    if ai_config.get("endpoint_base_url"):
+        env_values["AIOS_FIRSTBOOT_AI_ENDPOINT_BASE_URL"] = str(ai_config["endpoint_base_url"])
+    else:
+        env_values.pop("AIOS_FIRSTBOOT_AI_ENDPOINT_BASE_URL", None)
+    if ai_config.get("endpoint_model"):
+        env_values["AIOS_FIRSTBOOT_AI_ENDPOINT_MODEL"] = str(ai_config["endpoint_model"])
+    else:
+        env_values.pop("AIOS_FIRSTBOOT_AI_ENDPOINT_MODEL", None)
     if args.vendor_id:
         env_values["AIOS_FIRSTBOOT_VENDOR_ID"] = args.vendor_id
     if args.hardware_profile_id:
@@ -302,17 +434,18 @@ def main() -> int:
             }
         )
     write_env(env_path, env_values)
-    runtime_env_path = (
-        write_runtime_platform_env(sysroot, args.hardware_profile_id, args.runtime_profile_path)
-        if args.hardware_profile_id or args.runtime_profile_path
-        else None
+    runtime_env_path = write_runtime_platform_env(
+        sysroot,
+        args.hardware_profile_id,
+        ai_config,
+        args.runtime_profile_path,
     )
 
     boot_state_dir = sysroot / "var" / "lib" / "aios" / "updated" / "boot"
     boot_state_dir.mkdir(parents=True, exist_ok=True)
-    (boot_state_dir / "current-slot").write_text(f"{args.slot}\n")
-    (boot_state_dir / "last-good-slot").write_text(f"{args.slot}\n")
-    (boot_state_dir / "current-entry").write_text(f"aios-{args.slot}.conf\n")
+    (boot_state_dir / "current-slot").write_text(f"{args.slot}\n", encoding=UTF8)
+    (boot_state_dir / "last-good-slot").write_text(f"{args.slot}\n", encoding=UTF8)
+    (boot_state_dir / "current-entry").write_text(f"aios-{args.slot}.conf\n", encoding=UTF8)
     next_slot = boot_state_dir / "next-slot"
     if next_slot.exists():
         next_slot.unlink()
@@ -348,6 +481,7 @@ def main() -> int:
         "boot_backend": args.boot_backend,
         "vendor_id": args.vendor_id,
         "hardware_profile_id": args.hardware_profile_id,
+        "ai_config": ai_config,
         "runtime_profile_path": args.runtime_profile_path,
         "partition_strategy": partition_strategy,
         "pre_install_hook": pre_install_hook,

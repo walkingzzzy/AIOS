@@ -14,3 +14,12 @@ ui:
   auto_confirm_seconds: 0
   summary_path: /run/aios-installer/guided-summary.txt
   session_path: /run/aios-installer/guided-session.json
+ai:
+  enabled: true
+  mode: hybrid
+  privacy_profile: balanced
+  auto_pull_default_model: false
+  auto_model_source: ollama-library
+  auto_model_id: qwen2.5:7b-instruct
+  endpoint_base_url: ""
+  endpoint_model: ""

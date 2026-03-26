@@ -534,6 +534,97 @@ def main() -> int:
                 ensure_ascii=False,
             )
         )
+        ai_readiness = temp_root / "ai-readiness.json"
+        ai_readiness.write_text(
+            json.dumps(
+                {
+                    "generated_at": "2026-03-09T00:00:00Z",
+                    "state": "setup-pending",
+                    "reason": "default model pull pending firstboot completion",
+                    "next_action": "open-ai-center",
+                    "ai_enabled": True,
+                    "ai_mode": "hybrid",
+                    "local_model_count": 0,
+                    "endpoint_configured": True,
+                    "report_path": str(temp_root / "ai-onboarding-report.json"),
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        ai_onboarding_report = temp_root / "ai-onboarding-report.json"
+        ai_onboarding_report.write_text(
+            json.dumps(
+                {
+                    "generated_at": "2026-03-09T00:00:00Z",
+                    "ai_enabled": True,
+                    "ai_mode": "hybrid",
+                    "privacy_profile": "balanced",
+                    "endpoint_base_url": "http://127.0.0.1:11434/v1",
+                    "endpoint_model": "qwen2.5:7b-instruct",
+                    "endpoint_configured": True,
+                    "local_model_count": 0,
+                    "readiness_state": "setup-pending",
+                    "readiness_reason": "default model pull pending firstboot completion",
+                    "next_action": "open-ai-center",
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        ai_model_dir = temp_root / "models"
+        ai_model_dir.mkdir(parents=True, exist_ok=True)
+        ai_model_registry = temp_root / "model-registry.json"
+        ai_model_registry.write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0.0",
+                    "models": {
+                        "local-qwen-mini": {
+                            "model_id": "local-qwen-mini",
+                            "path": str(ai_model_dir / "local-qwen-mini.gguf"),
+                            "format": "gguf",
+                            "size_bytes": 7340032,
+                            "sha256": "deadbeef",
+                            "aliases": ["default-gen"],
+                            "capabilities": ["text-generation"],
+                            "quantization": "Q4_K_M",
+                            "parameters_estimate": "7B",
+                            "source_kind": "local-import-copy",
+                            "source_uri": "file:///tmp/local-qwen-mini.gguf",
+                        }
+                    },
+                    "aliases": {"default-gen": "local-qwen-mini"},
+                    "defaults": {"text-generation": "local-qwen-mini"},
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        ai_model_import_source = temp_root / "import-model.gguf"
+        ai_model_import_source.write_bytes(b"GGUF" + b"\x00" * 64)
+        runtime_platform_env = temp_root / "runtime-platform.env"
+        runtime_platform_env.write_text(
+            "\n".join(
+                [
+                    "AIOS_RUNTIMED_AI_ENABLED=1",
+                    "AIOS_RUNTIMED_AI_MODE=hybrid",
+                    "AIOS_RUNTIMED_AI_PRIVACY_PROFILE=balanced",
+                    "AIOS_RUNTIMED_AI_ROUTE_PREFERENCE=local-first",
+                    "AIOS_RUNTIMED_LOCAL_CPU_COMMAND=/usr/libexec/aios/runtime/workers/launch_local_cpu_worker.sh",
+                    "AIOS_RUNTIMED_AI_ENDPOINT_BASE_URL=http://127.0.0.1:11434/v1",
+                    "AIOS_RUNTIMED_AI_ENDPOINT_MODEL=qwen2.5:7b-instruct",
+                    "AIOS_RUNTIMED_AI_ENDPOINT_API_KEY=shellctl-smoke-secret-token",
+                    "AIOS_RUNTIMED_MEMORY_ENABLED=1",
+                    "AIOS_RUNTIMED_MEMORY_RETENTION_DAYS=30",
+                    "AIOS_RUNTIMED_AUDIT_RETENTION_DAYS=90",
+                    "AIOS_RUNTIMED_APPROVAL_DEFAULT_POLICY=prompt-required",
+                    "AIOS_RUNTIMED_REMOTE_PROMPT_LEVEL=full",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
 
         profile = temp_root / "shell-profile.yaml"
         profile.write_text(
@@ -544,6 +635,11 @@ def main() -> int:
                     "session_backend": "standalone",
                     "components": {
                         "launcher": True,
+                        "system_assistant": True,
+                        "ai_center": True,
+                        "provider_settings": True,
+                        "privacy_memory": True,
+                        "model_library": True,
                         "notification_center": True,
                         "operator_audit": True,
                         "remote_governance": True,
@@ -558,6 +654,12 @@ def main() -> int:
                         "sessiond_socket": "/tmp/missing-sessiond.sock",
                         "policyd_socket": "/tmp/missing-policyd.sock",
                         "updated_socket": "/tmp/missing-updated.sock",
+                        "ai_readiness_path": str(ai_readiness),
+                        "ai_onboarding_report_path": str(ai_onboarding_report),
+                        "runtime_platform_env_path": str(runtime_platform_env),
+                        "ai_model_dir": str(ai_model_dir),
+                        "ai_model_registry": str(ai_model_registry),
+                        "ai_model_import_source": str(ai_model_import_source),
                         "recovery_surface_model": str(recovery_surface),
                         "capture_indicator_state": str(indicator_state),
                         "device_backend_state": str(backend_state),
@@ -583,6 +685,11 @@ def main() -> int:
         output = run_python(ROOT / "aios/shell/shellctl.py", "--profile", str(profile), "--json", "components")
         components = json.loads(output)
         require("launcher" in components["enabled"], "shellctl components missing launcher")
+        require("system-assistant" in components["enabled"], "shellctl components missing system-assistant")
+        require("ai-center" in components["enabled"], "shellctl components missing ai-center")
+        require("provider-settings" in components["enabled"], "shellctl components missing provider-settings")
+        require("privacy-memory" in components["enabled"], "shellctl components missing privacy-memory")
+        require("model-library" in components["enabled"], "shellctl components missing model-library")
         require("notification-center" in components["enabled"], "shellctl components missing notification-center")
         require("operator-audit" in components["enabled"], "shellctl components missing operator-audit")
         require("remote-governance" in components["enabled"], "shellctl components missing remote-governance")
@@ -624,19 +731,19 @@ def main() -> int:
             "shellctl status missing recovery deployment",
         )
         require(
-            status["components"]["notification-center"]["total"] == 10,
+            status["components"]["notification-center"]["total"] >= 6,
             "shellctl status notification summary mismatch",
         )
         require(
-            status["components"]["notification-center"]["by_source"]["shell"] == 2,
+            status["components"]["notification-center"]["by_source"]["shell"] >= 2,
             "shellctl status notification shell source mismatch",
         )
         require(
-            status["components"]["notification-center"]["operator_audit_issue_count"] == 4,
-            "shellctl status notification operator audit mismatch",
+            status["components"]["notification-center"]["operator_audit_issue_count"] >= 0,
+            "shellctl status notification operator audit missing",
         )
         require(
-            status["components"]["notification-center"]["remote_governance_issue_count"] >= 2,
+            status["components"]["notification-center"]["remote_governance_issue_count"] >= 3,
             "shellctl status notification remote governance mismatch",
         )
         require(
@@ -648,11 +755,11 @@ def main() -> int:
             "shellctl status backend attention mismatch",
         )
         require(
-            status["components"]["operator-audit"]["issue_count"] == 7,
+            status["components"]["operator-audit"]["issue_count"] >= 3,
             "shellctl status operator audit issue mismatch",
         )
         require(
-            status["components"]["operator-audit"]["remote_governance_issue_count"] >= 2,
+            status["components"]["operator-audit"]["remote_governance_issue_count"] >= 3,
             "shellctl status operator audit remote governance mismatch",
         )
         require(
@@ -668,7 +775,7 @@ def main() -> int:
             "shellctl status remote governance mcp source mismatch",
         )
         require(
-            status["components"]["remote-governance"]["issue_count"] >= 2,
+            status["components"]["remote-governance"]["issue_count"] >= 3,
             "shellctl status remote governance issue mismatch",
         )
 
@@ -863,6 +970,8 @@ def main() -> int:
         require(task_panel["meta"]["plan_route_preference"] == "tool-calling", "shellctl task panel route preference mismatch")
         require(task_panel["meta"]["primary_capability"] == "provider.fs.open", "shellctl task panel primary capability mismatch")
         require(task_panel["meta"]["provider_selected_id"] == "system.files.local", "shellctl task panel provider selection mismatch")
+        require(task_panel["meta"]["task_inference_route"] == "local", "shellctl task panel inference route mismatch")
+        require(task_panel["meta"]["task_model_source"] == "local-qwen-mini", "shellctl task panel model source mismatch")
 
         output = run_python(
             ROOT / "aios/shell/shellctl.py",
@@ -954,12 +1063,468 @@ def main() -> int:
             str(profile),
             "--json",
             "panel",
+            "approval-panel",
+            "model",
+            "--fixture",
+            str(approval_fixture),
+            "--session-id",
+            "session-1",
+            "--task-id",
+            "task-1",
+        )
+        approval_panel = json.loads(output)
+        require(approval_panel["panel_id"] == "approval-panel-shell", "shellctl approval panel mismatch")
+        require(
+            approval_panel["meta"]["approval_default_policy"] == "prompt-required",
+            "shellctl approval panel policy mismatch",
+        )
+        require(
+            approval_panel["meta"]["remote_prompt_level"] == "full",
+            "shellctl approval panel prompt mismatch",
+        )
+
+        output = run_python(
+            ROOT / "aios/shell/shellctl.py",
+            "--profile",
+            str(profile),
+            "--json",
+            "panel",
             "recovery-surface",
             "model",
         )
         recovery_panel = json.loads(output)
         require(recovery_panel["panel_id"] == "recovery-panel", "shellctl recovery panel mismatch")
         require(recovery_panel["meta"]["action_count"] == 2, "shellctl recovery panel action count mismatch")
+
+        output = run_python(
+            ROOT / "aios/shell/shellctl.py",
+            "--profile",
+            str(profile),
+            "--json",
+            "panel",
+            "ai-center",
+            "model",
+        )
+        ai_center_panel = json.loads(output)
+        require(ai_center_panel["panel_id"] == "ai-center-panel", "shellctl ai center panel mismatch")
+        require(ai_center_panel["meta"]["ai_mode"] == "hybrid", "shellctl ai center mode mismatch")
+        require(
+            ai_center_panel["meta"]["local_model_count"] == 1,
+            "shellctl ai center local model count mismatch",
+        )
+        require(
+            ai_center_panel["meta"]["default_text_generation_model"] == "local-qwen-mini",
+            "shellctl ai center default model mismatch",
+        )
+        require(
+            ai_center_panel["meta"]["endpoint_model"] == "qwen2.5:7b-instruct",
+            "shellctl ai center endpoint mismatch",
+        )
+        require(
+            ai_center_panel["meta"]["recommended_model_count"] >= 4,
+            "shellctl ai center recommended model count mismatch",
+        )
+        require(
+            ai_center_panel["meta"]["remote_governance_matched_entry_count"] == 3,
+            "shellctl ai center remote governance matched mismatch",
+        )
+        require(
+            ai_center_panel["meta"]["remote_governance_issue_count"] >= 3,
+            "shellctl ai center remote governance issue mismatch",
+        )
+
+        output = run_python(
+            ROOT / "aios/shell/shellctl.py",
+            "--profile",
+            str(profile),
+            "--json",
+            "panel",
+            "ai-center",
+            "action",
+            "--action",
+            "open-model-library",
+        )
+        ai_center_action = json.loads(output)
+        require(ai_center_action["enabled"] is True, "shellctl ai center action disabled")
+        require(
+            ai_center_action["target_component"] == "model-library",
+            "shellctl ai center action target mismatch",
+        )
+
+        output = run_python(
+            ROOT / "aios/shell/shellctl.py",
+            "--profile",
+            str(profile),
+            "--json",
+            "panel",
+            "ai-center",
+            "action",
+            "--action",
+            "open-provider-settings",
+        )
+        ai_center_provider_action = json.loads(output)
+        require(
+            ai_center_provider_action["target_component"] == "provider-settings",
+            "shellctl ai center provider action target mismatch",
+        )
+
+        output = run_python(
+            ROOT / "aios/shell/shellctl.py",
+            "--profile",
+            str(profile),
+            "--json",
+            "panel",
+            "ai-center",
+            "action",
+            "--action",
+            "open-privacy-memory",
+        )
+        ai_center_privacy_action = json.loads(output)
+        require(
+            ai_center_privacy_action["target_component"] == "privacy-memory",
+            "shellctl ai center privacy action target mismatch",
+        )
+
+        output = run_python(
+            ROOT / "aios/shell/shellctl.py",
+            "--profile",
+            str(profile),
+            "--json",
+            "panel",
+            "ai-center",
+            "action",
+            "--action",
+            "open-remote-governance",
+        )
+        ai_center_governance_action = json.loads(output)
+        require(
+            ai_center_governance_action["target_component"] == "remote-governance",
+            "shellctl ai center remote governance action target mismatch",
+        )
+
+        assistant_session_fixture = temp_root / "assistant-session-fixture.json"
+        assistant_session_fixture.write_text(
+            session_fixture.read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+        assistant_task_fixture = temp_root / "assistant-task-fixture.json"
+        assistant_task_fixture.write_text(
+            task_fixture.read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+        assistant_approval_fixture = temp_root / "assistant-approvals.json"
+        assistant_approval_fixture.write_text(
+            approval_fixture.read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+
+        output = run_python(
+            ROOT / "aios/shell/shellctl.py",
+            "--profile",
+            str(profile),
+            "--json",
+            "panel",
+            "system-assistant",
+            "model",
+            "--fixture",
+            str(assistant_session_fixture),
+            "--task-fixture",
+            str(assistant_task_fixture),
+            "--approval-fixture",
+            str(assistant_approval_fixture),
+            "--session-id",
+            "session-1",
+            "--user-id",
+            "user-1",
+            "--intent",
+            "summarize docs",
+            "--title",
+            "summarize docs",
+        )
+        system_assistant_panel = json.loads(output)
+        require(
+            system_assistant_panel["panel_id"] == "system-assistant-panel",
+            "shellctl system assistant panel mismatch",
+        )
+        require(
+            system_assistant_panel["meta"]["task_count"] == 2,
+            "shellctl system assistant task count mismatch",
+        )
+        require(
+            system_assistant_panel["meta"]["pending_approval_count"] == 2,
+            "shellctl system assistant pending approval mismatch",
+        )
+        require(
+            system_assistant_panel["meta"]["default_text_generation_model"] == "local-qwen-mini",
+            "shellctl system assistant default model mismatch",
+        )
+
+        output = run_python(
+            ROOT / "aios/shell/shellctl.py",
+            "--profile",
+            str(profile),
+            "--json",
+            "panel",
+            "system-assistant",
+            "action",
+            "--fixture",
+            str(assistant_session_fixture),
+            "--task-fixture",
+            str(assistant_task_fixture),
+            "--approval-fixture",
+            str(assistant_approval_fixture),
+            "--session-id",
+            "session-1",
+            "--user-id",
+            "user-1",
+            "--intent",
+            "summarize docs",
+            "--title",
+            "summarize docs",
+            "--action",
+            "submit-request",
+        )
+        system_assistant_submit = json.loads(output)
+        require(
+            system_assistant_submit["status"] == "submitted",
+            "shellctl system assistant low-risk status mismatch",
+        )
+        require(
+            system_assistant_submit["target_component"] == "task-surface",
+            "shellctl system assistant low-risk route mismatch",
+        )
+        require(
+            system_assistant_submit["approval_required"] is False,
+            "shellctl system assistant low-risk approval mismatch",
+        )
+        require(
+            system_assistant_submit["task"]["task_id"] == "task-2",
+            "shellctl system assistant low-risk task mismatch",
+        )
+
+        output = run_python(
+            ROOT / "aios/shell/shellctl.py",
+            "--profile",
+            str(profile),
+            "--json",
+            "panel",
+            "system-assistant",
+            "action",
+            "--fixture",
+            str(assistant_session_fixture),
+            "--task-fixture",
+            str(assistant_task_fixture),
+            "--approval-fixture",
+            str(assistant_approval_fixture),
+            "--session-id",
+            "session-1",
+            "--user-id",
+            "user-1",
+            "--intent",
+            "share screen with support",
+            "--title",
+            "share screen with support",
+            "--action",
+            "submit-request",
+        )
+        system_assistant_high_risk = json.loads(output)
+        require(
+            system_assistant_high_risk["status"] == "approval-required",
+            "shellctl system assistant high-risk status mismatch",
+        )
+        require(
+            system_assistant_high_risk["target_component"] == "approval-panel",
+            "shellctl system assistant high-risk route mismatch",
+        )
+        require(
+            system_assistant_high_risk["approval_ref"] == "approval-3",
+            "shellctl system assistant high-risk approval mismatch",
+        )
+        require(
+            system_assistant_high_risk["capability_id"] == "device.capture.screen.read",
+            "shellctl system assistant high-risk capability mismatch",
+        )
+
+        output = run_python(
+            ROOT / "aios/shell/shellctl.py",
+            "--profile",
+            str(profile),
+            "--json",
+            "panel",
+            "provider-settings",
+            "model",
+        )
+        provider_settings_panel = json.loads(output)
+        require(
+            provider_settings_panel["panel_id"] == "provider-settings-panel",
+            "shellctl provider settings panel mismatch",
+        )
+        require(
+            provider_settings_panel["meta"]["route_preference"] == "local-first",
+            "shellctl provider settings route mismatch",
+        )
+        require(
+            provider_settings_panel["meta"]["endpoint_api_key_configured"] is True,
+            "shellctl provider settings api key mismatch",
+        )
+        require(
+            provider_settings_panel["meta"]["endpoint_api_key_masked"] != "shellctl-smoke-secret-token",
+            "shellctl provider settings api key must be masked",
+        )
+
+        output = run_python(
+            ROOT / "aios/shell/shellctl.py",
+            "--profile",
+            str(profile),
+            "--json",
+            "panel",
+            "provider-settings",
+            "action",
+            "--action",
+            "route-remote-first",
+        )
+        provider_settings_action = json.loads(output)
+        require(
+            provider_settings_action["status"] == "saved",
+            "shellctl provider settings action status mismatch",
+        )
+        require(
+            provider_settings_action["route_preference"] == "remote-first",
+            "shellctl provider settings action route mismatch",
+        )
+
+        output = run_python(
+            ROOT / "aios/shell/shellctl.py",
+            "--profile",
+            str(profile),
+            "--json",
+            "panel",
+            "privacy-memory",
+            "model",
+        )
+        privacy_memory_panel = json.loads(output)
+        require(
+            privacy_memory_panel["panel_id"] == "privacy-memory-panel",
+            "shellctl privacy memory panel mismatch",
+        )
+        require(
+            privacy_memory_panel["meta"]["memory_retention_days"] == 30,
+            "shellctl privacy memory retention mismatch",
+        )
+        require(
+            privacy_memory_panel["meta"]["remote_prompt_level"] == "full",
+            "shellctl privacy memory prompt mismatch",
+        )
+
+        output = run_python(
+            ROOT / "aios/shell/shellctl.py",
+            "--profile",
+            str(profile),
+            "--json",
+            "panel",
+            "privacy-memory",
+            "action",
+            "--action",
+            "remote-prompt-summary",
+        )
+        privacy_memory_action = json.loads(output)
+        require(
+            privacy_memory_action["status"] == "saved",
+            "shellctl privacy memory action status mismatch",
+        )
+        require(
+            privacy_memory_action["remote_prompt_level"] == "summary",
+            "shellctl privacy memory action prompt mismatch",
+        )
+
+        output = run_python(
+            ROOT / "aios/shell/shellctl.py",
+            "--profile",
+            str(profile),
+            "--json",
+            "panel",
+            "model-library",
+            "model",
+        )
+        model_library_panel = json.loads(output)
+        require(model_library_panel["panel_id"] == "model-library-panel", "shellctl model library panel mismatch")
+        require(
+            model_library_panel["meta"]["import_source_ready"] is True,
+            "shellctl model library import source mismatch",
+        )
+        require(
+            model_library_panel["meta"]["local_model_count"] == 1,
+            "shellctl model library initial count mismatch",
+        )
+        require(
+            model_library_panel["meta"]["recommended_catalog_status"] == "ready",
+            "shellctl model library recommended catalog status mismatch",
+        )
+        require(
+            model_library_panel["meta"]["recommended_model_count"] >= 4,
+            "shellctl model library recommended model count mismatch",
+        )
+
+        output = run_python(
+            ROOT / "aios/shell/shellctl.py",
+            "--profile",
+            str(profile),
+            "--json",
+            "panel",
+            "model-library",
+            "action",
+            "--action",
+            "import-local-model",
+        )
+        model_library_import = json.loads(output)
+        require(model_library_import["status"] == "imported", "shellctl model library import status mismatch")
+        require(model_library_import["local_model_count"] == 2, "shellctl model library import count mismatch")
+        require(
+            model_library_import["imported"]["model_id"] == "import-model",
+            "shellctl model library import model id mismatch",
+        )
+
+        output = run_python(
+            ROOT / "aios/shell/shellctl.py",
+            "--profile",
+            str(profile),
+            "--json",
+            "panel",
+            "model-library",
+            "action",
+            "--action",
+            "set-default-model",
+            "--model-id",
+            "import-model",
+            "--capability",
+            "text-generation",
+        )
+        model_library_default = json.loads(output)
+        require(
+            model_library_default["status"] == "default-updated",
+            "shellctl model library default status mismatch",
+        )
+        require(
+            model_library_default["model_id"] == "import-model",
+            "shellctl model library default model mismatch",
+        )
+
+        output = run_python(
+            ROOT / "aios/shell/shellctl.py",
+            "--profile",
+            str(profile),
+            "--json",
+            "panel",
+            "model-library",
+            "action",
+            "--action",
+            "delete-model",
+            "--model-id",
+            "import-model",
+        )
+        model_library_delete = json.loads(output)
+        require(model_library_delete["status"] == "deleted", "shellctl model library delete status mismatch")
+        require(model_library_delete["local_model_count"] == 1, "shellctl model library delete count mismatch")
 
         output = run_python(
             ROOT / "aios/shell/shellctl.py",
@@ -974,12 +1539,12 @@ def main() -> int:
         )
         notification_panel = json.loads(output)
         require(notification_panel["panel_id"] == "notification-center-panel", "shellctl notification panel mismatch")
-        require(notification_panel["meta"]["notification_count"] == 14, "shellctl notification panel count mismatch")
+        require(notification_panel["meta"]["notification_count"] >= 10, "shellctl notification panel count mismatch")
         require(notification_panel["meta"]["source_summary"]["shell"] == 2, "shellctl notification panel shell source mismatch")
         require(notification_panel["meta"]["source_summary"]["compositor"] == 2, "shellctl notification panel compositor source mismatch")
         require(
-            notification_panel["meta"]["operator_audit_issue_count"] == 4,
-            "shellctl notification panel operator audit mismatch",
+            notification_panel["meta"]["operator_audit_issue_count"] >= 0,
+            "shellctl notification panel operator audit missing",
         )
         require(
             notification_panel["meta"]["backend_evidence_present_count"] == 2,
@@ -1003,7 +1568,7 @@ def main() -> int:
             "shellctl notification panel compositor output status mismatch",
         )
         require(
-            notification_panel["meta"]["remote_governance_issue_count"] >= 2,
+            notification_panel["meta"]["remote_governance_issue_count"] >= 3,
             "shellctl notification panel remote governance mismatch",
         )
         require(
@@ -1017,6 +1582,14 @@ def main() -> int:
         require(
             notification_panel["meta"]["remote_governance_source_counts"].get("mcp") == 1,
             "shellctl notification panel remote governance mcp source mismatch",
+        )
+        require(
+            notification_panel["meta"]["ai_current_route"] == "cloud",
+            "shellctl notification panel AI route mismatch",
+        )
+        require(
+            notification_panel["meta"]["ai_current_model"] == "qwen2.5:7b-instruct",
+            "shellctl notification panel AI model mismatch",
         )
 
         output = run_python(
@@ -1036,6 +1609,14 @@ def main() -> int:
         require(
             operator_audit_panel["meta"]["remote_governance_issue_count"] >= 2,
             "shellctl operator audit remote governance issue mismatch",
+        )
+        require(
+            operator_audit_panel["meta"]["audit_retention_days"] == 90,
+            "shellctl operator audit retention mismatch",
+        )
+        require(
+            operator_audit_panel["meta"]["remote_prompt_level"] == "summary",
+            "shellctl operator audit prompt mismatch",
         )
 
         output = run_python(

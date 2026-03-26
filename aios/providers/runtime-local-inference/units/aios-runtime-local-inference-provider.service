@@ -6,6 +6,7 @@ Requires=aios-policyd.service aios-runtimed.service
 
 [Service]
 Type=simple
+EnvironmentFile=-/etc/aios/runtime/platform.env
 ExecStart=/usr/libexec/aios/runtime-local-inference-provider
 Restart=on-failure
 RestartSec=2

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import socket
 import subprocess
 import sys
@@ -20,6 +21,11 @@ DEFAULT_PROFILE = ROOT / "profiles" / "default-shell-profile.yaml"
 COMPONENT_CLIENTS = {
     "launcher": ROOT / "components" / "launcher" / "client.py",
     "task-surface": ROOT / "components" / "task-surface" / "client.py",
+    "system-assistant": ROOT / "components" / "system-assistant" / "client.py",
+    "ai-center": ROOT / "components" / "ai-center" / "client.py",
+    "provider-settings": ROOT / "components" / "provider-settings" / "client.py",
+    "privacy-memory": ROOT / "components" / "privacy-memory" / "client.py",
+    "model-library": ROOT / "components" / "model-library" / "client.py",
     "approval-panel": ROOT / "components" / "approval-panel" / "client.py",
     "recovery-surface": ROOT / "components" / "recovery-surface" / "client.py",
     "notification-center": ROOT / "components" / "notification-center" / "client.py",
@@ -33,6 +39,11 @@ COMPONENT_CLIENTS = {
 COMPONENT_PANELS = {
     "launcher": ROOT / "components" / "launcher" / "panel.py",
     "task-surface": ROOT / "components" / "task-surface" / "panel.py",
+    "system-assistant": ROOT / "components" / "system-assistant" / "panel.py",
+    "ai-center": ROOT / "components" / "ai-center" / "panel.py",
+    "provider-settings": ROOT / "components" / "provider-settings" / "panel.py",
+    "privacy-memory": ROOT / "components" / "privacy-memory" / "panel.py",
+    "model-library": ROOT / "components" / "model-library" / "panel.py",
     "approval-panel": ROOT / "components" / "approval-panel" / "panel.py",
     "recovery-surface": ROOT / "components" / "recovery-surface" / "panel.py",
     "notification-center": ROOT / "components" / "notification-center" / "panel.py",
@@ -50,6 +61,11 @@ COMPONENT_STANDALONES = {
 PROFILE_COMPONENT_KEYS = {
     "launcher": "launcher",
     "task-surface": "task_surface",
+    "system-assistant": "system_assistant",
+    "ai-center": "ai_center",
+    "provider-settings": "provider_settings",
+    "privacy-memory": "privacy_memory",
+    "model-library": "model_library",
     "approval-panel": "approval_panel",
     "recovery-surface": "recovery_surface",
     "notification-center": "notification_center",
@@ -79,6 +95,29 @@ STATUS_COMPONENTS = [
     "device-backend-status",
     "capture-indicators",
 ]
+
+
+def append_ai_context_args(
+    command: list[str],
+    paths: dict,
+    *,
+    include_inventory: bool = False,
+) -> None:
+    entries = [
+        ("--ai-readiness", "ai_readiness_path"),
+        ("--ai-onboarding-report", "ai_onboarding_report_path"),
+    ]
+    if include_inventory:
+        entries.extend(
+            [
+                ("--model-dir", "ai_model_dir"),
+                ("--model-registry", "ai_model_registry"),
+            ]
+        )
+    for flag, key in entries:
+        value = paths.get(key)
+        if value:
+            command.extend([flag, value])
 
 
 def load_profile(path: Path) -> dict:
@@ -182,6 +221,17 @@ def screen_capture_provider_socket(profile: dict) -> Path:
     )
 
 
+def iter_profile_values(value: object) -> list[str]:
+    if value in (None, ""):
+        return []
+    if isinstance(value, (list, tuple, set)):
+        return [str(item) for item in value if item not in (None, "")]
+    text = str(value)
+    if os.pathsep in text:
+        return [item for item in text.split(os.pathsep) if item]
+    return [text]
+
+
 def component_base_args(profile: dict, component: str) -> list[str]:
     paths = profile.get("paths", {})
     compositor = profile.get("compositor", {}) or {}
@@ -204,18 +254,94 @@ def component_base_args(profile: dict, component: str) -> list[str]:
             "--agent-socket",
             paths.get("agentd_socket", str(agentd_socket(profile))),
         ]
+        append_ai_context_args(command, paths, include_inventory=True)
+        runtime_platform_env = paths.get(
+            "runtime_platform_env_path",
+            "/etc/aios/runtime/platform.env",
+        )
+        if runtime_platform_env:
+            command.extend(["--runtime-platform-env", runtime_platform_env])
         if compositor.get("runtime_state_path"):
             command.extend(["--compositor-runtime-state", compositor["runtime_state_path"]])
         if compositor.get("window_state_path"):
             command.extend(["--compositor-window-state", compositor["window_state_path"]])
         return command
+    if component == "system-assistant":
+        command = [
+            "--agent-socket",
+            paths.get("agentd_socket", str(agentd_socket(profile))),
+        ]
+        append_ai_context_args(command, paths, include_inventory=True)
+        runtime_platform_env = paths.get(
+            "runtime_platform_env_path",
+            "/etc/aios/runtime/platform.env",
+        )
+        if runtime_platform_env:
+            command.extend(["--runtime-platform-env", runtime_platform_env])
+        return command
+    if component == "ai-center":
+        command: list[str] = []
+        append_ai_context_args(command, paths, include_inventory=True)
+        for flag, key in (
+            ("--browser-remote-registry", "browser_remote_registry"),
+            ("--office-remote-registry", "office_remote_registry"),
+            ("--mcp-remote-registry", "mcp_remote_registry"),
+            ("--provider-registry-state-dir", "provider_registry_state_dir"),
+        ):
+            value = paths.get(key)
+            if value:
+                command.extend([flag, value])
+        return command
+    if component == "provider-settings":
+        command = []
+        append_ai_context_args(command, paths)
+        runtime_platform_env = paths.get(
+            "runtime_platform_env_path",
+            "/etc/aios/runtime/platform.env",
+        )
+        if runtime_platform_env:
+            command.extend(["--runtime-platform-env", runtime_platform_env])
+        return command
+    if component == "privacy-memory":
+        command = []
+        runtime_platform_env = paths.get(
+            "runtime_platform_env_path",
+            "/etc/aios/runtime/platform.env",
+        )
+        if runtime_platform_env:
+            command.extend(["--runtime-platform-env", runtime_platform_env])
+        return command
+    if component == "model-library":
+        command = []
+        append_ai_context_args(command, paths, include_inventory=True)
+        import_source = paths.get("ai_model_import_source")
+        if import_source:
+            command.extend(["--import-source", import_source])
+        for preload_root in iter_profile_values(paths.get("ai_recommended_preload_root")):
+            command.extend(["--recommended-preload-root", preload_root])
+        recommended_source_map = paths.get("ai_recommended_source_map")
+        if recommended_source_map:
+            command.extend(["--recommended-source-map", recommended_source_map])
+        recommended_download_staging_dir = paths.get("ai_recommended_download_staging_dir")
+        if recommended_download_staging_dir:
+            command.extend(
+                ["--recommended-download-staging-dir", recommended_download_staging_dir]
+            )
+        return command
     if component == "approval-panel":
-        return [
+        command = [
             "--socket",
             paths.get("policyd_socket", "/run/aios/policyd/policyd.sock"),
             "--agent-socket",
             paths.get("agentd_socket", str(agentd_socket(profile))),
         ]
+        runtime_platform_env = paths.get(
+            "runtime_platform_env_path",
+            "/etc/aios/runtime/platform.env",
+        )
+        if runtime_platform_env:
+            command.extend(["--runtime-platform-env", runtime_platform_env])
+        return command
     if component == "recovery-surface":
         return [
             "--socket",
@@ -262,6 +388,13 @@ def component_base_args(profile: dict, component: str) -> list[str]:
             command.extend(["--compositor-runtime-state", compositor["runtime_state_path"]])
         if compositor.get("window_state_path"):
             command.extend(["--compositor-window-state", compositor["window_state_path"]])
+        append_ai_context_args(command, paths, include_inventory=True)
+        runtime_platform_env = paths.get(
+            "runtime_platform_env_path",
+            "/etc/aios/runtime/platform.env",
+        )
+        if runtime_platform_env:
+            command.extend(["--runtime-platform-env", runtime_platform_env])
         return command
     if component == "operator-audit":
         command: list[str] = []
@@ -278,6 +411,12 @@ def component_base_args(profile: dict, component: str) -> list[str]:
             value = paths.get(key)
             if value:
                 command.extend([flag, value])
+        runtime_platform_env = paths.get(
+            "runtime_platform_env_path",
+            "/etc/aios/runtime/platform.env",
+        )
+        if runtime_platform_env:
+            command.extend(["--runtime-platform-env", runtime_platform_env])
         return command
     if component == "remote-governance":
         command: list[str] = []
@@ -290,6 +429,12 @@ def component_base_args(profile: dict, component: str) -> list[str]:
             value = paths.get(key)
             if value:
                 command.extend([flag, value])
+        remote_registration_request = paths.get("remote_registration_request_path")
+        if remote_registration_request:
+            command.extend(["--remote-registration-request", remote_registration_request])
+        agent_socket_value = paths.get("agentd_socket", str(agentd_socket(profile)))
+        if agent_socket_value:
+            command.extend(["--agent-socket", agent_socket_value])
         return command
     if component == "portal-chooser":
         return [

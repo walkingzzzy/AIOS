@@ -24,7 +24,7 @@
           "command": { "type": "string" },
           "status": {
             "type": "string",
-            "enum": ["passed", "failed"]
+            "enum": ["passed", "failed", "skipped"]
           },
           "returncode": { "type": "integer" },
           "duration_seconds": { "type": "number", "minimum": 0 },

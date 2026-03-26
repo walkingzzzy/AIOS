@@ -12,10 +12,11 @@ ROOT = Path(__file__).resolve().parent.parent
 RELEASE_CHECKLIST = ROOT / "docs" / "RELEASE_CHECKLIST.md"
 RELEASE_GATE_RULES_START = "<!-- aios-release-gate-rules:start -->"
 RELEASE_GATE_RULES_END = "<!-- aios-release-gate-rules:end -->"
+UTF8 = "utf-8"
 
 
 def read_json(path: Path) -> Any:
-    return json.loads(path.read_text())
+    return json.loads(path.read_text(encoding=UTF8))
 
 
 def get_nested_field(payload: Any, field: str) -> Any:
@@ -34,7 +35,7 @@ def get_nested_field(payload: Any, field: str) -> Any:
 
 
 def parse_release_gate_rules(checklist_path: Path = RELEASE_CHECKLIST) -> dict[str, Any]:
-    text = checklist_path.read_text()
+    text = checklist_path.read_text(encoding=UTF8)
     if RELEASE_GATE_RULES_START not in text or RELEASE_GATE_RULES_END not in text:
         raise RuntimeError(f"release gate rules markers missing in {checklist_path}")
 

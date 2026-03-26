@@ -351,7 +351,7 @@ def main() -> int:
             {
                 "user_id": "user-team-b",
                 "session_id": None,
-                "intent": "Summarize the current plan locally",
+                "intent": "请在本地总结当前计划",
             },
             timeout=args.timeout,
         )
@@ -362,6 +362,7 @@ def main() -> int:
         require(allowed["runtime_preview"]["backend_id"] == "local-cpu", "runtime preview should use local cpu")
         require(plan_step(allowed["plan"], "runtime.infer.submit") is not None, "allowed plan should expose runtime step")
         require(plan_step(allowed["plan"], "runtime.infer.submit")["status"] == "completed", "allowed runtime step should be completed")
+        require(allowed["plan"]["next_action"] == "invoke-runtime-preview", "allowed plan next_action mismatch")
         require(allowed.get("approval_summary") is None, "low-risk summarize intent should not expose approval summary")
         require((allowed.get("recovery") or {}).get("session_id") == session_id, "allowed response should include recovery summary")
 
@@ -429,7 +430,7 @@ def main() -> int:
             {
                 "user_id": "user-team-b",
                 "session_id": session_id,
-                "intent": f"Delete {danger_path}",
+                "intent": f"删除 {danger_path} 并清空回收站",
             },
             timeout=args.timeout,
         )
@@ -442,6 +443,10 @@ def main() -> int:
         require(bool(approval_ref), "approval_ref should be present for high-risk intent")
         approval_target_hash = ((needs_approval.get("portal_handle") or {}).get("scope") or {}).get("target_hash")
         require(bool(approval_target_hash), "high-risk approval flow should bind portal target_hash")
+        require(
+            needs_approval["plan"].get("next_action") == "request-destructive-approval",
+            "delete plan next_action mismatch",
+        )
         delete_step = plan_step(needs_approval["plan"], "system.file.bulk_delete")
         require(delete_step is not None, "delete intent should expose destructive step in plan")
         require(delete_step["requires_approval"] is True, "delete step should be marked approval-gated")
@@ -556,6 +561,10 @@ def main() -> int:
             timeout=args.timeout,
         )
         require(agent_task_plan["task_id"] == approval_task_id, "agent.task.plan.get should return the task plan")
+        require(
+            agent_task_plan.get("next_action") == "request-destructive-approval",
+            "agent.task.plan.get should retain destructive next_action",
+        )
 
         agent_session_evidence = rpc_call(
             agentd_socket,

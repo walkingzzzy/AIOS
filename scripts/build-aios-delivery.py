@@ -182,7 +182,16 @@ BOOT_ROOTFS_MAPPINGS = [
 FIRSTBOOT_ROOTFS_MAPPINGS = [
     (AIOS_ROOT / "image" / "firstboot" / "aios-firstboot.service", "usr/lib/systemd/system/aios-firstboot.service"),
     (AIOS_ROOT / "image" / "firstboot" / "aios-firstboot.sh", "usr/libexec/aios/aios-firstboot.sh"),
+    (AIOS_ROOT / "image" / "firstboot" / "aios-ai-onboarding.service", "usr/lib/systemd/system/aios-ai-onboarding.service"),
+    (AIOS_ROOT / "image" / "firstboot" / "aios-ai-onboarding.sh", "usr/libexec/aios/aios-ai-onboarding.sh"),
     (AIOS_ROOT / "image" / "firstboot" / "aios-firstboot.env", "etc/aios/firstboot/aios-firstboot.env"),
+]
+
+RUNTIME_ROOTFS_MAPPINGS = [
+    (AIOS_ROOT / "runtime" / "model_manager.py", "usr/libexec/aios/runtime/model_manager.py"),
+    (AIOS_ROOT / "runtime" / "recommended-model-catalog.yaml", "usr/libexec/aios/runtime/recommended-model-catalog.yaml"),
+    (AIOS_ROOT / "runtime" / "workers" / "local_cpu_worker.py", "usr/libexec/aios/runtime/workers/local_cpu_worker.py"),
+    (AIOS_ROOT / "runtime" / "workers" / "launch_local_cpu_worker.sh", "usr/libexec/aios/runtime/workers/launch_local_cpu_worker.sh"),
 ]
 
 RECOVERY_ROOTFS_MAPPINGS = [
@@ -520,6 +529,15 @@ def stage_rootfs(bundle_dir: Path, bin_dir: Path) -> dict[str, object]:
             ensure_executable(destination)
         firstboot_assets[source.name] = destination.relative_to(rootfs_dir).as_posix()
     create_unit_wants(rootfs_dir, "aios-firstboot.service")
+    create_unit_wants(rootfs_dir, "aios-ai-onboarding.service")
+
+    runtime_assets: dict[str, str] = {}
+    for source, relative in RUNTIME_ROOTFS_MAPPINGS:
+        destination = rootfs_dir / relative
+        copy_file(source, destination)
+        if destination.suffix in {".sh", ".py"}:
+            ensure_executable(destination)
+        runtime_assets[source.name] = destination.relative_to(rootfs_dir).as_posix()
     masked_units = [mask_systemd_unit(rootfs_dir, unit_name) for unit_name in MASKED_SYSTEMD_UNITS]
     firstboot_hygiene = prepare_firstboot_hygiene(rootfs_dir)
 
@@ -634,7 +652,7 @@ def stage_rootfs(bundle_dir: Path, bin_dir: Path) -> dict[str, object]:
 
     enabled_units = generate_systemd_preset(
         rootfs_dir,
-        extra_units=["aios-firstboot.service", "aios-boot-evidence.service"],
+        extra_units=["aios-firstboot.service", "aios-ai-onboarding.service", "aios-boot-evidence.service"],
     )
 
     providers_dir = rootfs_dir / "usr" / "share" / "aios" / "providers"
@@ -688,6 +706,7 @@ def stage_rootfs(bundle_dir: Path, bin_dir: Path) -> dict[str, object]:
         "provider_descriptors": sorted(provider_files),
         "boot_assets": sorted(boot_assets),
         "firstboot": firstboot_assets,
+        "runtime_assets": runtime_assets,
         "firstboot_hygiene": firstboot_hygiene,
         "masked_units": sorted(masked_units),
         "recovery": recovery_assets,
@@ -748,6 +767,7 @@ def main() -> int:
         "provider_descriptors": rootfs_info["provider_descriptors"],
         "boot": rootfs_info["boot_assets"],
         "firstboot": rootfs_info["firstboot"],
+        "runtime_assets": rootfs_info["runtime_assets"],
         "firstboot_hygiene": rootfs_info["firstboot_hygiene"],
         "masked_units": rootfs_info["masked_units"],
         "recovery": rootfs_info["recovery"],

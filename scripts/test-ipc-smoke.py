@@ -491,6 +491,90 @@ def main() -> int:
         if not code_capabilities or code_capabilities[0] != "compat.code.execute":
             raise RuntimeError("code intent did not prioritize compat.code.execute")
 
+        chinese_browser_intent = "用浏览器打开 https://example.com 并提取标题"
+        chinese_browser_result = rpc_call(
+            sockets["agentd"],
+            "agent.intent.submit",
+            {
+                "user_id": args.user_id,
+                "session_id": session_id,
+                "intent": chinese_browser_intent,
+            },
+            timeout=args.timeout,
+        )
+        require_fields(
+            "chinese browser agent.intent.submit",
+            chinese_browser_result,
+            ["task", "plan", "provider_resolution"],
+        )
+        chinese_browser_provider = (
+            chinese_browser_result.get("provider_resolution", {})
+            .get("selected", {})
+            .get("provider_id")
+        )
+        if chinese_browser_provider != "compat.browser.automation.local":
+            raise RuntimeError("chinese browser intent did not resolve compat.browser.automation.local")
+        chinese_browser_execution_location = (
+            chinese_browser_result.get("provider_resolution", {})
+            .get("selected", {})
+            .get("execution_location")
+        )
+        if chinese_browser_execution_location != "sandbox":
+            raise RuntimeError("chinese browser intent did not prefer sandbox execution")
+        chinese_browser_capabilities = (
+            chinese_browser_result.get("plan", {}).get("candidate_capabilities", [])
+        )
+        if (
+            not chinese_browser_capabilities
+            or chinese_browser_capabilities[0] != "compat.browser.navigate"
+        ):
+            raise RuntimeError("chinese browser intent did not prioritize compat.browser.navigate")
+        if "compat.browser.extract" not in chinese_browser_capabilities:
+            raise RuntimeError("chinese browser intent did not include compat.browser.extract")
+        if chinese_browser_result.get("plan", {}).get("next_action") != "open-browser-target":
+            raise RuntimeError("chinese browser intent next_action mismatch")
+
+        chinese_delete_path = temp_root / "aios-smoke-zh-danger.txt"
+        chinese_delete_path.write_text("zh smoke delete target\n", encoding="utf-8")
+        chinese_delete_intent = f"删除 {chinese_delete_path} 并清空回收站"
+        chinese_delete_result = rpc_call(
+            sockets["agentd"],
+            "agent.intent.submit",
+            {
+                "user_id": args.user_id,
+                "session_id": session_id,
+                "intent": chinese_delete_intent,
+            },
+            timeout=args.timeout,
+        )
+        require_fields(
+            "chinese delete agent.intent.submit",
+            chinese_delete_result,
+            ["task", "plan", "policy", "portal_handle", "provider_resolution"],
+        )
+        if chinese_delete_result.get("policy", {}).get("decision", {}).get("decision") != "needs-approval":
+            raise RuntimeError("chinese delete intent should require approval")
+        chinese_delete_capabilities = (
+            chinese_delete_result.get("plan", {}).get("candidate_capabilities", [])
+        )
+        if (
+            not chinese_delete_capabilities
+            or chinese_delete_capabilities[0] != "system.file.bulk_delete"
+        ):
+            raise RuntimeError("chinese delete intent did not prioritize system.file.bulk_delete")
+        if chinese_delete_result.get("plan", {}).get("next_action") != "request-destructive-approval":
+            raise RuntimeError("chinese delete intent next_action mismatch")
+        chinese_delete_provider = (
+            chinese_delete_result.get("provider_resolution", {})
+            .get("selected", {})
+            .get("provider_id")
+        )
+        if chinese_delete_provider != "system.files.local":
+            raise RuntimeError("chinese delete intent did not resolve system.files.local")
+        chinese_delete_handle = chinese_delete_result.get("portal_handle")
+        if not chinese_delete_handle or chinese_delete_handle.get("kind") != "file_handle":
+            raise RuntimeError("chinese delete intent did not return file_handle portal binding")
+
         replan_result = rpc_call(
             sockets["agentd"],
             "agent.task.replan",
@@ -867,8 +951,13 @@ def main() -> int:
                     "screen_target": screen_target,
                     "browser_provider": browser_provider,
                     "browser_execution_location": browser_execution_location,
+                    "chinese_browser_provider": chinese_browser_provider,
+                    "chinese_browser_execution_location": chinese_browser_execution_location,
                     "code_provider": code_provider,
                     "code_execution_location": code_execution_location,
+                    "chinese_delete_policy": chinese_delete_result.get("policy", {}).get("decision", {}).get("decision"),
+                    "chinese_delete_provider": chinese_delete_provider,
+                    "chinese_delete_next_action": chinese_delete_result.get("plan", {}).get("next_action"),
                     "replan_task_id": replan_result.get("plan", {}).get("task_id"),
                     "replan_basis_task_id": replan_result.get("basis_task_id"),
                     "replan_basis_marked": replan_result.get("basis_task_marked_replanned"),

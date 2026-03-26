@@ -48,6 +48,14 @@ def main() -> int:
                 "AIOS_INSTALLER_BOOT_BACKEND=firmware",
                 "AIOS_INSTALLER_GUIDED_MODE=interactive",
                 "AIOS_INSTALLER_GUIDED_AUTO_CONFIRM_SECONDS=0",
+                "AIOS_INSTALLER_AI_ENABLED=1",
+                "AIOS_INSTALLER_AI_MODE=hybrid",
+                "AIOS_INSTALLER_AI_PRIVACY_PROFILE=balanced",
+                "AIOS_INSTALLER_AI_AUTO_PULL_DEFAULT_MODEL=1",
+                "AIOS_INSTALLER_AI_AUTO_MODEL_SOURCE=ollama-library",
+                "AIOS_INSTALLER_AI_AUTO_MODEL_ID=qwen2.5:7b-instruct",
+                "AIOS_INSTALLER_AI_ENDPOINT_BASE_URL=http://127.0.0.1:11434/v1",
+                "AIOS_INSTALLER_AI_ENDPOINT_MODEL=qwen2.5:7b-instruct",
                 "AIOS_INSTALLER_VENDOR_ID=nvidia",
                 "AIOS_INSTALLER_HARDWARE_PROFILE_ID=nvidia-jetson-orin-agx",
                 f"AIOS_INSTALLER_PRE_INSTALL_HOOK={pre_hook}",
@@ -82,6 +90,12 @@ def main() -> int:
     require(session["target_disk"] == "/dev/nvme0n1", "target disk mismatch")
     require(session["install_slot"] == "b", "install slot mismatch")
     require(session["guided_mode"] == "interactive", "guided mode mismatch")
+    require(session["ai_config"]["enabled"] is True, "guided session ai enabled mismatch")
+    require(session["ai_config"]["mode"] == "hybrid", "guided session ai mode mismatch")
+    require(
+        session["ai_config"]["endpoint_base_url"] == "http://127.0.0.1:11434/v1",
+        "guided session ai endpoint mismatch",
+    )
     require(
         session["pre_install_hook"]["status"] == "ready",
         "pre-install hook should be marked ready",
@@ -96,6 +110,12 @@ def main() -> int:
     )
     require("Target Disk    : /dev/nvme0n1" in summary, "summary missing target disk")
     require("Vendor ID      : nvidia" in summary, "summary missing vendor id")
+    require("AI Enabled     : yes" in summary, "summary missing ai enabled flag")
+    require("AI Mode        : hybrid" in summary, "summary missing ai mode")
+    require(
+        "AI Endpoint    : http://127.0.0.1:11434/v1" in summary,
+        "summary missing ai endpoint",
+    )
     require(
         completed.stdout.strip().endswith("dry-run complete; installer runner not invoked"),
         "guided script should complete in dry-run mode",

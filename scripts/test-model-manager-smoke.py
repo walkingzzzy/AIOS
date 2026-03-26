@@ -19,9 +19,13 @@ sys.path.insert(0, str(REPO_ROOT))
 from aios.runtime.model_manager import (
     ModelEntry,
     ModelManager,
-    detect_format,
-    compute_sha256,
+    apply_recommended_distribution,
+    build_recommended_distribution_plan,
     GGUF_MAGIC,
+    compute_sha256,
+    detect_format,
+    load_recommended_model_catalog,
+    summarize_recommended_model_catalog,
 )
 
 
@@ -321,6 +325,97 @@ class TestModelManager(unittest.TestCase):
         entries = self.mgr.scan_directory(self.tmpdir / "does_not_exist")
         self.assertEqual(entries, [])
 
+    def test_import_model_copies_into_store_and_sets_default(self):
+        source = self.tmpdir / "source-model.gguf"
+        _write_fake_gguf(source)
+
+        entry = self.mgr.import_model(
+            source,
+            model_id="Qwen Mini",
+            capabilities=["text-generation"],
+            aliases=["default-text"],
+            set_default=True,
+            quantization="Q4_K_M",
+            parameters_estimate="7B",
+        )
+
+        self.assertEqual(entry.model_id, "qwen-mini")
+        self.assertTrue(Path(entry.path).exists())
+        self.assertEqual(entry.source_kind, "local-import-copy")
+        self.assertEqual(entry.source_uri, str(source.resolve()))
+        self.assertEqual(entry.aliases, ["default-text"])
+        self.assertEqual(entry.capabilities, ["text-generation"])
+        self.assertEqual(self.mgr.get_default_model("text-generation").model_id, "qwen-mini")
+
+    def test_scan_preserves_imported_metadata(self):
+        source = self.tmpdir / "preserve-source.gguf"
+        _write_fake_gguf(source)
+        imported = self.mgr.import_model(
+            source,
+            model_id="Preserve Me",
+            capabilities=["text-generation", "embedding"],
+            aliases=["preserve"],
+            set_default=True,
+        )
+
+        self.mgr.scan_directory()
+        restored = self.mgr.get_model(imported.model_id)
+        self.assertIsNotNone(restored)
+        self.assertEqual(restored.aliases, ["preserve"])
+        self.assertEqual(restored.capabilities, ["text-generation", "embedding"])
+        self.assertEqual(restored.source_kind, "local-import-copy")
+        self.assertEqual(self.mgr.get_model("preserve").model_id, imported.model_id)
+
+    def test_set_default_model_resolves_alias(self):
+        source = self.tmpdir / "alias-source.gguf"
+        _write_fake_gguf(source)
+        imported = self.mgr.import_model(
+            source,
+            model_id="Alias Default",
+            capabilities=["text-generation"],
+            aliases=["alias-default"],
+        )
+
+        self.mgr.set_default_model("text-generation", "alias-default")
+
+        default_model = self.mgr.get_default_model("text-generation")
+        self.assertIsNotNone(default_model)
+        self.assertEqual(default_model.model_id, imported.model_id)
+
+    def test_delete_model_removes_file_alias_and_default(self):
+        source = self.tmpdir / "delete-source.gguf"
+        _write_fake_gguf(source)
+        imported = self.mgr.import_model(
+            source,
+            model_id="Delete Me",
+            capabilities=["text-generation"],
+            aliases=["delete-alias"],
+            set_default=True,
+        )
+
+        deleted = self.mgr.delete_model("delete-alias")
+
+        self.assertEqual(deleted.model_id, imported.model_id)
+        self.assertIsNone(self.mgr.get_model(imported.model_id))
+        self.assertIsNone(self.mgr.get_model("delete-alias"))
+        self.assertIsNone(self.mgr.get_default_model("text-generation"))
+        self.assertFalse(Path(imported.path).exists())
+
+    def test_delete_model_keeps_file_when_requested(self):
+        source = self.tmpdir / "delete-keep.gguf"
+        _write_fake_gguf(source)
+        imported = self.mgr.import_model(
+            source,
+            model_id="Keep File",
+            capabilities=["text-generation"],
+        )
+
+        deleted = self.mgr.delete_model(imported.model_id, remove_file=False)
+
+        self.assertEqual(deleted.model_id, imported.model_id)
+        self.assertTrue(Path(imported.path).exists())
+        self.assertEqual(self.mgr.export_inventory()["model_count"], 0)
+
 
 class TestSha256(unittest.TestCase):
     def test_known_hash(self):
@@ -335,6 +430,135 @@ class TestSha256(unittest.TestCase):
             self.assertEqual(h, expected)
         finally:
             p.unlink()
+
+
+class TestRecommendedCatalog(unittest.TestCase):
+    def test_load_recommended_catalog_from_repo(self):
+        catalog = load_recommended_model_catalog(
+            REPO_ROOT / "aios" / "runtime" / "recommended-model-catalog.yaml"
+        )
+        self.assertEqual(catalog["source_status"], "ready")
+        self.assertGreaterEqual(len(catalog["models"]), 4)
+
+    def test_catalog_summary_marks_installed_recommendation(self):
+        catalog = load_recommended_model_catalog(
+            REPO_ROOT / "aios" / "runtime" / "recommended-model-catalog.yaml"
+        )
+        summary = summarize_recommended_model_catalog(
+            catalog,
+            inventory={
+                "models": [
+                    {
+                        "model_id": "qwen2-5-7b-instruct",
+                        "aliases": ["qwen2.5:7b-instruct"],
+                    }
+                ]
+            },
+        )
+        self.assertEqual(summary["source_status"], "ready")
+        self.assertEqual(summary["installed_count"], 1)
+        self.assertIn("qwen2-5-7b-instruct", summary["installed_model_ids"])
+        self.assertIn("manual-import", summary["strategy_counts"])
+        self.assertEqual(
+            summary["default_recommendations"]["text-generation"],
+            "qwen2-5-7b-instruct",
+        )
+
+    def test_recommended_distribution_plan_resolves_source_map(self):
+        with tempfile.TemporaryDirectory(prefix="aios-recommended-plan-") as tempdir:
+            root = Path(tempdir)
+            model_dir = root / "models"
+            model_dir.mkdir(parents=True, exist_ok=True)
+            manager = ModelManager(model_dir=model_dir)
+
+            catalog_path = root / "recommended-model-catalog.json"
+            catalog_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0.0",
+                        "models": [
+                            {
+                                "model_id": "embed-demo",
+                                "display_name": "Embed Demo",
+                                "capabilities": ["embedding"],
+                                "formats": ["safetensors"],
+                                "distribution_strategy": "firstboot-download",
+                                "sources": [{"kind": "firstboot-download", "value": "embed-demo"}],
+                            }
+                        ],
+                    },
+                    indent=2,
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            source_map_path = root / "recommended-model-sources.json"
+            source_file = root / "embed-demo.safetensors"
+            _write_fake_safetensors(source_file)
+            source_map_path.write_text(
+                json.dumps(
+                    {
+                        "mappings": {
+                            "embed-demo": {
+                                "value": str(source_file),
+                            }
+                        }
+                    },
+                    indent=2,
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            plan = build_recommended_distribution_plan(
+                manager,
+                recommended_catalog_path=catalog_path,
+                source_map_path=source_map_path,
+            )
+            self.assertEqual(plan["actionable_count"], 1)
+            self.assertEqual(plan["models"][0]["status"], "ready-import")
+
+    def test_apply_recommended_distribution_imports_file(self):
+        with tempfile.TemporaryDirectory(prefix="aios-recommended-apply-") as tempdir:
+            root = Path(tempdir)
+            model_dir = root / "models"
+            model_dir.mkdir(parents=True, exist_ok=True)
+            manager = ModelManager(model_dir=model_dir)
+
+            source_model = root / "phi-mini.gguf"
+            _write_fake_gguf(source_model)
+            catalog_path = root / "recommended-model-catalog.json"
+            catalog_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0.0",
+                        "models": [
+                            {
+                                "model_id": "phi-mini",
+                                "display_name": "Phi Mini",
+                                "capabilities": ["text-generation"],
+                                "formats": ["gguf"],
+                                "distribution_strategy": "preload",
+                                "default_recommended": True,
+                                "sources": [{"kind": "preload-image", "value": source_model.name}],
+                            }
+                        ],
+                    },
+                    indent=2,
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            payload = apply_recommended_distribution(
+                manager,
+                recommended_catalog_path=catalog_path,
+                preload_roots=[root],
+                set_default_policy="always",
+            )
+            self.assertEqual(payload["status"], "applied")
+            self.assertEqual(payload["imported_count"], 1)
+            self.assertEqual(manager.get_default_model("text-generation").model_id, "phi-mini")
 
 
 if __name__ == "__main__":

@@ -177,6 +177,10 @@ pub fn snapshot(config: &Config) -> anyhow::Result<BackendSnapshot> {
         "backend_evidence_artifact_count={}",
         evidence_artifacts.len()
     ));
+    notes.push(format!(
+        "product_mode={}",
+        if config.product_mode { "true" } else { "false" }
+    ));
     notes.extend(evidence_artifacts.iter().map(|artifact| {
         format!(
             "backend_evidence_artifact[{}]={}",
@@ -191,6 +195,7 @@ pub fn snapshot(config: &Config) -> anyhow::Result<BackendSnapshot> {
         ui_tree_snapshot.as_ref(),
         &ui_tree_support_matrix,
         &evidence_artifacts,
+        config.product_mode,
     );
     Ok(BackendSnapshot {
         updated_at,
@@ -252,6 +257,7 @@ fn build_backend_summary(
     ui_tree_snapshot: Option<&Value>,
     ui_tree_support_matrix: &[UiTreeSupportMatrixEntry],
     evidence_artifacts: &[PersistedBackendEvidenceArtifact],
+    product_mode: bool,
 ) -> DeviceBackendSummary {
     let mut readiness_summary = BTreeMap::new();
     for status in statuses {
@@ -262,7 +268,7 @@ fn build_backend_summary(
 
     let attention_count = statuses
         .iter()
-        .filter(|status| readiness_requires_attention(&status.readiness))
+        .filter(|status| readiness_requires_attention(&status.readiness, product_mode))
         .count() as u32;
     let ui_tree_capture_mode = ui_tree_snapshot
         .and_then(Value::as_object)
@@ -309,16 +315,14 @@ fn build_backend_summary(
     }
 }
 
-fn readiness_requires_attention(readiness: &str) -> bool {
-    !matches!(
-        readiness,
-        "native-ready"
-            | "native-live"
-            | "native-state-bridge"
-            | "command-adapter"
-            | "disabled"
-            | "native-stub"
-    )
+fn readiness_requires_attention(readiness: &str, product_mode: bool) -> bool {
+    match readiness {
+        "native-ready" | "native-live" | "native-state-bridge" | "command-adapter" | "disabled" => {
+            false
+        }
+        "native-stub" => product_mode,
+        _ => true,
+    }
 }
 
 fn persist_backend_evidence_artifacts(
@@ -1294,6 +1298,7 @@ mod tests {
             ui_tree_state_path: state_root.join("ui-tree-state.json"),
             default_resolution: "1920x1080".to_string(),
             approval_mode: "metadata-only".to_string(),
+            product_mode: false,
             approved_sessions: Vec::new(),
             approved_tasks: Vec::new(),
             screen_capture_command: None,
@@ -1687,5 +1692,34 @@ mod tests {
         }
 
         cleanup(&config);
+    }
+
+    #[test]
+    fn product_mode_treats_native_stub_as_attention() {
+        let statuses = vec![DeviceBackendStatus {
+            modality: "screen".to_string(),
+            backend: "screen-capture-portal".to_string(),
+            available: true,
+            readiness: "native-stub".to_string(),
+            details: Vec::new(),
+        }];
+        let adapters = vec![DeviceCaptureAdapterPlan {
+            modality: "screen".to_string(),
+            backend: "screen-capture-portal".to_string(),
+            adapter_id: "screen.portal-ready".to_string(),
+            execution_path: "native-ready".to_string(),
+            preview_object_kind: "screen_frame".to_string(),
+            notes: Vec::new(),
+        }];
+
+        let non_product_summary =
+            build_backend_summary(&statuses, &adapters, &[], None, &[], &[], false);
+        assert_eq!(non_product_summary.overall_status, "ready");
+        assert_eq!(non_product_summary.attention_count, 0);
+
+        let product_summary =
+            build_backend_summary(&statuses, &adapters, &[], None, &[], &[], true);
+        assert_eq!(product_summary.overall_status, "attention");
+        assert_eq!(product_summary.attention_count, 1);
     }
 }

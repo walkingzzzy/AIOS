@@ -32,6 +32,8 @@ class Config:
     notification_panel: Path
     operator_audit_panel: Path
     remote_governance_panel: Path
+    agentd_socket: Path
+    remote_registration_request: Path | None
     recovery_surface: Path
     updated_socket: Path
     indicator_state: Path
@@ -99,6 +101,20 @@ def load_config() -> Config:
                 "AIOS_SHELL_PROVIDER_REMOTE_GOVERNANCE_PANEL",
                 str(root / "aios" / "shell" / "components" / "remote-governance" / "panel.py"),
             )
+        ),
+        agentd_socket=Path(
+            os.environ.get(
+                "AIOS_SHELL_PROVIDER_AGENTD_SOCKET",
+                os.environ.get("AIOS_COMPAT_AGENTD_SOCKET", "/run/aios/agentd/agentd.sock"),
+            )
+        ),
+        remote_registration_request=(
+            Path(value)
+            if (
+                value := os.environ.get("AIOS_SHELL_PROVIDER_REMOTE_REGISTRATION_REQUEST")
+                or os.environ.get("AIOS_REMOTE_REGISTRATION_REQUEST")
+            )
+            else None
         ),
         recovery_surface=Path(
             os.environ.get(
@@ -253,6 +269,9 @@ def health(config: Config) -> dict:
             f"notification_panel={config.notification_panel}",
             f"operator_audit_panel={config.operator_audit_panel}",
             f"remote_governance_panel={config.remote_governance_panel}",
+            f"remote_registration_request={config.remote_registration_request}"
+            if config.remote_registration_request is not None
+            else "remote_registration_request=disabled",
             f"panel_action_log={config.panel_action_log}" if config.panel_action_log else "panel_action_log=disabled",
         ],
     }
@@ -457,7 +476,16 @@ def remote_governance_panel_command(
         str(config.provider_registry_state_dir),
         "--limit",
         str(limit),
+        "--agent-socket",
+        str(config.agentd_socket),
     ]
+    if config.remote_registration_request is not None:
+        command.extend(
+            [
+                "--remote-registration-request",
+                str(config.remote_registration_request),
+            ]
+        )
     for flag, value in (
         ("--source", params.get("query_source")),
         ("--severity", params.get("severity")),

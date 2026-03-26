@@ -12,6 +12,24 @@ DERIVE_FROM_BASE="${AIOS_IMAGE_DERIVE_VARIANTS_FROM_BASE:-1}"
 BASE_STEM="${AIOS_BASE_IMAGE_OUTPUT_STEM:-aios-qemu-x86_64}"
 INSTALLER_STEM="${AIOS_INSTALLER_IMAGE_OUTPUT_STEM:-aios-qemu-x86_64-installer}"
 
+resolve_python_bin() {
+  if [[ -n "${AIOS_PYTHON_BIN:-}" ]]; then
+    printf '%s\n' "$AIOS_PYTHON_BIN"
+    return 0
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    printf 'python3\n'
+    return 0
+  fi
+  if command -v python >/dev/null 2>&1; then
+    printf 'python\n'
+    return 0
+  fi
+  printf 'python3\n'
+}
+
+PYTHON_BIN="$(resolve_python_bin)"
+
 installer_artifacts_ready() {
   [[ -f "$OUTPUT_DIR/$INSTALLER_STEM.raw" ]] || return 1
   [[ -f "$OUTPUT_DIR/$INSTALLER_STEM.efi" ]] || return 1
@@ -27,7 +45,7 @@ base_artifacts_ready() {
 }
 
 write_manifest() {
-  python3 - "$OUTPUT_DIR" <<'PYMANIFEST'
+  "$PYTHON_BIN" - "$OUTPUT_DIR" <<'PYMANIFEST'
 from pathlib import Path
 import json
 import sys
@@ -92,9 +110,9 @@ print_preflight() {
   base_preflight_status="$(
     AIOS_IMAGE_OUTPUT_DIR_OVERRIDE="$BASE_OUTPUT_DIR" \
     bash "$ROOT_DIR/scripts/build-aios-image.sh" --preflight | \
-    python3 -c 'import json,sys; print(json.loads(sys.stdin.read() or "{}").get("status","unknown"))'
+    "$PYTHON_BIN" -c 'import json,sys; print(json.loads(sys.stdin.read() or "{}").get("status","unknown"))'
   )"
-  python3 - "$OUTPUT_DIR" "$BASE_OUTPUT_DIR" "$variant_ready" "$base_ready" "$base_preflight_status" "$DERIVE_FROM_BASE" "$EXTRA_OVERLAY_DIR" <<'PY'
+  "$PYTHON_BIN" - "$OUTPUT_DIR" "$BASE_OUTPUT_DIR" "$variant_ready" "$base_ready" "$base_preflight_status" "$DERIVE_FROM_BASE" "$EXTRA_OVERLAY_DIR" <<'PY'
 from pathlib import Path
 import json
 import sys
@@ -139,7 +157,7 @@ if derive_from_base_if_possible "$@"; then
   exit 0
 fi
 
-python3 "$ROOT_DIR/scripts/prepare-aios-image-staging.py" \
+"$PYTHON_BIN" "$ROOT_DIR/scripts/prepare-aios-image-staging.py" \
   "$BASE_IMAGE_DIR" \
   "$STAGING_DIR" \
   --preserve mkosi.cache \
@@ -158,7 +176,7 @@ if [[ -n "$EXTRA_OVERLAY_DIR" ]]; then
   cp -a "$EXTRA_OVERLAY_DIR"/. "$STAGING_DIR/mkosi.extra"/
 fi
 
-python3 - "$STAGING_DIR/mkosi.conf" "$CMDLINE_FILE" <<'PYCONF'
+"$PYTHON_BIN" - "$STAGING_DIR/mkosi.conf" "$CMDLINE_FILE" <<'PYCONF'
 from pathlib import Path
 import sys
 

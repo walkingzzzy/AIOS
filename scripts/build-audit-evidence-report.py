@@ -15,6 +15,7 @@ from jsonschema import Draft202012Validator
 ROOT = Path(__file__).resolve().parent.parent
 SCHEMA_PATH = ROOT / "aios" / "observability" / "schemas" / "audit-evidence-report.schema.json"
 DEFAULT_OUTPUT_PREFIX = ROOT / "out" / "validation" / "audit-evidence-report"
+UTF8 = "utf-8"
 DOMAIN_NAMES = [
     "control-plane",
     "shell",
@@ -42,14 +43,14 @@ def parse_args() -> argparse.Namespace:
 
 
 def load_json(path: Path) -> Any:
-    return json.loads(path.read_text())
+    return json.loads(path.read_text(encoding=UTF8))
 
 
 def read_jsonl(path: Path | None) -> list[dict[str, Any]]:
     if path is None or not path.exists():
         return []
     records: list[dict[str, Any]] = []
-    for line in path.read_text().splitlines():
+    for line in path.read_text(encoding=UTF8).splitlines():
         stripped = line.strip()
         if not stripped:
             continue
@@ -935,12 +936,12 @@ def build_markdown(report: dict[str, Any]) -> str:
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding=UTF8)
 
 
 def write_markdown(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content + "\n")
+    path.write_text(content + "\n", encoding=UTF8)
 
 
 def main() -> int:

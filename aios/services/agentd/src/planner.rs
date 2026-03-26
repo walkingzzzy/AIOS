@@ -30,8 +30,9 @@ pub fn plan_for_task(session_id: String, task_id: String, intent: String) -> Age
 fn build_plan(session_id: String, task_id: String, intent: String) -> AgentPlan {
     let candidate_capabilities = crate::resolver::candidate_capabilities(&intent);
     let route_preference = crate::topology::choose(&intent);
-    let next_action = crate::recovery::fallback_action(&intent);
-    let steps = build_steps(&intent, &candidate_capabilities, &next_action);
+    let next_action = aios_core::intent::next_action(&candidate_capabilities);
+    let fallback_action = crate::recovery::fallback_action(&intent);
+    let steps = build_steps(&intent, &candidate_capabilities, &fallback_action);
 
     AgentPlan {
         task_id,
@@ -220,6 +221,7 @@ mod tests {
 
         assert_eq!(plan.task_id, "task-42");
         assert_eq!(plan.route_preference, "tool-calling");
+        assert_eq!(plan.next_action, "inspect-bound-target");
         assert_eq!(plan.steps[0].capability_id, "provider.fs.open");
         assert_eq!(plan.steps[1].capability_id, "runtime.infer.submit");
         assert!(plan.steps[0].requires_portal_handle);
@@ -247,6 +249,11 @@ mod tests {
             ]
         );
         assert!(plan.steps[2].requires_approval);
+        assert_eq!(plan.next_action, "request-destructive-approval");
+        assert_eq!(
+            plan.steps[0].recovery_action.as_deref(),
+            Some("reuse-portal-handle")
+        );
     }
 
     #[test]
@@ -266,6 +273,7 @@ mod tests {
             ordered,
             vec!["compat.document.open", "compat.office.export_pdf"]
         );
+        assert_eq!(plan.next_action, "export-document-target");
         assert_eq!(
             plan.steps[1].portal_kind.as_deref(),
             Some("export_target_handle")
