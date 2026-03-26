@@ -2,6 +2,7 @@ use aios_contracts::methods;
 
 #[derive(Debug, Default)]
 struct IntentSignals {
+    has_explicit_target: bool,
     mentions_screen: bool,
     mentions_web: bool,
     mentions_web_extract: bool,
@@ -15,40 +16,42 @@ struct IntentSignals {
     mentions_operator_audit: bool,
     mentions_panel_events: bool,
     mentions_focus: bool,
+    mentions_meta_request: bool,
 }
 
 pub fn candidate_capabilities(intent: &str) -> Vec<String> {
     let signals = analyze_intent(intent);
     let mut capabilities = Vec::new();
+    let suppress_surface_routes = should_suppress_surface_routes(&signals);
 
-    if signals.mentions_delete {
+    if signals.mentions_delete && !suppress_surface_routes {
         push_capability(&mut capabilities, methods::SYSTEM_FILE_BULK_DELETE);
     }
-    if signals.mentions_code_execution {
+    if signals.mentions_code_execution && !suppress_surface_routes {
         push_capability(&mut capabilities, "compat.code.execute");
     }
-    if signals.mentions_screen {
+    if signals.mentions_screen && !suppress_surface_routes {
         push_capability(&mut capabilities, "device.capture.screen.read");
     }
-    if signals.mentions_web {
+    if signals.mentions_web && !suppress_surface_routes {
         push_capability(&mut capabilities, "compat.browser.navigate");
     }
-    if signals.mentions_web && signals.mentions_web_extract {
+    if signals.mentions_web && signals.mentions_web_extract && !suppress_surface_routes {
         push_capability(&mut capabilities, "compat.browser.extract");
     }
-    if signals.mentions_export_pdf {
+    if signals.mentions_export_pdf && !suppress_surface_routes {
         push_capability(&mut capabilities, "compat.office.export_pdf");
     }
-    if signals.mentions_document {
+    if signals.mentions_document && !suppress_surface_routes {
         push_capability(&mut capabilities, "compat.document.open");
     }
-    if signals.mentions_file_target {
+    if signals.mentions_file_target && !suppress_surface_routes {
         push_capability(&mut capabilities, methods::PROVIDER_FS_OPEN);
     }
     if signals.mentions_runtime {
         push_capability(&mut capabilities, methods::RUNTIME_INFER_SUBMIT);
     }
-    if signals.mentions_notification {
+    if signals.mentions_notification && !suppress_surface_routes {
         push_capability(&mut capabilities, methods::SHELL_NOTIFICATION_OPEN);
     }
     if signals.mentions_operator_audit {
@@ -57,7 +60,7 @@ pub fn candidate_capabilities(intent: &str) -> Vec<String> {
     if signals.mentions_panel_events {
         push_capability(&mut capabilities, methods::SHELL_PANEL_EVENTS_LIST);
     }
-    if signals.mentions_focus {
+    if signals.mentions_focus && !suppress_surface_routes {
         push_capability(&mut capabilities, methods::SHELL_WINDOW_FOCUS);
     }
     if capabilities.is_empty() {
@@ -78,19 +81,17 @@ pub fn topology_preference(intent: &str) -> String {
         return "plan-execute".to_string();
     }
 
-    if contains_any(
-        &normalized,
-        &[
-            "open",
-            "file",
-            "browser",
-            "打开",
-            "文件",
-            "浏览器",
-            "网页",
-            "路径",
-        ],
-    ) {
+    let signals = analyze_intent(intent);
+    if !should_suppress_surface_routes(&signals)
+        && (signals.mentions_file_target
+            || signals.mentions_web
+            || signals.mentions_screen
+            || signals.mentions_code_execution
+            || signals.mentions_export_pdf
+            || signals.mentions_document
+            || signals.mentions_notification
+            || signals.mentions_focus)
+    {
         return "tool-calling".to_string();
     }
 
@@ -139,12 +140,26 @@ pub fn next_action(candidate_capabilities: &[String]) -> String {
 
 fn analyze_intent(intent: &str) -> IntentSignals {
     let normalized = intent.to_lowercase();
-    let mentions_web = contains_any(
+    let has_url = contains_any(
+        &normalized,
+        &["http://", "https://", "www."],
+    );
+    let mentions_navigation_action = contains_any(
         &normalized,
         &[
-            "http://",
-            "https://",
-            "www.",
+            "open", "visit", "navigate", "browse", "go to", "launch", "打开", "访问", "前往",
+            "浏览", "启动",
+        ],
+    );
+    let mentions_extract_action = contains_any(
+        &normalized,
+        &[
+            "extract", "scrape", "selector", "title", "提取", "抓取", "抽取", "标题",
+        ],
+    );
+    let mentions_web_surface = contains_any(
+        &normalized,
+        &[
             "browser",
             "website",
             "web page",
@@ -157,7 +172,8 @@ fn analyze_intent(intent: &str) -> IntentSignals {
             "链接",
         ],
     );
-    let mentions_path = !mentions_web
+    let mentions_web = has_url || (mentions_web_surface && (mentions_navigation_action || mentions_extract_action));
+    let mentions_path = !has_url
         && contains_any(
             &normalized,
             &[
@@ -169,40 +185,122 @@ fn analyze_intent(intent: &str) -> IntentSignals {
         &normalized,
         &["document", ".doc", ".docx", ".odt", "word", "文档"],
     );
+    let mentions_file_object = contains_any(
+        &normalized,
+        &[
+            "file",
+            "files",
+            "folder",
+            "directory",
+            "path",
+            "文件",
+            "文件夹",
+            "目录",
+            "路径",
+        ],
+    ) || mentions_document;
+    let mentions_file_action = contains_any(
+        &normalized,
+        &[
+            "open",
+            "read",
+            "inspect",
+            "view",
+            "review",
+            "summarize",
+            "summary",
+            "translate",
+            "analyze",
+            "analyse",
+            "rewrite",
+            "write",
+            "edit",
+            "export",
+            "delete",
+            "remove",
+            "list",
+            "打开",
+            "读取",
+            "检查",
+            "查看",
+            "审阅",
+            "总结",
+            "摘要",
+            "翻译",
+            "分析",
+            "改写",
+            "撰写",
+            "编辑",
+            "导出",
+            "删除",
+            "移除",
+            "列出",
+        ],
+    );
     let mentions_file_target = mentions_path
-        || contains_any(
-            &normalized,
-            &[
-                "file",
-                "files",
-                "folder",
-                "directory",
-                "path",
-                "文件",
-                "文件夹",
-                "目录",
-                "路径",
-            ],
-        )
+        || (mentions_file_object && mentions_file_action)
         || mentions_document;
+    let mentions_delete_action = contains_any(
+        &normalized,
+        &[
+            "delete", "remove", "erase", "purge", "wipe", "删除", "移除", "清理", "清空",
+        ],
+    );
+    let mentions_recycle_bin = contains_any(
+        &normalized,
+        &["recycle bin", "trash", "回收站", "垃圾桶"],
+    );
+    let mentions_meta_request = contains_any(
+        &normalized,
+        &[
+            "how to",
+            "how do",
+            "what is",
+            "why",
+            "explain",
+            "describe",
+            "guide",
+            "docs",
+            "documentation",
+            "tutorial",
+            "如何",
+            "怎么",
+            "为什么",
+            "介绍",
+            "说明",
+            "文档",
+            "教程",
+        ],
+    );
 
     IntentSignals {
-        mentions_screen: contains_any(&normalized, &["screen", "screenshot", "屏幕", "截图"]),
+        has_explicit_target: has_url || mentions_path,
+        mentions_screen: contains_any(&normalized, &["screen", "screenshot", "屏幕", "截图"])
+            && contains_any(
+                &normalized,
+                &[
+                    "capture",
+                    "share",
+                    "screenshot",
+                    "read",
+                    "inspect",
+                    "捕获",
+                    "共享",
+                    "截图",
+                    "读取",
+                    "检查",
+                ],
+            ),
         mentions_web,
-        mentions_web_extract: contains_any(
-            &normalized,
-            &[
-                "extract", "scrape", "selector", "title", "提取", "抓取", "抽取", "标题",
-            ],
-        ),
+        mentions_web_extract: mentions_web && mentions_extract_action,
         mentions_code_execution: contains_any(
             &normalized,
             &[
-                "python", "script", "sandbox", "code", "脚本", "代码", "沙箱",
+                "python", "script", "code", "sandbox", "脚本", "代码", "沙箱",
             ],
         ) && contains_any(
             &normalized,
-            &["run", "execute", "运行", "执行", "启动", "sandbox", "沙箱"],
+            &["run", "execute", "launch", "运行", "执行", "启动"],
         ),
         mentions_file_target,
         mentions_document,
@@ -210,12 +308,7 @@ fn analyze_intent(intent: &str) -> IntentSignals {
             &normalized,
             &["export", "pdf", "导出", "转换为pdf", "转成pdf"],
         ),
-        mentions_delete: contains_any(
-            &normalized,
-            &[
-                "delete", "remove", "erase", "purge", "wipe", "删除", "移除", "清理", "清空",
-            ],
-        ),
+        mentions_delete: mentions_delete_action && (mentions_file_target || mentions_recycle_bin),
         mentions_runtime: contains_any(
             &normalized,
             &[
@@ -242,6 +335,21 @@ fn analyze_intent(intent: &str) -> IntentSignals {
                 "解释",
                 "翻译",
                 "审阅",
+                "how to",
+                "how do",
+                "what is",
+                "why",
+                "guide",
+                "docs",
+                "documentation",
+                "tutorial",
+                "如何",
+                "怎么",
+                "为什么",
+                "介绍",
+                "说明",
+                "文档",
+                "教程",
             ],
         ),
         mentions_notification: contains_any(
@@ -269,6 +377,7 @@ fn analyze_intent(intent: &str) -> IntentSignals {
                 "聚焦",
             ],
         ),
+        mentions_meta_request,
     }
 }
 
@@ -280,6 +389,13 @@ fn push_capability(capabilities: &mut Vec<String>, capability_id: &str) {
 
 fn contains_any(haystack: &str, patterns: &[&str]) -> bool {
     patterns.iter().any(|pattern| haystack.contains(pattern))
+}
+
+fn should_suppress_surface_routes(signals: &IntentSignals) -> bool {
+    signals.mentions_meta_request
+        && !signals.has_explicit_target
+        && !signals.mentions_operator_audit
+        && !signals.mentions_panel_events
 }
 
 fn mentions_panel_event_query(normalized: &str) -> bool {
@@ -480,6 +596,14 @@ mod tests {
     }
 
     #[test]
+    fn browser_provider_explanation_prefers_direct_topology() {
+        assert_eq!(
+            topology_preference("Explain the browser provider health state"),
+            "direct"
+        );
+    }
+
+    #[test]
     fn delete_intents_require_human_confirmation() {
         assert_eq!(
             fallback_action("删除 /tmp/report.txt"),
@@ -503,5 +627,46 @@ mod tests {
             control_plane_route_preference(&capabilities),
             "manual-guidance"
         );
+    }
+
+    #[test]
+    fn browser_provider_explanation_does_not_trigger_navigation_route() {
+        let capabilities = candidate_capabilities("Explain the browser provider health state");
+
+        assert_eq!(
+            capabilities.first(),
+            Some(&methods::RUNTIME_INFER_SUBMIT.to_string())
+        );
+        assert!(!capabilities
+            .iter()
+            .any(|item| item == "compat.browser.navigate"));
+    }
+
+    #[test]
+    fn delete_audit_log_review_does_not_trigger_file_delete() {
+        let capabilities = candidate_capabilities("Review the delete audit log for recent failures");
+
+        assert!(!capabilities
+            .iter()
+            .any(|item| item == methods::SYSTEM_FILE_BULK_DELETE));
+        assert!(capabilities
+            .iter()
+            .any(|item| item == methods::SHELL_OPERATOR_AUDIT_OPEN));
+        assert!(capabilities
+            .iter()
+            .any(|item| item == methods::RUNTIME_INFER_SUBMIT));
+    }
+
+    #[test]
+    fn sandbox_explanation_does_not_trigger_code_execution() {
+        let capabilities = candidate_capabilities("Explain the Python sandbox approval model");
+
+        assert_eq!(
+            capabilities.first(),
+            Some(&methods::RUNTIME_INFER_SUBMIT.to_string())
+        );
+        assert!(!capabilities
+            .iter()
+            .any(|item| item == "compat.code.execute"));
     }
 }

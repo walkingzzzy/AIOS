@@ -184,16 +184,26 @@ fn heuristic_steps(candidate_capabilities: &[String], next_action: &str) -> Vec<
             },
             provider_kind: None,
             execution_location: None,
-            requires_approval: capability_id == methods::SYSTEM_FILE_BULK_DELETE,
+            requires_approval: matches!(
+                capability_id.as_str(),
+                methods::SYSTEM_FILE_BULK_DELETE
+                    | "compat.code.execute"
+                    | "device.capture.screen.read"
+            ),
             requires_portal_handle: matches!(
                 capability_id.as_str(),
-                "provider.fs.open" | methods::SYSTEM_FILE_BULK_DELETE | "compat.document.open"
+                "provider.fs.open"
+                    | methods::SYSTEM_FILE_BULK_DELETE
+                    | "compat.document.open"
+                    | "device.capture.screen.read"
             ),
-            portal_kind: matches!(
-                capability_id.as_str(),
-                "provider.fs.open" | methods::SYSTEM_FILE_BULK_DELETE | "compat.document.open"
-            )
-            .then(|| "file_handle".to_string()),
+            portal_kind: match capability_id.as_str() {
+                "provider.fs.open" | methods::SYSTEM_FILE_BULK_DELETE | "compat.document.open" => {
+                    Some("file_handle".to_string())
+                }
+                "device.capture.screen.read" => Some("screen_share_handle".to_string()),
+                _ => None,
+            },
             recovery_action: Some(next_action.to_string()),
         })
         .collect()
@@ -410,5 +420,26 @@ mod tests {
         let actions = build_actions(&capabilities);
         assert_eq!(actions.len(), 1);
         assert!(actions[0].requires_approval);
+    }
+
+    #[test]
+    fn heuristic_steps_keep_sensitive_capabilities_approval_gated() {
+        let steps = heuristic_steps(
+            &[
+                "compat.code.execute".to_string(),
+                "device.capture.screen.read".to_string(),
+            ],
+            "request-approval",
+        );
+
+        assert_eq!(steps.len(), 2);
+        assert!(steps[0].requires_approval);
+        assert!(!steps[0].requires_portal_handle);
+        assert!(steps[1].requires_approval);
+        assert!(steps[1].requires_portal_handle);
+        assert_eq!(
+            steps[1].portal_kind.as_deref(),
+            Some("screen_share_handle")
+        );
     }
 }
