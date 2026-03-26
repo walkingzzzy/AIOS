@@ -1,4 +1,4 @@
-use std::{path::PathBuf, process::Command};
+use std::{path::PathBuf, process::Command, time::Duration};
 
 #[derive(Debug, Clone)]
 pub struct BackendConfig {
@@ -88,19 +88,46 @@ fn run(
     subcommand: &str,
     environment: &[(String, String)],
 ) -> anyhow::Result<ShellOutput> {
-    let mut command = Command::new(&config.binary);
-    push_backend_args(&mut command, config);
-    command.arg(subcommand);
-    for (key, value) in environment {
-        command.env(key, value);
-    }
-    let output = command.output()?;
+    let output = run_with_retry(config, subcommand, environment)?;
     Ok(ShellOutput {
         success: output.status.success(),
         exit_code: output.status.code(),
         stdout: String::from_utf8_lossy(&output.stdout).trim().to_string(),
         stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
     })
+}
+
+fn run_with_retry(
+    config: &BackendConfig,
+    subcommand: &str,
+    environment: &[(String, String)],
+) -> anyhow::Result<std::process::Output> {
+    const MAX_ATTEMPTS: usize = 3;
+    const RETRY_DELAY: Duration = Duration::from_millis(50);
+
+    for attempt in 0..MAX_ATTEMPTS {
+        let mut command = Command::new(&config.binary);
+        push_backend_args(&mut command, config);
+        command.arg(subcommand);
+        for (key, value) in environment {
+            command.env(key, value);
+        }
+
+        match command.output() {
+            Ok(output) => return Ok(output),
+            // 某些 Linux 文件系统上，刚写入的临时脚本会短暂触发 ETXTBSY。
+            Err(error) if should_retry_text_file_busy(&error) && attempt + 1 < MAX_ATTEMPTS => {
+                std::thread::sleep(RETRY_DELAY);
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+
+    unreachable!("sysupdate backend retry loop must return or error")
+}
+
+fn should_retry_text_file_busy(error: &std::io::Error) -> bool {
+    error.raw_os_error() == Some(26)
 }
 
 fn push_backend_args(command: &mut Command, config: &BackendConfig) {
