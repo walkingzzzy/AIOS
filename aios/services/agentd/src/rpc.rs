@@ -522,9 +522,8 @@ pub fn build_router(state: AppState) -> Arc<RpcRouter> {
             } else {
                 None
             };
-        let route = crate::clients::resolve_route(&submit_state, None)
+        let resolved_route = crate::clients::resolve_route(&submit_state, None, true)
             .map_err(|error| RpcError::Internal(error.to_string()))?;
-        let memory_route = memory_route_for_capability(&primary_capability, &route);
         let mut runtime_preview = if primary_capability == methods::RUNTIME_INFER_SUBMIT
             && policy.decision.decision == "allowed"
             && provider_resolution.selected.is_some()
@@ -737,6 +736,13 @@ pub fn build_router(state: AppState) -> Arc<RpcRouter> {
             }
         }
 
+        let memory_route = runtime_preview
+            .as_ref()
+            .map(|preview| runtime_route_from_preview(preview, &resolved_route));
+        let response_route = memory_route
+            .clone()
+            .unwrap_or_else(|| resolved_route.clone());
+
         if let Some(outcome) = provider_execution.as_ref() {
             crate::clients::persist_provider_execution_outcome(
                 &submit_state,
@@ -755,7 +761,7 @@ pub fn build_router(state: AppState) -> Arc<RpcRouter> {
             &request.intent,
             &plan,
             Some(&provider_resolution),
-            memory_route,
+            memory_route.as_ref(),
             portal_handle
                 .as_ref()
                 .map(|handle| handle.handle_id.as_str()),
@@ -784,7 +790,7 @@ pub fn build_router(state: AppState) -> Arc<RpcRouter> {
             &request.intent,
             &primary_capability,
             Some(&provider_resolution),
-            memory_route,
+            memory_route.as_ref(),
             Some(&policy),
         )
         .map_err(|error| RpcError::Internal(error.to_string()))?;
@@ -836,7 +842,7 @@ pub fn build_router(state: AppState) -> Arc<RpcRouter> {
             task,
             plan,
             policy,
-            route,
+            route: response_route,
             provider_resolution: Some(provider_resolution),
             portal_handle,
             execution_token,
@@ -1640,11 +1646,19 @@ fn primary_capability(plan: Option<&AgentPlan>) -> Option<&str> {
     })
 }
 
-fn memory_route_for_capability<'a>(
-    primary_capability: &str,
-    route: &'a aios_contracts::RuntimeRouteResolveResponse,
-) -> Option<&'a aios_contracts::RuntimeRouteResolveResponse> {
-    (primary_capability == methods::RUNTIME_INFER_SUBMIT).then_some(route)
+fn runtime_route_from_preview(
+    preview: &aios_contracts::RuntimeInferResponse,
+    resolved_route: &aios_contracts::RuntimeRouteResolveResponse,
+) -> aios_contracts::RuntimeRouteResolveResponse {
+    aios_contracts::RuntimeRouteResolveResponse {
+        selected_backend: preview.backend_id.clone(),
+        route_state: preview.route_state.clone(),
+        degraded: preview.degraded,
+        reason: preview
+            .reason
+            .clone()
+            .unwrap_or_else(|| resolved_route.reason.clone()),
+    }
 }
 
 fn working_memory_value(payload: &Value, key: &str) -> Option<Value> {
@@ -1773,16 +1787,62 @@ mod tests {
     }
 
     #[test]
-    fn memory_route_is_only_persisted_for_runtime_capability() {
-        let route = aios_contracts::RuntimeRouteResolveResponse {
+    fn runtime_route_from_preview_uses_actual_runtime_response() {
+        let resolved_route = aios_contracts::RuntimeRouteResolveResponse {
             selected_backend: "local-cpu".to_string(),
             route_state: "local-wrapper".to_string(),
             degraded: false,
-            reason: "ok".to_string(),
+            reason: "planned-local".to_string(),
+        };
+        let preview = aios_contracts::RuntimeInferResponse {
+            backend_id: "attested-remote".to_string(),
+            route_state: "backend-fallback-local-cpu".to_string(),
+            content: "ok".to_string(),
+            degraded: true,
+            rejected: false,
+            reason: Some("remote worker unavailable".to_string()),
+            estimated_latency_ms: Some(42),
+            provider_id: None,
+            runtime_service_id: None,
+            provider_status: None,
+            queue_saturated: None,
+            runtime_budget: None,
+            notes: Vec::new(),
         };
 
-        assert!(memory_route_for_capability(methods::RUNTIME_INFER_SUBMIT, &route).is_some());
-        assert!(memory_route_for_capability("system.file.write", &route).is_none());
+        let route = runtime_route_from_preview(&preview, &resolved_route);
+        assert_eq!(route.selected_backend, "attested-remote");
+        assert_eq!(route.route_state, "backend-fallback-local-cpu");
+        assert!(route.degraded);
+        assert_eq!(route.reason, "remote worker unavailable");
+    }
+
+    #[test]
+    fn runtime_route_from_preview_falls_back_to_resolved_reason_when_missing() {
+        let resolved_route = aios_contracts::RuntimeRouteResolveResponse {
+            selected_backend: "attested-remote".to_string(),
+            route_state: "attested-remote".to_string(),
+            degraded: false,
+            reason: "using attested-remote with topology remote-first".to_string(),
+        };
+        let preview = aios_contracts::RuntimeInferResponse {
+            backend_id: "attested-remote".to_string(),
+            route_state: "attested-remote".to_string(),
+            content: "ok".to_string(),
+            degraded: false,
+            rejected: false,
+            reason: None,
+            estimated_latency_ms: Some(12),
+            provider_id: None,
+            runtime_service_id: None,
+            provider_status: None,
+            queue_saturated: None,
+            runtime_budget: None,
+            notes: Vec::new(),
+        };
+
+        let route = runtime_route_from_preview(&preview, &resolved_route);
+        assert_eq!(route.reason, resolved_route.reason);
     }
 
     #[test]

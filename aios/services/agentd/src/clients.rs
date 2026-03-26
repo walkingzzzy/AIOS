@@ -792,13 +792,14 @@ pub fn issue_approval_execution_token(
 pub fn resolve_route(
     state: &AppState,
     preferred_backend: Option<String>,
+    allow_remote: bool,
 ) -> anyhow::Result<RuntimeRouteResolveResponse> {
     aios_rpc::call_unix(
         &state.config.runtimed_socket,
         methods::RUNTIME_ROUTE_RESOLVE,
         &RuntimeRouteResolveRequest {
             preferred_backend,
-            allow_remote: false,
+            allow_remote,
         },
     )
 }
