@@ -637,8 +637,9 @@ def main() -> int:
             timeout=args.timeout,
         )
         require(agent_task_plan["task_id"] == approval_task_id, "agent.task.plan.get should return the task plan")
+        stored_plan = agent_task_plan.get("plan") or {}
         require(
-            agent_task_plan.get("next_action") == "request-destructive-approval",
+            stored_plan.get("next_action") == "request-destructive-approval",
             "agent.task.plan.get should retain destructive next_action",
         )
 
