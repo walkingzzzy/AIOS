@@ -381,6 +381,8 @@ jobs:
             out/validation/validation-matrix-report.md
             out/validation/high-risk-audit-coverage-report.json
             out/validation/high-risk-audit-coverage-report.md
+            out/validation/placeholder-implementation-gate-report.json
+            out/validation/placeholder-implementation-gate-report.md
             out/validation/gpu-backend-support-matrix-report.json
             out/validation/gpu-backend-support-matrix-report.md
             out/validation/tier1-machine-nominations-report.json
