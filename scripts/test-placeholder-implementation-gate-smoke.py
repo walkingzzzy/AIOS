@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -265,11 +266,16 @@ def check_deviced_source_guard_present() -> tuple[str, list[str]]:
         "deviced adapters lost the product-mode preview-path guard",
     )
     require(
-        '"builtin-preview" | "native-stub"' in content,
+        re.search(
+            r'matches!\(\s*plan\.execution_path\.as_str\(\)\s*,\s*"builtin-preview"\s*\|\s*"native-stub"\s*\)',
+            content,
+            re.DOTALL,
+        )
+        is not None,
         "deviced adapters must keep builtin-preview/native-stub grouped under the product-mode guard",
     )
     require(
-        "product_mode_blocks_builtin_preview_capture_fallback" in content,
+        "product_mode_blocks_builtin_preview_capture" in content,
         "deviced regression test for builtin-preview guard is missing",
     )
     require(
