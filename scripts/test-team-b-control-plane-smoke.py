@@ -33,6 +33,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sessiond", type=Path, help="Path to sessiond binary")
     parser.add_argument("--policyd", type=Path, help="Path to policyd binary")
     parser.add_argument("--runtimed", type=Path, help="Path to runtimed binary")
+    parser.add_argument(
+        "--runtime-local-inference-provider",
+        type=Path,
+        help="Path to runtime-local-inference-provider binary",
+    )
     parser.add_argument("--system-files-provider", type=Path, help="Path to system-files-provider binary")
     parser.add_argument("--system-intent-provider", type=Path, help="Path to system-intent-provider binary")
     parser.add_argument("--timeout", type=float, default=20.0, help="Seconds to wait for sockets and RPC calls")
@@ -106,6 +111,38 @@ def wait_for_health(socket_path: Path, timeout: float) -> dict:
             last_error = exc
             time.sleep(0.1)
     raise TimeoutError(f"Timed out waiting for health on {socket_path}: {last_error}")
+
+
+def wait_for_provider_health(
+    socket_path: Path,
+    provider_id: str,
+    expected_status: str,
+    timeout: float,
+) -> dict:
+    deadline = time.time() + timeout
+    last_seen = None
+    while time.time() < deadline:
+        try:
+            result = rpc_call(
+                socket_path,
+                "agent.provider.health.get",
+                {"provider_id": provider_id},
+                timeout=1.5,
+            )
+            providers = result.get("providers", [])
+            if providers:
+                last_seen = providers[0]
+                if (
+                    providers[0].get("status") == expected_status
+                    and providers[0].get("last_checked_at")
+                ):
+                    return providers[0]
+        except Exception as exc:  # noqa: BLE001
+            last_seen = {"error": str(exc)}
+        time.sleep(0.1)
+    raise TimeoutError(
+        f"Timed out waiting for provider health={expected_status}: {last_seen}"
+    )
 
 
 def launch(name: str, binary: Path, env: dict[str, str], log_dir: Path) -> ServiceProcess:
@@ -242,6 +279,15 @@ def make_env(root: Path) -> dict[str, str]:
             "AIOS_RUNTIMED_POLICYD_SOCKET": str(run_root / "policyd" / "policyd.sock"),
             "AIOS_RUNTIMED_REMOTE_AUDIT_LOG": str(state_root / "runtimed" / "remote-audit.jsonl"),
             "AIOS_RUNTIMED_OBSERVABILITY_LOG": str(shared_observability_log),
+            "AIOS_RUNTIME_LOCAL_INFERENCE_PROVIDER_RUNTIME_DIR": str(run_root / "runtime-local-inference-provider"),
+            "AIOS_RUNTIME_LOCAL_INFERENCE_PROVIDER_STATE_DIR": str(state_root / "runtime-local-inference-provider"),
+            "AIOS_RUNTIME_LOCAL_INFERENCE_PROVIDER_SOCKET_PATH": str(run_root / "runtime-local-inference-provider" / "runtime-local-inference-provider.sock"),
+            "AIOS_RUNTIME_LOCAL_INFERENCE_PROVIDER_RUNTIMED_SOCKET": str(run_root / "runtimed" / "runtimed.sock"),
+            "AIOS_RUNTIME_LOCAL_INFERENCE_PROVIDER_POLICYD_SOCKET": str(run_root / "policyd" / "policyd.sock"),
+            "AIOS_RUNTIME_LOCAL_INFERENCE_PROVIDER_AGENTD_SOCKET": str(run_root / "agentd" / "agentd.sock"),
+            "AIOS_RUNTIME_LOCAL_INFERENCE_PROVIDER_DESCRIPTOR_PATH": str(repo / "aios" / "runtime" / "providers" / "runtime.local-inference.json"),
+            "AIOS_RUNTIME_LOCAL_INFERENCE_PROVIDER_MAX_CONCURRENCY": "1",
+            "AIOS_RUNTIME_LOCAL_INFERENCE_PROVIDER_OBSERVABILITY_LOG": str(state_root / "runtime-local-inference-provider" / "observability.jsonl"),
             "AIOS_SYSTEM_FILES_PROVIDER_RUNTIME_DIR": str(run_root / "system-files-provider"),
             "AIOS_SYSTEM_FILES_PROVIDER_STATE_DIR": str(state_root / "system-files-provider"),
             "AIOS_SYSTEM_FILES_PROVIDER_SOCKET_PATH": str(run_root / "system-files-provider" / "system-files-provider.sock"),
@@ -274,6 +320,11 @@ def main() -> int:
         "policyd": resolve_binary("policyd", args.policyd, args.bin_dir),
         "runtimed": resolve_binary("runtimed", args.runtimed, args.bin_dir),
         "agentd": resolve_binary("agentd", args.agentd, args.bin_dir),
+        "runtime-local-inference-provider": resolve_binary(
+            "runtime-local-inference-provider",
+            args.runtime_local_inference_provider,
+            args.bin_dir,
+        ),
         "system-files-provider": resolve_binary("system-files-provider", args.system_files_provider, args.bin_dir),
         "system-intent-provider": resolve_binary("system-intent-provider", args.system_intent_provider, args.bin_dir),
     }
@@ -281,6 +332,10 @@ def main() -> int:
     ensure_binary(binaries["policyd"], "aios-policyd")
     ensure_binary(binaries["runtimed"], "aios-runtimed")
     ensure_binary(binaries["agentd"], "aios-agentd")
+    ensure_binary(
+        binaries["runtime-local-inference-provider"],
+        "aios-runtime-local-inference-provider",
+    )
     ensure_binary(binaries["system-files-provider"], "aios-system-files-provider")
     ensure_binary(binaries["system-intent-provider"], "aios-system-intent-provider")
 
@@ -296,6 +351,12 @@ def main() -> int:
         "system-files-provider": launch("system-files-provider", binaries["system-files-provider"], env, log_dir),
         "system-intent-provider": launch("system-intent-provider", binaries["system-intent-provider"], env, log_dir),
         "agentd": launch("agentd", binaries["agentd"], env, log_dir),
+        "runtime-local-inference-provider": launch(
+            "runtime-local-inference-provider",
+            binaries["runtime-local-inference-provider"],
+            env,
+            log_dir,
+        ),
     }
 
     try:
@@ -303,6 +364,9 @@ def main() -> int:
         policyd_socket = Path(env["AIOS_POLICYD_SOCKET_PATH"])
         runtimed_socket = Path(env["AIOS_RUNTIMED_SOCKET_PATH"])
         agentd_socket = Path(env["AIOS_AGENTD_SOCKET_PATH"])
+        runtime_local_inference_provider_socket = Path(
+            env["AIOS_RUNTIME_LOCAL_INFERENCE_PROVIDER_SOCKET_PATH"]
+        )
         system_files_provider_socket = Path(env["AIOS_SYSTEM_FILES_PROVIDER_SOCKET_PATH"])
         system_intent_provider_socket = Path(env["AIOS_SYSTEM_INTENT_PROVIDER_SOCKET_PATH"])
 
@@ -313,6 +377,7 @@ def main() -> int:
             ("system-files-provider", system_files_provider_socket),
             ("system-intent-provider", system_intent_provider_socket),
             ("agentd", agentd_socket),
+            ("runtime-local-inference-provider", runtime_local_inference_provider_socket),
         ]:
             wait_for_socket(socket_path, args.timeout)
             health = wait_for_health(socket_path, args.timeout)
@@ -321,6 +386,17 @@ def main() -> int:
                 rpc_exchange(socket_path, "system.health.get", {}, timeout=args.timeout),
                 service_name,
             )
+
+        runtime_provider_health = wait_for_provider_health(
+            agentd_socket,
+            "runtime.local.inference",
+            "available",
+            args.timeout,
+        )
+        require(
+            runtime_provider_health.get("provider_id") == "runtime.local.inference",
+            "runtime provider health should resolve runtime.local.inference",
+        )
 
         step("all services healthy")
         contract_response = rpc_exchange(agentd_socket, "system.contract.get", {}, timeout=args.timeout)
