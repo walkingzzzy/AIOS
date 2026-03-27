@@ -303,17 +303,17 @@ pub fn approval_lane(
     approval_default_policy: &str,
 ) -> String {
     let metadata = catalog.get(&request.capability_id);
-    if let Some(metadata) = metadata {
-        if !metadata.default_approval_lane.is_empty() {
-            return metadata.default_approval_lane.clone();
-        }
-    }
+    let configured_lane = metadata
+        .map(|item| item.default_approval_lane.as_str())
+        .filter(|lane| !lane.is_empty());
 
     if request.execution_location == "attested_remote" {
         return "remote-execution-review".to_string();
     }
 
-    if request.capability_id.contains("device.capture") {
+    if request.capability_id.contains("device.capture")
+        || configured_lane == Some("device-capture-review")
+    {
         return "device-capture-review".to_string();
     }
 
@@ -330,7 +330,9 @@ pub fn approval_lane(
         };
     }
 
-    "standard-capability-review".to_string()
+    configured_lane
+        .unwrap_or("standard-capability-review")
+        .to_string()
 }
 
 pub fn ensure_token_request_scope(

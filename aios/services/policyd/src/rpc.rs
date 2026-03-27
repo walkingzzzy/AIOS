@@ -135,6 +135,10 @@ pub fn build_router(state: AppState) -> Arc<RpcRouter> {
                 taint_summary: request.taint_summary.clone(),
             },
         )?;
+        let approval_ref = request
+            .approval_ref
+            .clone()
+            .or_else(|| evaluation.approval_ref.clone());
 
         if evaluation.decision.decision == "denied" {
             return Err(RpcError::permission_denied(
@@ -144,7 +148,7 @@ pub fn build_router(state: AppState) -> Arc<RpcRouter> {
         }
 
         if evaluation.decision.requires_approval {
-            let approval_ref = request.approval_ref.as_deref().ok_or_else(|| {
+            let approval_ref = approval_ref.as_deref().ok_or_else(|| {
                 RpcError::precondition_failed(
                     "approval_required",
                     "approval_ref is required before token issuance",
@@ -172,6 +176,7 @@ pub fn build_router(state: AppState) -> Arc<RpcRouter> {
 
         let token = crate::token::issue(
             TokenIssueRequest {
+                approval_ref,
                 taint_summary: crate::taint::summarize(
                     &request.capability_id,
                     &request.execution_location,
@@ -752,6 +757,7 @@ mod tests {
             }),
         );
         assert_eq!(token.capability_id, "system.file.bulk_delete");
+        assert_eq!(token.approval_ref.as_deref(), Some(approval_ref.as_str()));
         assert!(token.signature.is_some());
         Ok(())
     }
