@@ -32,13 +32,8 @@ pub fn build_router(state: AppState) -> Arc<RpcRouter> {
     let policy_state = state.clone();
     router.register_method(methods::POLICY_EVALUATE, move |params| {
         let request: PolicyEvaluateRequest = parse_params(params)?;
-        let decision = policy_state
-            .profile
-            .evaluate(&request, &policy_state.capability_catalog);
-        let approval_lane =
-            crate::approval::approval_lane(&request, &policy_state.capability_catalog);
-        let taint_hint = decision.taint_summary.clone();
-        let approval_ref = if decision.requires_approval {
+        let mut envelope = evaluate_policy_envelope(&policy_state, &request)?;
+        if envelope.decision.requires_approval && envelope.approval_ref.is_none() {
             let approval = policy_state
                 .approval_store
                 .create(&ApprovalCreateRequest {
@@ -46,12 +41,12 @@ pub fn build_router(state: AppState) -> Arc<RpcRouter> {
                     session_id: request.session_id.clone(),
                     task_id: request.task_id.clone(),
                     capability_id: request.capability_id.clone(),
-                    approval_lane: approval_lane.clone(),
+                    approval_lane: envelope.approval_lane.clone(),
                     execution_location: request.execution_location.clone(),
                     target_hash: request.target_hash.clone(),
                     constraints: request.constraints.clone(),
-                    taint_summary: taint_hint.clone(),
-                    reason: Some(decision.reason.clone()),
+                    taint_summary: envelope.taint_hint.clone(),
+                    reason: Some(envelope.decision.reason.clone()),
                     expires_in_seconds: None,
                 })
                 .map_err(|error| RpcError::Internal(error.to_string()))?;
@@ -59,16 +54,8 @@ pub fn build_router(state: AppState) -> Arc<RpcRouter> {
                 .audit_writer
                 .append_approval_created(&approval)
                 .map_err(|error| RpcError::Internal(error.to_string()))?;
-            Some(approval.approval_ref)
-        } else {
-            None
-        };
-        let envelope = PolicyEvaluateEnvelope {
-            approval_lane,
-            taint_hint,
-            decision,
-            approval_ref,
-        };
+            envelope.approval_ref = Some(approval.approval_ref);
+        }
         policy_state
             .audit_writer
             .append_evaluation(
@@ -134,7 +121,8 @@ pub fn build_router(state: AppState) -> Arc<RpcRouter> {
     let token_state = state.clone();
     router.register_method(methods::POLICY_TOKEN_ISSUE, move |params| {
         let request: TokenIssueRequest = parse_params(params)?;
-        let evaluation = token_state.profile.evaluate(
+        let evaluation = evaluate_policy_envelope(
+            &token_state,
             &PolicyEvaluateRequest {
                 user_id: request.user_id.clone(),
                 session_id: request.session_id.clone(),
@@ -146,17 +134,16 @@ pub fn build_router(state: AppState) -> Arc<RpcRouter> {
                 intent: None,
                 taint_summary: request.taint_summary.clone(),
             },
-            &token_state.capability_catalog,
-        );
+        )?;
 
-        if evaluation.decision == "denied" {
+        if evaluation.decision.decision == "denied" {
             return Err(RpcError::permission_denied(
                 "capability_denied",
                 "capability denied by policy",
             ));
         }
 
-        if evaluation.requires_approval {
+        if evaluation.decision.requires_approval {
             let approval_ref = request.approval_ref.as_deref().ok_or_else(|| {
                 RpcError::precondition_failed(
                     "approval_required",
@@ -289,6 +276,44 @@ where
     })
 }
 
+fn evaluate_policy_envelope(
+    state: &AppState,
+    request: &PolicyEvaluateRequest,
+) -> Result<PolicyEvaluateEnvelope, RpcError> {
+    let runtime_policy = state.config.runtime_policy_settings().map_err(internal)?;
+    let mut decision = state.profile.evaluate(request, &state.capability_catalog);
+    let approval_lane = crate::approval::approval_lane(
+        request,
+        &state.capability_catalog,
+        &runtime_policy.approval_default_policy,
+    );
+    let mut approval_ref = None;
+
+    if decision.requires_approval
+        && runtime_policy.approval_default_policy == "session-trust"
+        && approval_lane == "session-trust-review"
+    {
+        if let Some(approval) = state
+            .approval_store
+            .find_session_trust_approval(request)
+            .map_err(internal)?
+        {
+            decision.decision = "allowed".to_string();
+            decision.requires_approval = false;
+            decision.reason = format!("allowed by session trust using {}", approval.approval_ref);
+            approval_ref = Some(approval.approval_ref);
+        }
+    }
+
+    let taint_hint = decision.taint_summary.clone();
+    Ok(PolicyEvaluateEnvelope {
+        approval_lane,
+        taint_hint,
+        decision,
+        approval_ref,
+    })
+}
+
 fn internal(error: impl std::fmt::Display) -> RpcError {
     RpcError::internal_code("policyd_internal", error.to_string())
 }
@@ -369,12 +394,20 @@ mod tests {
 
     impl TestHarness {
         fn new() -> anyhow::Result<Self> {
+            Self::with_runtime_policy(None)
+        }
+
+        fn with_runtime_policy(runtime_policy_env: Option<&str>) -> anyhow::Result<Self> {
             let root = std::env::temp_dir()
                 .join(format!("aios-policyd-rpc-test-{}", Uuid::new_v4().simple()));
             let runtime_dir = root.join("run");
             let state_dir = root.join("state");
             fs::create_dir_all(&runtime_dir)?;
             fs::create_dir_all(&state_dir)?;
+            let runtime_platform_env_path = root.join("runtime-platform.env");
+            if let Some(contents) = runtime_policy_env {
+                fs::write(&runtime_platform_env_path, contents)?;
+            }
 
             let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
             let policy_path = manifest_dir.join("../../policy/profiles/default-policy.yaml");
@@ -408,6 +441,9 @@ mod tests {
                 audit_rotate_after_bytes: 4_096,
                 audit_retention_days: 30,
                 audit_max_archives: 4,
+                runtime_platform_env_path,
+                approval_default_policy: "prompt-required".to_string(),
+                remote_prompt_level: "full".to_string(),
             };
 
             let state = AppState {
@@ -609,6 +645,114 @@ mod tests {
         assert!(decisions.iter().any(|item| item == "token-issued"));
         assert!(fs::read_to_string(&harness.audit_log_path)?.contains(&approval_ref));
         assert!(fs::read_to_string(&harness.observability_log_path)?.contains(&approval_ref));
+        Ok(())
+    }
+
+    #[test]
+    fn operator_gate_policy_routes_high_risk_approvals_to_operator_lane() -> anyhow::Result<()> {
+        let harness = TestHarness::with_runtime_policy(Some(
+            "AIOS_RUNTIMED_APPROVAL_DEFAULT_POLICY=operator-gate\n",
+        ))?;
+
+        let evaluation: PolicyEvaluateEnvelope = rpc_success(
+            &harness.router,
+            methods::POLICY_EVALUATE,
+            json!({
+                "user_id": "user-1",
+                "session_id": "session-operator",
+                "task_id": "task-operator",
+                "capability_id": "system.file.bulk_delete",
+                "execution_location": "local",
+                "target_hash": "sha256:operator-lane",
+                "constraints": {
+                    "max_affected_paths": 1
+                },
+                "intent": "Delete reviewed artifacts"
+            }),
+        );
+
+        assert_eq!(evaluation.decision.decision, "needs-approval");
+        assert!(evaluation.decision.requires_approval);
+        assert_eq!(evaluation.approval_lane, "operator-gate-review");
+        Ok(())
+    }
+
+    #[test]
+    fn session_trust_policy_reuses_approved_scope_within_session() -> anyhow::Result<()> {
+        let harness = TestHarness::with_runtime_policy(Some(
+            "AIOS_RUNTIMED_APPROVAL_DEFAULT_POLICY=session-trust\n",
+        ))?;
+
+        let initial: PolicyEvaluateEnvelope = rpc_success(
+            &harness.router,
+            methods::POLICY_EVALUATE,
+            json!({
+                "user_id": "user-1",
+                "session_id": "session-trust",
+                "task_id": "task-trust-1",
+                "capability_id": "system.file.bulk_delete",
+                "execution_location": "local",
+                "target_hash": "sha256:session-trust",
+                "constraints": {
+                    "max_affected_paths": 3
+                },
+                "intent": "Delete reviewed files"
+            }),
+        );
+        assert_eq!(initial.decision.decision, "needs-approval");
+        assert_eq!(initial.approval_lane, "session-trust-review");
+        let approval_ref = initial.approval_ref.expect("approval_ref");
+
+        let approved: ApprovalRecord = rpc_success(
+            &harness.router,
+            methods::APPROVAL_RESOLVE,
+            json!({
+                "approval_ref": approval_ref,
+                "status": "approved",
+                "resolver": "reviewer-1",
+                "reason": "session trust bootstrap"
+            }),
+        );
+        assert_eq!(approved.status, "approved");
+
+        let reused: PolicyEvaluateEnvelope = rpc_success(
+            &harness.router,
+            methods::POLICY_EVALUATE,
+            json!({
+                "user_id": "user-1",
+                "session_id": "session-trust",
+                "task_id": "task-trust-2",
+                "capability_id": "system.file.bulk_delete",
+                "execution_location": "local",
+                "target_hash": "sha256:session-trust",
+                "constraints": {
+                    "max_affected_paths": 2
+                },
+                "intent": "Delete a narrower set in the same session"
+            }),
+        );
+        assert_eq!(reused.decision.decision, "allowed");
+        assert!(!reused.decision.requires_approval);
+        assert_eq!(reused.approval_ref.as_deref(), Some(approval_ref.as_str()));
+        assert!(reused.decision.reason.contains("session trust"));
+
+        let token: ExecutionToken = rpc_success(
+            &harness.router,
+            methods::POLICY_TOKEN_ISSUE,
+            json!({
+                "user_id": "user-1",
+                "session_id": "session-trust",
+                "task_id": "task-trust-2",
+                "capability_id": "system.file.bulk_delete",
+                "execution_location": "local",
+                "target_hash": "sha256:session-trust",
+                "constraints": {
+                    "max_affected_paths": 2
+                }
+            }),
+        );
+        assert_eq!(token.capability_id, "system.file.bulk_delete");
+        assert!(token.signature.is_some());
         Ok(())
     }
 

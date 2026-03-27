@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use aios_core::ServicePaths;
+use anyhow::Context;
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -21,6 +22,15 @@ pub struct Config {
     pub audit_rotate_after_bytes: u64,
     pub audit_retention_days: u64,
     pub audit_max_archives: usize,
+    pub runtime_platform_env_path: PathBuf,
+    pub approval_default_policy: String,
+    pub remote_prompt_level: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct RuntimePolicySettings {
+    pub approval_default_policy: String,
+    pub remote_prompt_level: String,
 }
 
 impl Config {
@@ -76,6 +86,17 @@ impl Config {
             aios_core::config::env_u64_or("AIOS_POLICYD_AUDIT_RETENTION_DAYS", 30);
         let audit_max_archives =
             aios_core::config::env_u64_or("AIOS_POLICYD_AUDIT_MAX_ARCHIVES", 32) as usize;
+        let runtime_platform_env_path =
+            aios_core::config::env_path_or("AIOS_POLICYD_RUNTIME_PLATFORM_ENV", || {
+                PathBuf::from("/etc/aios/runtime/platform.env")
+            });
+        let approval_default_policy = normalize_approval_default_policy(
+            aios_core::config::env_optional_string("AIOS_POLICYD_APPROVAL_DEFAULT_POLICY")
+                .as_deref(),
+        );
+        let remote_prompt_level = normalize_remote_prompt_level(
+            aios_core::config::env_optional_string("AIOS_POLICYD_REMOTE_PROMPT_LEVEL").as_deref(),
+        );
 
         Ok(Self {
             service_id: "aios-policyd".to_string(),
@@ -95,6 +116,80 @@ impl Config {
             audit_rotate_after_bytes,
             audit_retention_days,
             audit_max_archives,
+            runtime_platform_env_path,
+            approval_default_policy,
+            remote_prompt_level,
         })
+    }
+
+    pub fn runtime_policy_settings(&self) -> anyhow::Result<RuntimePolicySettings> {
+        let mut settings = RuntimePolicySettings {
+            approval_default_policy: self.approval_default_policy.clone(),
+            remote_prompt_level: self.remote_prompt_level.clone(),
+        };
+
+        let env_values = load_runtime_platform_env(&self.runtime_platform_env_path)?;
+        if let Some(value) = env_values.get("AIOS_RUNTIMED_APPROVAL_DEFAULT_POLICY") {
+            settings.approval_default_policy = normalize_approval_default_policy(Some(value));
+        }
+        if let Some(value) = env_values.get("AIOS_RUNTIMED_REMOTE_PROMPT_LEVEL") {
+            settings.remote_prompt_level = normalize_remote_prompt_level(Some(value));
+        }
+
+        if let Some(value) =
+            aios_core::config::env_optional_string("AIOS_RUNTIMED_APPROVAL_DEFAULT_POLICY")
+        {
+            settings.approval_default_policy = normalize_approval_default_policy(Some(&value));
+        }
+        if let Some(value) =
+            aios_core::config::env_optional_string("AIOS_RUNTIMED_REMOTE_PROMPT_LEVEL")
+        {
+            settings.remote_prompt_level = normalize_remote_prompt_level(Some(&value));
+        }
+
+        Ok(settings)
+    }
+}
+
+fn load_runtime_platform_env(
+    path: &PathBuf,
+) -> anyhow::Result<std::collections::BTreeMap<String, String>> {
+    if !path.exists() {
+        return Ok(std::collections::BTreeMap::new());
+    }
+
+    let contents = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read runtime platform env {}", path.display()))?;
+    let mut values = std::collections::BTreeMap::new();
+    for raw_line in contents.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') || !line.contains('=') {
+            continue;
+        }
+        let (key, value) = line.split_once('=').unwrap_or_default();
+        values.insert(key.trim().to_string(), value.trim().to_string());
+    }
+
+    Ok(values)
+}
+
+fn normalize_approval_default_policy(value: Option<&str>) -> String {
+    match value
+        .unwrap_or("prompt-required")
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "session-trust" => "session-trust".to_string(),
+        "operator-gate" => "operator-gate".to_string(),
+        _ => "prompt-required".to_string(),
+    }
+}
+
+fn normalize_remote_prompt_level(value: Option<&str>) -> String {
+    match value.unwrap_or("full").trim().to_ascii_lowercase().as_str() {
+        "summary" => "summary".to_string(),
+        "minimal" => "minimal".to_string(),
+        _ => "full".to_string(),
     }
 }

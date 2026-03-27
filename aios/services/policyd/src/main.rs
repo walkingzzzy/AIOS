@@ -34,6 +34,7 @@ pub struct AppState {
 impl AppState {
     fn health(&self) -> HealthResponse {
         let pending_approvals = self.approval_store.pending_count().unwrap_or_default();
+        let runtime_policy = self.config.runtime_policy_settings().ok();
 
         HealthResponse {
             service_id: self.config.service_id.clone(),
@@ -77,6 +78,24 @@ impl AppState {
                 ),
                 format!("ttl_seconds={}", self.config.token_ttl_seconds),
                 format!("approval_ttl_seconds={}", self.config.approval_ttl_seconds),
+                format!(
+                    "approval_default_policy={}",
+                    runtime_policy
+                        .as_ref()
+                        .map(|item| item.approval_default_policy.as_str())
+                        .unwrap_or("unknown")
+                ),
+                format!(
+                    "remote_prompt_level={}",
+                    runtime_policy
+                        .as_ref()
+                        .map(|item| item.remote_prompt_level.as_str())
+                        .unwrap_or("unknown")
+                ),
+                format!(
+                    "runtime_platform_env={}",
+                    self.config.runtime_platform_env_path.display()
+                ),
                 format!(
                     "audit_rotate_after_bytes={}",
                     self.audit_writer.rotate_after_bytes()

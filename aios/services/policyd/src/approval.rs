@@ -254,6 +254,22 @@ impl ApprovalStore {
             .len())
     }
 
+    pub fn find_session_trust_approval(
+        &self,
+        request: &PolicyEvaluateRequest,
+    ) -> anyhow::Result<Option<ApprovalRecord>> {
+        let approvals = self.list(&ApprovalListRequest {
+            session_id: Some(request.session_id.clone()),
+            task_id: None,
+            status: Some("approved".to_string()),
+        })?;
+
+        Ok(approvals
+            .approvals
+            .into_iter()
+            .find(|approval| approval_matches_policy_request(approval, request)))
+    }
+
     fn record_path(&self, approval_ref: &str) -> PathBuf {
         self.state_dir.join(format!("{approval_ref}.json"))
     }
@@ -281,8 +297,13 @@ impl ApprovalStore {
     }
 }
 
-pub fn approval_lane(request: &PolicyEvaluateRequest, catalog: &CapabilityCatalog) -> String {
-    if let Some(metadata) = catalog.get(&request.capability_id) {
+pub fn approval_lane(
+    request: &PolicyEvaluateRequest,
+    catalog: &CapabilityCatalog,
+    approval_default_policy: &str,
+) -> String {
+    let metadata = catalog.get(&request.capability_id);
+    if let Some(metadata) = metadata {
         if !metadata.default_approval_lane.is_empty() {
             return metadata.default_approval_lane.clone();
         }
@@ -296,8 +317,17 @@ pub fn approval_lane(request: &PolicyEvaluateRequest, catalog: &CapabilityCatalo
         return "device-capture-review".to_string();
     }
 
-    if request.capability_id.contains("delete") || request.capability_id.contains("inject") {
-        return "high-risk-side-effect-review".to_string();
+    let is_high_risk = metadata
+        .is_some_and(|item| item.high_risk() || item.destructive || item.approval_required)
+        || request.capability_id.contains("delete")
+        || request.capability_id.contains("inject");
+
+    if is_high_risk {
+        return match approval_default_policy {
+            "operator-gate" => "operator-gate-review".to_string(),
+            "session-trust" => "session-trust-review".to_string(),
+            _ => "high-risk-side-effect-review".to_string(),
+        };
     }
 
     "standard-capability-review".to_string()
@@ -394,6 +424,35 @@ fn match_context_field(
         approved: approved.to_string(),
         requested: requested.to_string(),
     })
+}
+
+fn approval_matches_policy_request(
+    approval: &ApprovalRecord,
+    request: &PolicyEvaluateRequest,
+) -> bool {
+    if approval.status != "approved"
+        || approval.user_id != request.user_id
+        || approval.session_id != request.session_id
+        || approval.capability_id != request.capability_id
+        || approval.execution_location != request.execution_location
+        || approval.target_hash != request.target_hash
+    {
+        return false;
+    }
+
+    for (key, approved_value) in &approval.constraints {
+        let Some(requested_value) = request.constraints.get(key) else {
+            return false;
+        };
+        if !constraint_within_scope(approved_value, requested_value) {
+            return false;
+        }
+    }
+
+    request
+        .constraints
+        .keys()
+        .all(|key| approval.constraints.contains_key(key))
 }
 
 fn constraint_within_scope(approved: &Value, requested: &Value) -> bool {
