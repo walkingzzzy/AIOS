@@ -432,6 +432,12 @@ def component_base_args(profile: dict, component: str) -> list[str]:
         remote_registration_request = paths.get("remote_registration_request_path")
         if remote_registration_request:
             command.extend(["--remote-registration-request", remote_registration_request])
+        runtime_platform_env = paths.get(
+            "runtime_platform_env_path",
+            "/etc/aios/runtime/platform.env",
+        )
+        if runtime_platform_env:
+            command.extend(["--runtime-platform-env", runtime_platform_env])
         agent_socket_value = paths.get("agentd_socket", str(agentd_socket(profile)))
         if agent_socket_value:
             command.extend(["--agent-socket", agent_socket_value])

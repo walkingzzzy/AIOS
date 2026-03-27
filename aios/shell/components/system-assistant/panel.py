@@ -29,6 +29,7 @@ STATUS_TONES = {
     "attention": "warning",
     "idle": "neutral",
 }
+HIDDEN_BY_REMOTE_PROMPT_POLICY = "Hidden by remote prompt policy"
 
 
 def tone_for_status(status: str) -> str:
@@ -44,6 +45,84 @@ def header_status(state: dict[str, Any]) -> str:
     if request.get("intent"):
         return "ready"
     return "idle"
+
+
+def remote_prompt_level(privacy_state: dict[str, Any]) -> str:
+    value = str(privacy_state.get("remote_prompt_level") or "full").strip().lower()
+    return value if value in {"full", "summary", "minimal"} else "full"
+
+
+def clip_text(value: Any, limit: int = 96) -> str:
+    text = " ".join(str(value or "").split())
+    if not text:
+        return "-"
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."
+
+
+def display_request_intent(request: dict[str, Any], privacy_state: dict[str, Any]) -> str:
+    intent = request.get("intent")
+    if not intent:
+        return "-"
+    level = remote_prompt_level(privacy_state)
+    if level == "minimal":
+        return HIDDEN_BY_REMOTE_PROMPT_POLICY
+    if level == "summary":
+        return clip_text(intent, 72)
+    return str(intent)
+
+
+def display_request_title(
+    title: str | None,
+    request: dict[str, Any],
+    privacy_state: dict[str, Any],
+) -> str:
+    resolved = title or request.get("intent")
+    if not resolved:
+        return "-"
+    level = remote_prompt_level(privacy_state)
+    if level == "minimal":
+        return HIDDEN_BY_REMOTE_PROMPT_POLICY
+    if level == "summary":
+        return clip_text(resolved, 72)
+    return str(resolved)
+
+
+def display_risk_reasons(
+    request: dict[str, Any],
+    privacy_state: dict[str, Any],
+) -> list[str]:
+    reasons = [str(item) for item in request.get("risk_reasons") or [] if item]
+    if not reasons:
+        return []
+
+    level = remote_prompt_level(privacy_state)
+    if level == "full":
+        return reasons
+    if level == "summary":
+        categories = [str(item) for item in request.get("risk_categories") or [] if item]
+        if categories:
+            return [f"High-risk category: {item}" for item in categories]
+        return ["High-risk request requires approval"]
+    return ["Detailed request hidden by remote prompt policy"]
+
+
+def approval_reason_for_request(
+    intent: str,
+    request: dict[str, Any],
+    privacy_state: dict[str, Any],
+) -> str:
+    level = remote_prompt_level(privacy_state)
+    if level == "full":
+        return "assistant high-risk request: " + intent
+
+    categories = [str(item) for item in request.get("risk_categories") or [] if item]
+    if level == "summary":
+        category_summary = ",".join(categories) if categories else "high-risk"
+        return f"assistant high-risk request summary: categories={category_summary}"
+
+    return "assistant high-risk request (details hidden by remote prompt policy)"
 
 
 def build_actions(
@@ -149,6 +228,9 @@ def build_model(
     approvals = list(state.get("approvals") or [])
     pending_approvals = list(state.get("pending_approvals") or [])
     status = header_status(state)
+    request_intent_display = display_request_intent(request, privacy_state)
+    request_title_display = display_request_title(title, request, privacy_state)
+    risk_reasons_display = display_risk_reasons(request, privacy_state)
     return {
         "component_id": "system-assistant",
         "panel_id": "system-assistant-panel",
@@ -202,8 +284,8 @@ def build_model(
                 "title": "Request",
                 "items": [
                     {"label": "user_id", "value": user_id, "tone": "neutral"},
-                    {"label": "intent", "value": request.get("intent") or "-", "tone": "neutral"},
-                    {"label": "task_title", "value": title or request.get("intent") or "-", "tone": "neutral"},
+                    {"label": "intent", "value": request_intent_display, "tone": "neutral"},
+                    {"label": "task_title", "value": request_title_display, "tone": "neutral"},
                     {"label": "task_state", "value": task_state, "tone": "neutral"},
                     {
                         "label": "risk_level",
@@ -227,7 +309,7 @@ def build_model(
                         "value": value,
                         "tone": "warning",
                     }
-                    for index, value in enumerate(request.get("risk_reasons") or [])
+                    for index, value in enumerate(risk_reasons_display)
                 ],
                 "empty_state": "No request prepared",
             },
@@ -366,13 +448,13 @@ def build_model(
         ],
         "meta": {
             "user_id": user_id,
-            "request_intent": request.get("intent"),
-            "request_title": title or request.get("intent"),
+            "request_intent": request_intent_display,
+            "request_title": request_title_display,
             "task_state": task_state,
             "risk_level": request.get("risk_level"),
             "risk_label": request.get("risk_label"),
             "risk_categories": request.get("risk_categories") or [],
-            "risk_reasons": request.get("risk_reasons") or [],
+            "risk_reasons": risk_reasons_display,
             "approval_required": request.get("approval_required", False),
             "approval_lane": approval_lane,
             "capability_id": request.get("capability_id"),
@@ -582,6 +664,8 @@ def main() -> int:
             effective_intent,
         )
         request = request_state.get("request") or {}
+        privacy_state = request_state.get("privacy_state") or {}
+        risk_reasons_display = display_risk_reasons(request, privacy_state)
         session_result = None
         task_result = None
         task: dict[str, Any] = {}
@@ -630,7 +714,7 @@ def main() -> int:
                 "task_id": effective_task_id,
                 "route_reason": request.get("route_reason"),
                 "risk_categories": request.get("risk_categories") or [],
-                "risk_reasons": request.get("risk_reasons") or [],
+                "risk_reasons": risk_reasons_display,
                 "capability_id": args.capability_id or request.get("capability_id"),
             }
         )
@@ -643,7 +727,7 @@ def main() -> int:
                 task_id=str(effective_task_id),
                 capability_id=str(args.capability_id or request.get("capability_id") or "system.assistant.request.execute"),
                 approval_lane=str(args.approval_lane or selected.get("approval_lane") or "high-risk"),
-                reason="assistant high-risk request: " + str(effective_intent),
+                reason=approval_reason_for_request(str(effective_intent), request, privacy_state),
             )
             result.update(
                 {

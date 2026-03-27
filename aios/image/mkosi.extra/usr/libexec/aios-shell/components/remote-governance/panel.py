@@ -2,9 +2,13 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import time
 from pathlib import Path
+from types import ModuleType
+from typing import Any
+from urllib.parse import urlsplit
 
 from prototype import (
     apply_remote_registration_request,
@@ -25,6 +29,8 @@ SEVERITY_TONES = {
     "medium": "warning",
     "info": "neutral",
 }
+HIDDEN_BY_REMOTE_PROMPT_POLICY = "Hidden by remote prompt policy"
+_PRIVACY_MEMORY_PROTOTYPE_MODULE: ModuleType | None = None
 
 
 def tone_for(severity: str | None) -> str:
@@ -44,9 +50,118 @@ def header_status(governance: dict) -> tuple[str, str]:
     return "idle", "neutral"
 
 
+def load_privacy_memory_prototype_module() -> ModuleType:
+    global _PRIVACY_MEMORY_PROTOTYPE_MODULE
+    if _PRIVACY_MEMORY_PROTOTYPE_MODULE is not None:
+        return _PRIVACY_MEMORY_PROTOTYPE_MODULE
+
+    module_path = Path(__file__).resolve().parents[1] / "privacy-memory" / "prototype.py"
+    spec = importlib.util.spec_from_file_location("aios_shell_privacy_memory_prototype", module_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"unable to load privacy memory prototype from {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    _PRIVACY_MEMORY_PROTOTYPE_MODULE = module
+    return module
+
+
+def default_runtime_platform_env_path() -> Path:
+    return load_privacy_memory_prototype_module().default_runtime_platform_env_path()
+
+
+def build_privacy_memory_state(runtime_platform_env_path: Path | None) -> dict[str, Any]:
+    return load_privacy_memory_prototype_module().build_privacy_memory_state(runtime_platform_env_path)
+
+
+def remote_prompt_level(privacy_state: dict[str, Any]) -> str:
+    value = str(privacy_state.get("remote_prompt_level") or "full").strip().lower()
+    return value if value in {"full", "summary", "minimal"} else "full"
+
+
+def clip_text(value: Any, limit: int = 72) -> str:
+    text = " ".join(str(value or "").split())
+    if not text:
+        return "-"
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."
+
+
+def summarize_endpoint(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return "-"
+    parsed = urlsplit(text)
+    if parsed.scheme and parsed.netloc:
+        return f"{parsed.scheme}://{parsed.netloc}/..."
+    return clip_text(text, 48)
+
+
+def summarize_message_list(items: list[Any], level: str) -> str:
+    values = [str(item) for item in items if item not in (None, "")]
+    if not values:
+        return "-"
+    if level == "full":
+        return ", ".join(values)
+    if level == "summary":
+        return f"{len(values)} message(s)"
+    return HIDDEN_BY_REMOTE_PROMPT_POLICY
+
+
+def display_request_summary(
+    request_summary: dict[str, Any],
+    privacy_state: dict[str, Any],
+) -> dict[str, Any]:
+    level = remote_prompt_level(privacy_state)
+    capabilities = [str(item) for item in request_summary.get("capabilities") or [] if item]
+    source_path = str(request_summary.get("source_path") or "-")
+
+    if level == "full":
+        display_source_path = source_path
+        display_provider_ref = str(request_summary.get("provider_ref") or "-")
+        display_endpoint = str(request_summary.get("endpoint") or "-")
+        display_capabilities = ", ".join(capabilities) or "-"
+        display_name = str(request_summary.get("display_name") or "-")
+        display_control_plane_id = str(request_summary.get("control_plane_provider_id") or "-")
+    elif level == "summary":
+        display_source_path = Path(source_path).name if source_path not in ("", "-") else "-"
+        display_provider_ref = clip_text(request_summary.get("provider_ref"), 32)
+        display_endpoint = summarize_endpoint(request_summary.get("endpoint"))
+        display_capabilities = f"{len(capabilities)} capability(s)" if capabilities else "-"
+        display_name = clip_text(request_summary.get("display_name"), 40)
+        display_control_plane_id = clip_text(request_summary.get("control_plane_provider_id"), 32)
+    else:
+        display_source_path = HIDDEN_BY_REMOTE_PROMPT_POLICY if source_path not in ("", "-") else "-"
+        display_provider_ref = HIDDEN_BY_REMOTE_PROMPT_POLICY if request_summary.get("provider_ref") else "-"
+        display_endpoint = HIDDEN_BY_REMOTE_PROMPT_POLICY if request_summary.get("endpoint") else "-"
+        display_capabilities = (
+            HIDDEN_BY_REMOTE_PROMPT_POLICY if capabilities else "-"
+        )
+        display_name = HIDDEN_BY_REMOTE_PROMPT_POLICY if request_summary.get("display_name") else "-"
+        display_control_plane_id = (
+            HIDDEN_BY_REMOTE_PROMPT_POLICY
+            if request_summary.get("control_plane_provider_id")
+            else "-"
+        )
+
+    return {
+        "source_path": display_source_path,
+        "provider_ref": display_provider_ref,
+        "endpoint": display_endpoint,
+        "capabilities": display_capabilities,
+        "display_name": display_name,
+        "control_plane_provider_id": display_control_plane_id,
+        "errors": summarize_message_list(list(request_summary.get("errors") or []), level),
+        "warnings": summarize_message_list(list(request_summary.get("warnings") or []), level),
+        "remote_prompt_level": privacy_state.get("remote_prompt_level"),
+        "remote_prompt_level_label": privacy_state.get("remote_prompt_level_label"),
+    }
+
+
 def build_model(
     governance: dict,
     request_summary: dict[str, object],
+    privacy_state: dict[str, Any],
     *,
     issue_only: bool,
     limit: int,
@@ -60,6 +175,7 @@ def build_model(
     stale_or_revoked = filtered_status_counts.get("stale", 0) + filtered_status_counts.get("revoked", 0)
     request_ready = bool(request_summary.get("ready", False))
     request_status = request_summary.get("source_status") or "missing"
+    request_display = display_request_summary(request_summary, privacy_state)
 
     return {
         "component_id": "remote-governance",
@@ -125,7 +241,7 @@ def build_model(
                 "items": [
                     {
                         "label": "Source Path",
-                        "value": request_summary.get("source_path") or "-",
+                        "value": request_display.get("source_path") or "-",
                         "tone": "neutral",
                     },
                     {
@@ -140,37 +256,42 @@ def build_model(
                     },
                     {
                         "label": "Provider Ref",
-                        "value": request_summary.get("provider_ref") or "-",
+                        "value": request_display.get("provider_ref") or "-",
                         "tone": "neutral",
                     },
                     {
                         "label": "Endpoint",
-                        "value": request_summary.get("endpoint") or "-",
+                        "value": request_display.get("endpoint") or "-",
                         "tone": "neutral",
                     },
                     {
                         "label": "Capabilities",
-                        "value": ", ".join(request_summary.get("capabilities") or []) or "-",
+                        "value": request_display.get("capabilities") or "-",
                         "tone": "neutral",
                     },
                     {
                         "label": "Display Name",
-                        "value": request_summary.get("display_name") or "-",
+                        "value": request_display.get("display_name") or "-",
                         "tone": "neutral",
                     },
                     {
                         "label": "Control Plane ID",
-                        "value": request_summary.get("control_plane_provider_id") or "-",
+                        "value": request_display.get("control_plane_provider_id") or "-",
+                        "tone": "neutral",
+                    },
+                    {
+                        "label": "Prompt Policy",
+                        "value": request_display.get("remote_prompt_level_label") or "Unknown",
                         "tone": "neutral",
                     },
                     {
                         "label": "Errors",
-                        "value": ", ".join(request_summary.get("errors") or []) or "-",
+                        "value": request_display.get("errors") or "-",
                         "tone": "warning" if request_summary.get("errors") else "neutral",
                     },
                     {
                         "label": "Warnings",
-                        "value": ", ".join(request_summary.get("warnings") or []) or "-",
+                        "value": request_display.get("warnings") or "-",
                         "tone": "warning" if request_summary.get("warnings") else "neutral",
                     },
                 ],
@@ -256,14 +377,16 @@ def build_model(
             "control_plane_provider_ids": governance.get("control_plane_provider_ids", []),
             "control_plane_registered_count": promoted_count,
             "request_source_status": request_status,
-            "request_source_path": request_summary.get("source_path"),
+            "request_source_path": request_display.get("source_path"),
             "request_ready": request_ready,
             "request_provider_kind": request_summary.get("provider_kind"),
-            "request_provider_ref": request_summary.get("provider_ref"),
-            "request_endpoint": request_summary.get("endpoint"),
-            "request_capabilities": request_summary.get("capabilities") or [],
-            "request_errors": request_summary.get("errors") or [],
-            "request_warnings": request_summary.get("warnings") or [],
+            "request_provider_ref": request_display.get("provider_ref"),
+            "request_endpoint": request_display.get("endpoint"),
+            "request_capabilities": request_display.get("capabilities"),
+            "request_errors": request_display.get("errors"),
+            "request_warnings": request_display.get("warnings"),
+            "remote_prompt_level": request_display.get("remote_prompt_level"),
+            "remote_prompt_level_label": request_display.get("remote_prompt_level_label"),
             "issue_only": issue_only,
             "limit": limit,
             "query": governance.get("query", {}),
@@ -323,6 +446,7 @@ def main() -> int:
     parser.add_argument("--mcp-remote-registry", type=Path, default=default_mcp_remote_registry())
     parser.add_argument("--provider-registry-state-dir", type=Path, default=default_provider_registry_state_dir())
     parser.add_argument("--remote-registration-request", type=Path, default=default_remote_registration_request_path())
+    parser.add_argument("--runtime-platform-env", type=Path, default=default_runtime_platform_env_path())
     parser.add_argument("--agent-socket", type=Path)
     parser.add_argument("--issue-only", action="store_true")
     parser.add_argument("--limit", type=int, default=10)
@@ -371,7 +495,14 @@ def main() -> int:
             report_path=args.write_report,
         )
         request_summary = load_remote_registration_request(args.remote_registration_request)
-        return build_model(governance, request_summary, issue_only=issue_only, limit=limit)
+        privacy_state = build_privacy_memory_state(args.runtime_platform_env)
+        return build_model(
+            governance,
+            request_summary,
+            privacy_state,
+            issue_only=issue_only,
+            limit=limit,
+        )
 
     if args.command == "action":
         if not args.action:
