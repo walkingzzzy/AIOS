@@ -50,6 +50,7 @@ pub fn collect(
         .list_semantic(SemanticMemoryListRequest {
             session_id: request.session_id.clone(),
             label: None,
+            query: None,
             limit: Some(request.limit),
         })?
         .entries;

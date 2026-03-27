@@ -594,42 +594,82 @@ impl Database {
     ) -> anyhow::Result<SemanticMemoryListResponse> {
         let connection = self.open_connection()?;
         let limit = sanitize_limit(request.limit);
-        let rows = if let Some(label) = &request.label {
-            let mut statement = connection.prepare(
-                "SELECT index_id, session_id, label, payload_json, created_at FROM memory_semantic_indexes WHERE session_id = ?1 AND label = ?2 ORDER BY created_at DESC LIMIT ?3",
-            )?;
-            let rows = statement.query_map(params![&request.session_id, label, limit], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
-                ))
-            })?;
-            rows.collect::<Result<Vec<_>, _>>()?
-        } else {
-            let mut statement = connection.prepare(
-                "SELECT index_id, session_id, label, payload_json, created_at FROM memory_semantic_indexes WHERE session_id = ?1 ORDER BY created_at DESC LIMIT ?2",
-            )?;
-            let rows = statement.query_map(params![&request.session_id, limit], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
-                ))
-            })?;
-            rows.collect::<Result<Vec<_>, _>>()?
+        let query = normalize_search_query(request.query.as_deref());
+        let rows = match (&request.label, query.as_ref()) {
+            (Some(label), Some(_)) => {
+                let mut statement = connection.prepare(
+                    "SELECT index_id, session_id, label, payload_json, created_at FROM memory_semantic_indexes WHERE session_id = ?1 AND label = ?2 ORDER BY created_at DESC",
+                )?;
+                let rows = statement.query_map(params![&request.session_id, label], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                    ))
+                })?;
+                rows.collect::<Result<Vec<_>, _>>()?
+            }
+            (Some(label), None) => {
+                let mut statement = connection.prepare(
+                    "SELECT index_id, session_id, label, payload_json, created_at FROM memory_semantic_indexes WHERE session_id = ?1 AND label = ?2 ORDER BY created_at DESC LIMIT ?3",
+                )?;
+                let rows =
+                    statement.query_map(params![&request.session_id, label, limit], |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, String>(2)?,
+                            row.get::<_, String>(3)?,
+                            row.get::<_, String>(4)?,
+                        ))
+                    })?;
+                rows.collect::<Result<Vec<_>, _>>()?
+            }
+            (None, Some(_)) => {
+                let mut statement = connection.prepare(
+                    "SELECT index_id, session_id, label, payload_json, created_at FROM memory_semantic_indexes WHERE session_id = ?1 ORDER BY created_at DESC",
+                )?;
+                let rows = statement.query_map(params![&request.session_id], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                    ))
+                })?;
+                rows.collect::<Result<Vec<_>, _>>()?
+            }
+            (None, None) => {
+                let mut statement = connection.prepare(
+                    "SELECT index_id, session_id, label, payload_json, created_at FROM memory_semantic_indexes WHERE session_id = ?1 ORDER BY created_at DESC LIMIT ?2",
+                )?;
+                let rows = statement.query_map(params![&request.session_id, limit], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                    ))
+                })?;
+                rows.collect::<Result<Vec<_>, _>>()?
+            }
         };
 
-        let entries = rows
+        let mut entries = rows
             .into_iter()
             .map(|(index_id, session_id, label, payload_json, created_at)| {
                 decode_semantic_memory(&index_id, &session_id, &label, &payload_json, &created_at)
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
+
+        if let Some(query) = query.as_deref() {
+            entries.retain(|record| semantic_memory_matches_query(record, query));
+            entries.truncate(limit as usize);
+        }
 
         Ok(SemanticMemoryListResponse { entries })
     }
@@ -1253,6 +1293,66 @@ fn decode_semantic_memory(
     })
 }
 
+fn normalize_search_query(query: Option<&str>) -> Option<String> {
+    query.and_then(|value| {
+        let normalized = normalize_search_text(value);
+        (!normalized.is_empty()).then_some(normalized)
+    })
+}
+
+fn normalize_search_text(value: &str) -> String {
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+fn semantic_memory_matches_query(record: &SemanticMemoryRecord, query: &str) -> bool {
+    let mut haystack = record.label.clone();
+    append_search_fragment(
+        &mut haystack,
+        &semantic_payload_search_text(&record.payload),
+    );
+    normalize_search_text(&haystack).contains(query)
+}
+
+fn semantic_payload_search_text(payload: &Value) -> String {
+    let mut buffer = String::new();
+    append_value_search_text(payload, &mut buffer);
+    buffer
+}
+
+fn append_value_search_text(value: &Value, buffer: &mut String) {
+    match value {
+        Value::Null => {}
+        Value::Bool(flag) => append_search_fragment(buffer, if *flag { "true" } else { "false" }),
+        Value::Number(number) => append_search_fragment(buffer, &number.to_string()),
+        Value::String(text) => append_search_fragment(buffer, text),
+        Value::Array(items) => {
+            for item in items {
+                append_value_search_text(item, buffer);
+            }
+        }
+        Value::Object(entries) => {
+            for (key, item) in entries {
+                append_search_fragment(buffer, key);
+                append_value_search_text(item, buffer);
+            }
+        }
+    }
+}
+
+fn append_search_fragment(buffer: &mut String, fragment: &str) {
+    if fragment.is_empty() {
+        return;
+    }
+    if !buffer.is_empty() {
+        buffer.push(' ');
+    }
+    buffer.push_str(fragment);
+}
+
 fn decode_task_event(
     event_id: &str,
     task_id: &str,
@@ -1655,6 +1755,7 @@ mod tests {
             .list_semantic_memory(&SemanticMemoryListRequest {
                 session_id: session.session_id.clone(),
                 label: None,
+                query: None,
                 limit: Some(10),
             })
             .expect("list all semantic memory");
@@ -1664,6 +1765,7 @@ mod tests {
             .list_semantic_memory(&SemanticMemoryListRequest {
                 session_id: session.session_id,
                 label: Some("plan-summary".to_string()),
+                query: None,
                 limit: Some(10),
             })
             .expect("list filtered semantic memory");
@@ -1676,6 +1778,87 @@ mod tests {
                 .and_then(Value::as_str),
             Some("runtime.infer.submit")
         );
+
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn semantic_memory_roundtrip_supports_query_search() {
+        let (database, root) = test_database();
+
+        let session = database
+            .create_session(&SessionCreateRequest {
+                user_id: "semantic-query-user".to_string(),
+                metadata: BTreeMap::new(),
+            })
+            .expect("create session");
+
+        database
+            .put_semantic_memory(&SemanticMemoryPutRequest {
+                session_id: session.session_id.clone(),
+                label: "plan-summary".to_string(),
+                payload: json!({"summary": "Summarize project plan", "capability": "runtime.infer.submit"}),
+            })
+            .expect("put summary semantic memory");
+
+        database
+            .put_semantic_memory(&SemanticMemoryPutRequest {
+                session_id: session.session_id.clone(),
+                label: "provider-resolution".to_string(),
+                payload: json!({"provider_id": "runtime.local.inference"}),
+            })
+            .expect("put provider semantic memory");
+
+        database
+            .put_semantic_memory(&SemanticMemoryPutRequest {
+                session_id: session.session_id.clone(),
+                label: "status-note".to_string(),
+                payload: json!({"summary": "Recent deployment note"}),
+            })
+            .expect("put status semantic memory");
+
+        let summary = database
+            .list_semantic_memory(&SemanticMemoryListRequest {
+                session_id: session.session_id.clone(),
+                label: None,
+                query: Some("PROJECT PLAN".to_string()),
+                limit: Some(1),
+            })
+            .expect("query summary semantic memory");
+        assert_eq!(summary.entries.len(), 1);
+        assert_eq!(summary.entries[0].label, "plan-summary");
+
+        let provider = database
+            .list_semantic_memory(&SemanticMemoryListRequest {
+                session_id: session.session_id.clone(),
+                label: None,
+                query: Some("provider_id runtime.local.inference".to_string()),
+                limit: Some(10),
+            })
+            .expect("query provider semantic memory");
+        assert_eq!(provider.entries.len(), 1);
+        assert_eq!(provider.entries[0].label, "provider-resolution");
+
+        let label_and_query = database
+            .list_semantic_memory(&SemanticMemoryListRequest {
+                session_id: session.session_id.clone(),
+                label: Some("plan-summary".to_string()),
+                query: Some("runtime.infer.submit".to_string()),
+                limit: Some(10),
+            })
+            .expect("query semantic memory with label");
+        assert_eq!(label_and_query.entries.len(), 1);
+        assert_eq!(label_and_query.entries[0].label, "plan-summary");
+
+        let missing = database
+            .list_semantic_memory(&SemanticMemoryListRequest {
+                session_id: session.session_id,
+                label: None,
+                query: Some("nonexistent capability".to_string()),
+                limit: Some(10),
+            })
+            .expect("query missing semantic memory");
+        assert!(missing.entries.is_empty());
 
         std::fs::remove_dir_all(root).ok();
     }
