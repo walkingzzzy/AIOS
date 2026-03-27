@@ -13,6 +13,9 @@ pub struct Config {
     pub portal_state_dir: PathBuf,
     pub evidence_export_dir: PathBuf,
     pub portal_default_ttl_seconds: u64,
+    pub runtime_platform_env_path: PathBuf,
+    pub memory_default_enabled: bool,
+    pub memory_default_retention_days: u64,
 }
 
 impl Config {
@@ -39,6 +42,13 @@ impl Config {
             });
         let portal_default_ttl_seconds =
             aios_core::config::env_u64_or("AIOS_SESSIOND_PORTAL_DEFAULT_TTL_SECONDS", 300);
+        let runtime_platform_env_path =
+            aios_core::config::env_path_or("AIOS_SESSIOND_RUNTIME_PLATFORM_ENV", || {
+                PathBuf::from("/etc/aios/runtime/platform.env")
+            });
+        let memory_default_enabled = parse_bool_env("AIOS_SESSIOND_MEMORY_ENABLED").unwrap_or(true);
+        let memory_default_retention_days =
+            aios_core::config::env_u64_or("AIOS_SESSIOND_MEMORY_RETENTION_DAYS", 30);
 
         Ok(Self {
             service_id: "aios-sessiond".to_string(),
@@ -50,6 +60,19 @@ impl Config {
             portal_state_dir,
             evidence_export_dir,
             portal_default_ttl_seconds,
+            runtime_platform_env_path,
+            memory_default_enabled,
+            memory_default_retention_days,
         })
     }
+}
+
+fn parse_bool_env(name: &str) -> Option<bool> {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| match value.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => Some(true),
+            "0" | "false" | "no" | "off" => Some(false),
+            _ => None,
+        })
 }

@@ -4,7 +4,7 @@ use std::{
 };
 
 use anyhow::Context;
-use chrono::Utc;
+use chrono::{Duration, Utc};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -24,11 +24,35 @@ use aios_contracts::{
 
 use crate::{config::Config, memory::MemorySummary, observability::ObservabilitySink};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MemoryPolicy {
+    pub enabled: bool,
+    pub retention_days: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct MemoryPolicyConfig {
+    pub runtime_platform_env_path: Option<PathBuf>,
+    pub default_enabled: bool,
+    pub default_retention_days: u64,
+}
+
+impl Default for MemoryPolicyConfig {
+    fn default() -> Self {
+        Self {
+            runtime_platform_env_path: None,
+            default_enabled: true,
+            default_retention_days: 30,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Database {
     path: PathBuf,
     migrations_dir: PathBuf,
     observability_sink: Option<ObservabilitySink>,
+    memory_policy_config: MemoryPolicyConfig,
 }
 
 impl Database {
@@ -41,10 +65,33 @@ impl Database {
         migrations_dir: PathBuf,
         observability_sink: Option<ObservabilitySink>,
     ) -> Self {
+        Self::new_with_observability_and_policy(
+            path,
+            migrations_dir,
+            observability_sink,
+            MemoryPolicyConfig::default(),
+        )
+    }
+
+    pub fn new_with_memory_policy(
+        path: PathBuf,
+        migrations_dir: PathBuf,
+        memory_policy_config: MemoryPolicyConfig,
+    ) -> Self {
+        Self::new_with_observability_and_policy(path, migrations_dir, None, memory_policy_config)
+    }
+
+    pub fn new_with_observability_and_policy(
+        path: PathBuf,
+        migrations_dir: PathBuf,
+        observability_sink: Option<ObservabilitySink>,
+        memory_policy_config: MemoryPolicyConfig,
+    ) -> Self {
         Self {
             path,
             migrations_dir,
             observability_sink,
+            memory_policy_config,
         }
     }
 
@@ -438,6 +485,7 @@ impl Database {
         request: &WorkingMemoryWriteRequest,
     ) -> anyhow::Result<WorkingMemoryRecord> {
         let connection = self.open_connection()?;
+        let policy = self.prepare_memory_policy(&connection)?;
         let record = WorkingMemoryRecord {
             ref_id: request
                 .ref_id
@@ -448,6 +496,10 @@ impl Database {
             tags: request.tags.clone(),
             created_at: Utc::now().to_rfc3339(),
         };
+
+        if !policy.enabled {
+            return Ok(record);
+        }
 
         connection.execute(
             "INSERT INTO memory_working_refs (ref_id, session_id, payload_json, created_at) VALUES (?1, ?2, ?3, ?4) \
@@ -468,6 +520,12 @@ impl Database {
         request: &WorkingMemoryReadRequest,
     ) -> anyhow::Result<WorkingMemoryReadResponse> {
         let connection = self.open_connection()?;
+        let policy = self.prepare_memory_policy(&connection)?;
+        if !policy.enabled {
+            return Ok(WorkingMemoryReadResponse {
+                entries: Vec::new(),
+            });
+        }
         let entries = if let Some(ref_id) = &request.ref_id {
             match self.fetch_working_memory(&connection, ref_id)? {
                 Some(record) if record.session_id == request.session_id => vec![record],
@@ -502,6 +560,7 @@ impl Database {
         request: &EpisodicMemoryAppendRequest,
     ) -> anyhow::Result<EpisodicMemoryRecord> {
         let connection = self.open_connection()?;
+        let policy = self.prepare_memory_policy(&connection)?;
         let record = EpisodicMemoryRecord {
             entry_id: format!("ep-{}", Uuid::new_v4()),
             session_id: request.session_id.clone(),
@@ -509,6 +568,10 @@ impl Database {
             metadata: request.metadata.clone(),
             created_at: Utc::now().to_rfc3339(),
         };
+
+        if !policy.enabled {
+            return Ok(record);
+        }
 
         connection.execute(
             "INSERT INTO memory_episodic_entries (entry_id, session_id, summary, metadata_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -529,6 +592,12 @@ impl Database {
         request: &EpisodicMemoryListRequest,
     ) -> anyhow::Result<EpisodicMemoryListResponse> {
         let connection = self.open_connection()?;
+        let policy = self.prepare_memory_policy(&connection)?;
+        if !policy.enabled {
+            return Ok(EpisodicMemoryListResponse {
+                entries: Vec::new(),
+            });
+        }
         let limit = sanitize_limit(request.limit);
         let mut statement = connection.prepare(
             "SELECT entry_id, session_id, summary, metadata_json, created_at FROM memory_episodic_entries WHERE session_id = ?1 ORDER BY created_at DESC LIMIT ?2",
@@ -566,6 +635,7 @@ impl Database {
         request: &SemanticMemoryPutRequest,
     ) -> anyhow::Result<SemanticMemoryRecord> {
         let connection = self.open_connection()?;
+        let policy = self.prepare_memory_policy(&connection)?;
         let record = SemanticMemoryRecord {
             index_id: format!("sem-{}", Uuid::new_v4()),
             session_id: request.session_id.clone(),
@@ -573,6 +643,10 @@ impl Database {
             payload: request.payload.clone(),
             created_at: Utc::now().to_rfc3339(),
         };
+
+        if !policy.enabled {
+            return Ok(record);
+        }
 
         connection.execute(
             "INSERT INTO memory_semantic_indexes (index_id, session_id, label, payload_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -593,6 +667,12 @@ impl Database {
         request: &SemanticMemoryListRequest,
     ) -> anyhow::Result<SemanticMemoryListResponse> {
         let connection = self.open_connection()?;
+        let policy = self.prepare_memory_policy(&connection)?;
+        if !policy.enabled {
+            return Ok(SemanticMemoryListResponse {
+                entries: Vec::new(),
+            });
+        }
         let limit = sanitize_limit(request.limit);
         let query = normalize_search_query(request.query.as_deref());
         let rows = match (&request.label, query.as_ref()) {
@@ -679,6 +759,7 @@ impl Database {
         request: &ProceduralMemoryPutRequest,
     ) -> anyhow::Result<ProceduralMemoryRecord> {
         let connection = self.open_connection()?;
+        let policy = self.prepare_memory_policy(&connection)?;
         let record = ProceduralMemoryRecord {
             version_id: format!("proc-{}", Uuid::new_v4()),
             session_id: request.session_id.clone(),
@@ -686,6 +767,10 @@ impl Database {
             payload: request.payload.clone(),
             created_at: Utc::now().to_rfc3339(),
         };
+
+        if !policy.enabled {
+            return Ok(record);
+        }
 
         connection.execute(
             "INSERT INTO memory_procedural_versions (version_id, session_id, rule_name, payload_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -706,6 +791,12 @@ impl Database {
         request: &ProceduralMemoryListRequest,
     ) -> anyhow::Result<ProceduralMemoryListResponse> {
         let connection = self.open_connection()?;
+        let policy = self.prepare_memory_policy(&connection)?;
+        if !policy.enabled {
+            return Ok(ProceduralMemoryListResponse {
+                entries: Vec::new(),
+            });
+        }
         let limit = sanitize_limit(request.limit);
         let rows = if let Some(rule_name) = &request.rule_name {
             let mut statement = connection.prepare(
@@ -830,6 +921,7 @@ impl Database {
 
     pub fn recovery_ref(&self, session_id: &str) -> anyhow::Result<RecoveryRef> {
         let connection = self.open_connection()?;
+        self.prepare_memory_policy(&connection)?;
         let mut statement = connection.prepare(
             "SELECT recovery_id, session_id, payload_json FROM recovery_refs WHERE session_id = ?1 ORDER BY created_at DESC LIMIT 1",
         )?;
@@ -968,6 +1060,10 @@ impl Database {
 
     pub fn memory_summary(&self) -> anyhow::Result<MemorySummary> {
         let connection = self.open_connection()?;
+        let policy = self.prepare_memory_policy(&connection)?;
+        if !policy.enabled {
+            return Ok(MemorySummary::default());
+        }
         Ok(MemorySummary {
             working_refs: count_rows(&connection, "memory_working_refs")?,
             episodic_entries: count_rows(&connection, "memory_episodic_entries")?,
@@ -982,12 +1078,73 @@ impl Database {
         })
     }
 
+    pub fn current_memory_policy(&self) -> anyhow::Result<MemoryPolicy> {
+        self.resolve_memory_policy()
+    }
+
     fn open_connection(&self) -> anyhow::Result<Connection> {
         let connection = Connection::open(&self.path)
             .with_context(|| format!("failed to open sqlite database {}", self.path.display()))?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "foreign_keys", "ON")?;
         Ok(connection)
+    }
+
+    fn prepare_memory_policy(&self, connection: &Connection) -> anyhow::Result<MemoryPolicy> {
+        let policy = self.resolve_memory_policy()?;
+        self.enforce_memory_policy(connection, policy)?;
+        Ok(policy)
+    }
+
+    fn resolve_memory_policy(&self) -> anyhow::Result<MemoryPolicy> {
+        let mut policy = MemoryPolicy {
+            enabled: self.memory_policy_config.default_enabled,
+            retention_days: normalize_retention_days(
+                None,
+                self.memory_policy_config.default_retention_days,
+            ),
+        };
+
+        if let Some(path) = &self.memory_policy_config.runtime_platform_env_path {
+            let env_values = load_runtime_platform_env(path)?;
+            if let Some(value) = env_values.get("AIOS_RUNTIMED_MEMORY_ENABLED") {
+                policy.enabled = parse_memory_enabled(Some(value), policy.enabled);
+            }
+            if let Some(value) = env_values.get("AIOS_RUNTIMED_MEMORY_RETENTION_DAYS") {
+                policy.retention_days =
+                    normalize_retention_days(Some(value), policy.retention_days);
+            }
+        }
+
+        if let Ok(value) = std::env::var("AIOS_RUNTIMED_MEMORY_ENABLED") {
+            policy.enabled = parse_memory_enabled(Some(&value), policy.enabled);
+        }
+        if let Ok(value) = std::env::var("AIOS_RUNTIMED_MEMORY_RETENTION_DAYS") {
+            policy.retention_days = normalize_retention_days(Some(&value), policy.retention_days);
+        }
+
+        Ok(policy)
+    }
+
+    fn enforce_memory_policy(
+        &self,
+        connection: &Connection,
+        policy: MemoryPolicy,
+    ) -> anyhow::Result<()> {
+        for table in MEMORY_POLICY_TABLES {
+            if !policy.enabled {
+                connection.execute(&format!("DELETE FROM {table}"), [])?;
+                continue;
+            }
+
+            let cutoff = (Utc::now() - Duration::days(policy.retention_days as i64)).to_rfc3339();
+            connection.execute(
+                &format!("DELETE FROM {table} WHERE created_at < ?1"),
+                params![cutoff],
+            )?;
+        }
+
+        Ok(())
     }
 
     fn record_observability(
@@ -1131,12 +1288,21 @@ pub async fn bootstrap(
         tokio::fs::create_dir_all(parent).await?;
     }
 
-    let database = Database::new_with_observability(
+    let database = Database::new_with_observability_and_policy(
         config.database_path.clone(),
         config.migrations_dir.clone(),
         observability_sink,
+        MemoryPolicyConfig {
+            runtime_platform_env_path: Some(config.runtime_platform_env_path.clone()),
+            default_enabled: config.memory_default_enabled,
+            default_retention_days: config.memory_default_retention_days,
+        },
     );
     database.apply_migrations()?;
+    {
+        let connection = database.open_connection()?;
+        database.prepare_memory_policy(&connection)?;
+    }
 
     tracing::info!(
         database = %config.database_path.display(),
@@ -1424,6 +1590,50 @@ pub fn migrations_dir(path: &Path) -> &Path {
     path
 }
 
+const MEMORY_POLICY_TABLES: &[&str] = &[
+    "memory_working_refs",
+    "memory_episodic_entries",
+    "memory_semantic_indexes",
+    "memory_procedural_versions",
+];
+
+fn load_runtime_platform_env(path: &Path) -> anyhow::Result<BTreeMap<String, String>> {
+    if !path.exists() {
+        return Ok(BTreeMap::new());
+    }
+
+    let contents = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read runtime platform env {}", path.display()))?;
+    let mut values = BTreeMap::new();
+    for raw_line in contents.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') || !line.contains('=') {
+            continue;
+        }
+        let (key, value) = line.split_once('=').unwrap_or_default();
+        values.insert(key.trim().to_string(), value.trim().to_string());
+    }
+
+    Ok(values)
+}
+
+fn parse_memory_enabled(value: Option<&str>, default: bool) -> bool {
+    value
+        .and_then(|item| match item.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => Some(true),
+            "0" | "false" | "no" | "off" => Some(false),
+            _ => None,
+        })
+        .unwrap_or(default)
+}
+
+fn normalize_retention_days(value: Option<&str>, default: u64) -> u64 {
+    value
+        .and_then(|item| item.trim().parse::<u64>().ok())
+        .map(|days| days.clamp(1, 3650))
+        .unwrap_or_else(|| default.clamp(1, 3650))
+}
+
 #[cfg(test)]
 mod tests {
     use std::{collections::BTreeMap, path::PathBuf};
@@ -1439,6 +1649,19 @@ mod tests {
         let database_path = root.join("sessiond.sqlite3");
         let migrations_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("migrations");
         let database = Database::new(database_path, migrations_dir);
+        database.apply_migrations().expect("apply migrations");
+        (database, root)
+    }
+
+    fn test_database_with_memory_policy(
+        memory_policy_config: MemoryPolicyConfig,
+    ) -> (Database, PathBuf) {
+        let root = std::env::temp_dir().join(format!("aios-sessiond-test-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("create temp root");
+        let database_path = root.join("sessiond.sqlite3");
+        let migrations_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("migrations");
+        let database =
+            Database::new_with_memory_policy(database_path, migrations_dir, memory_policy_config);
         database.apply_migrations().expect("apply migrations");
         (database, root)
     }
@@ -2030,6 +2253,393 @@ mod tests {
 
         let summary = database.memory_summary().expect("memory summary");
         assert_eq!(summary.procedural_rules, 2);
+
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn memory_policy_env_can_disable_and_reenable_memory_persistence() {
+        let root = std::env::temp_dir().join(format!("aios-sessiond-test-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("create temp root");
+        let runtime_env_path = root.join("platform.env");
+        std::fs::write(
+            &runtime_env_path,
+            "AIOS_RUNTIMED_MEMORY_ENABLED=0\nAIOS_RUNTIMED_MEMORY_RETENTION_DAYS=7\n",
+        )
+        .expect("write runtime env");
+
+        let database_path = root.join("sessiond.sqlite3");
+        let migrations_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("migrations");
+        let database = Database::new_with_memory_policy(
+            database_path,
+            migrations_dir,
+            MemoryPolicyConfig {
+                runtime_platform_env_path: Some(runtime_env_path.clone()),
+                default_enabled: true,
+                default_retention_days: 30,
+            },
+        );
+        database.apply_migrations().expect("apply migrations");
+
+        let session = database
+            .create_session(&SessionCreateRequest {
+                user_id: "memory-policy-user".to_string(),
+                metadata: BTreeMap::new(),
+            })
+            .expect("create session");
+
+        database
+            .write_working_memory(&WorkingMemoryWriteRequest {
+                session_id: session.session_id.clone(),
+                ref_id: Some("wm-disabled".to_string()),
+                payload: json!({"kind": "disabled"}),
+                tags: vec!["policy".to_string()],
+            })
+            .expect("write disabled working memory");
+        database
+            .append_episodic_memory(&EpisodicMemoryAppendRequest {
+                session_id: session.session_id.clone(),
+                summary: "disabled episodic".to_string(),
+                metadata: BTreeMap::new(),
+            })
+            .expect("append disabled episodic memory");
+        database
+            .put_semantic_memory(&SemanticMemoryPutRequest {
+                session_id: session.session_id.clone(),
+                label: "disabled-semantic".to_string(),
+                payload: json!({"summary": "disabled"}),
+            })
+            .expect("put disabled semantic memory");
+        database
+            .put_procedural_memory(&ProceduralMemoryPutRequest {
+                session_id: session.session_id.clone(),
+                rule_name: "disabled-procedural".to_string(),
+                payload: json!({"mode": "disabled"}),
+            })
+            .expect("put disabled procedural memory");
+
+        assert!(database
+            .read_working_memory(&WorkingMemoryReadRequest {
+                session_id: session.session_id.clone(),
+                ref_id: None,
+                limit: Some(10),
+            })
+            .expect("read disabled working memory")
+            .entries
+            .is_empty());
+        assert!(database
+            .list_episodic_memory(&EpisodicMemoryListRequest {
+                session_id: session.session_id.clone(),
+                limit: Some(10),
+            })
+            .expect("list disabled episodic memory")
+            .entries
+            .is_empty());
+        assert!(database
+            .list_semantic_memory(&SemanticMemoryListRequest {
+                session_id: session.session_id.clone(),
+                label: None,
+                query: None,
+                limit: Some(10),
+            })
+            .expect("list disabled semantic memory")
+            .entries
+            .is_empty());
+        assert!(database
+            .list_procedural_memory(&ProceduralMemoryListRequest {
+                session_id: session.session_id.clone(),
+                rule_name: None,
+                limit: Some(10),
+            })
+            .expect("list disabled procedural memory")
+            .entries
+            .is_empty());
+        assert_eq!(
+            database.memory_summary().expect("disabled memory summary"),
+            MemorySummary::default()
+        );
+        assert!(database
+            .recovery_ref(&session.session_id)
+            .expect("recovery ref")
+            .working_memory_refs
+            .is_empty());
+
+        std::fs::write(
+            &runtime_env_path,
+            "AIOS_RUNTIMED_MEMORY_ENABLED=1\nAIOS_RUNTIMED_MEMORY_RETENTION_DAYS=30\n",
+        )
+        .expect("enable runtime env");
+
+        database
+            .write_working_memory(&WorkingMemoryWriteRequest {
+                session_id: session.session_id.clone(),
+                ref_id: Some("wm-enabled".to_string()),
+                payload: json!({"kind": "enabled"}),
+                tags: vec!["policy".to_string()],
+            })
+            .expect("write enabled working memory");
+        database
+            .append_episodic_memory(&EpisodicMemoryAppendRequest {
+                session_id: session.session_id.clone(),
+                summary: "enabled episodic".to_string(),
+                metadata: BTreeMap::new(),
+            })
+            .expect("append enabled episodic memory");
+        database
+            .put_semantic_memory(&SemanticMemoryPutRequest {
+                session_id: session.session_id.clone(),
+                label: "enabled-semantic".to_string(),
+                payload: json!({"summary": "enabled"}),
+            })
+            .expect("put enabled semantic memory");
+        database
+            .put_procedural_memory(&ProceduralMemoryPutRequest {
+                session_id: session.session_id.clone(),
+                rule_name: "enabled-procedural".to_string(),
+                payload: json!({"mode": "enabled"}),
+            })
+            .expect("put enabled procedural memory");
+
+        assert_eq!(
+            database
+                .read_working_memory(&WorkingMemoryReadRequest {
+                    session_id: session.session_id.clone(),
+                    ref_id: None,
+                    limit: Some(10),
+                })
+                .expect("read enabled working memory")
+                .entries
+                .len(),
+            1
+        );
+        assert_eq!(
+            database
+                .list_episodic_memory(&EpisodicMemoryListRequest {
+                    session_id: session.session_id.clone(),
+                    limit: Some(10),
+                })
+                .expect("list enabled episodic memory")
+                .entries
+                .len(),
+            1
+        );
+        assert_eq!(
+            database
+                .list_semantic_memory(&SemanticMemoryListRequest {
+                    session_id: session.session_id.clone(),
+                    label: None,
+                    query: None,
+                    limit: Some(10),
+                })
+                .expect("list enabled semantic memory")
+                .entries
+                .len(),
+            1
+        );
+        assert_eq!(
+            database
+                .list_procedural_memory(&ProceduralMemoryListRequest {
+                    session_id: session.session_id.clone(),
+                    rule_name: None,
+                    limit: Some(10),
+                })
+                .expect("list enabled procedural memory")
+                .entries
+                .len(),
+            1
+        );
+
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn memory_policy_retention_prunes_expired_entries() {
+        let (database, root) = test_database_with_memory_policy(MemoryPolicyConfig {
+            runtime_platform_env_path: None,
+            default_enabled: true,
+            default_retention_days: 30,
+        });
+
+        let session = database
+            .create_session(&SessionCreateRequest {
+                user_id: "retention-user".to_string(),
+                metadata: BTreeMap::new(),
+            })
+            .expect("create session");
+
+        let connection = database.open_connection().expect("open connection");
+        let old_created_at = "2000-01-01T00:00:00+00:00";
+        let fresh_created_at = Utc::now().to_rfc3339();
+
+        connection
+            .execute(
+                "INSERT INTO memory_working_refs (ref_id, session_id, payload_json, created_at) VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    "wm-old",
+                    &session.session_id,
+                    serde_json::to_string(&WorkingMemoryRecord {
+                        ref_id: "wm-old".to_string(),
+                        session_id: session.session_id.clone(),
+                        payload: json!({"kind": "old"}),
+                        tags: vec![],
+                        created_at: old_created_at.to_string(),
+                    })
+                    .expect("serialize old working memory"),
+                    old_created_at,
+                ],
+            )
+            .expect("insert old working memory");
+        connection
+            .execute(
+                "INSERT INTO memory_working_refs (ref_id, session_id, payload_json, created_at) VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    "wm-new",
+                    &session.session_id,
+                    serde_json::to_string(&WorkingMemoryRecord {
+                        ref_id: "wm-new".to_string(),
+                        session_id: session.session_id.clone(),
+                        payload: json!({"kind": "new"}),
+                        tags: vec![],
+                        created_at: fresh_created_at.clone(),
+                    })
+                    .expect("serialize new working memory"),
+                    &fresh_created_at,
+                ],
+            )
+            .expect("insert new working memory");
+        connection
+            .execute(
+                "INSERT INTO memory_episodic_entries (entry_id, session_id, summary, metadata_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    "ep-old",
+                    &session.session_id,
+                    "old episodic",
+                    serde_json::to_string(&BTreeMap::<String, Value>::new())
+                        .expect("serialize old episodic metadata"),
+                    old_created_at,
+                ],
+            )
+            .expect("insert old episodic memory");
+        connection
+            .execute(
+                "INSERT INTO memory_episodic_entries (entry_id, session_id, summary, metadata_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    "ep-new",
+                    &session.session_id,
+                    "new episodic",
+                    serde_json::to_string(&BTreeMap::<String, Value>::new())
+                        .expect("serialize new episodic metadata"),
+                    &fresh_created_at,
+                ],
+            )
+            .expect("insert new episodic memory");
+        connection
+            .execute(
+                "INSERT INTO memory_semantic_indexes (index_id, session_id, label, payload_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    "sem-old",
+                    &session.session_id,
+                    "old-semantic",
+                    serde_json::to_string(&json!({"summary": "old semantic"}))
+                        .expect("serialize old semantic payload"),
+                    old_created_at,
+                ],
+            )
+            .expect("insert old semantic memory");
+        connection
+            .execute(
+                "INSERT INTO memory_semantic_indexes (index_id, session_id, label, payload_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    "sem-new",
+                    &session.session_id,
+                    "new-semantic",
+                    serde_json::to_string(&json!({"summary": "new semantic"}))
+                        .expect("serialize new semantic payload"),
+                    &fresh_created_at,
+                ],
+            )
+            .expect("insert new semantic memory");
+        connection
+            .execute(
+                "INSERT INTO memory_procedural_versions (version_id, session_id, rule_name, payload_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    "proc-old",
+                    &session.session_id,
+                    "old-procedural",
+                    serde_json::to_string(&json!({"mode": "old"}))
+                        .expect("serialize old procedural payload"),
+                    old_created_at,
+                ],
+            )
+            .expect("insert old procedural memory");
+        connection
+            .execute(
+                "INSERT INTO memory_procedural_versions (version_id, session_id, rule_name, payload_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    "proc-new",
+                    &session.session_id,
+                    "new-procedural",
+                    serde_json::to_string(&json!({"mode": "new"}))
+                        .expect("serialize new procedural payload"),
+                    &fresh_created_at,
+                ],
+            )
+            .expect("insert new procedural memory");
+
+        let summary = database.memory_summary().expect("retention summary");
+        assert_eq!(summary.working_refs, 1);
+        assert_eq!(summary.episodic_entries, 1);
+        assert_eq!(summary.semantic_slots, 1);
+        assert_eq!(summary.procedural_rules, 1);
+
+        assert_eq!(
+            database
+                .read_working_memory(&WorkingMemoryReadRequest {
+                    session_id: session.session_id.clone(),
+                    ref_id: None,
+                    limit: Some(10),
+                })
+                .expect("read retained working memory")
+                .entries[0]
+                .ref_id,
+            "wm-new"
+        );
+        assert_eq!(
+            database
+                .list_episodic_memory(&EpisodicMemoryListRequest {
+                    session_id: session.session_id.clone(),
+                    limit: Some(10),
+                })
+                .expect("list retained episodic memory")
+                .entries[0]
+                .entry_id,
+            "ep-new"
+        );
+        assert_eq!(
+            database
+                .list_semantic_memory(&SemanticMemoryListRequest {
+                    session_id: session.session_id.clone(),
+                    label: None,
+                    query: None,
+                    limit: Some(10),
+                })
+                .expect("list retained semantic memory")
+                .entries[0]
+                .index_id,
+            "sem-new"
+        );
+        assert_eq!(
+            database
+                .list_procedural_memory(&ProceduralMemoryListRequest {
+                    session_id: session.session_id,
+                    rule_name: None,
+                    limit: Some(10),
+                })
+                .expect("list retained procedural memory")
+                .entries[0]
+                .version_id,
+            "proc-new"
+        );
 
         std::fs::remove_dir_all(root).ok();
     }

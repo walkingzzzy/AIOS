@@ -56,6 +56,7 @@ impl AppState {
     fn health(&self) -> HealthResponse {
         let memory_summary = self.database.memory_summary().unwrap_or_default();
         let portal_handle_count = self.database.portal_handle_count().unwrap_or_default();
+        let memory_policy = self.database.current_memory_policy().ok();
 
         HealthResponse {
             service_id: self.config.service_id.clone(),
@@ -79,6 +80,20 @@ impl AppState {
                     memory_summary.episodic_entries,
                     memory_summary.semantic_slots,
                     memory_summary.procedural_rules,
+                ),
+                format!(
+                    "memory_policy={} retention={}d source={}",
+                    memory_policy
+                        .map(|policy| if policy.enabled {
+                            "enabled"
+                        } else {
+                            "disabled"
+                        })
+                        .unwrap_or("unknown"),
+                    memory_policy
+                        .map(|policy| policy.retention_days)
+                        .unwrap_or(0),
+                    self.config.runtime_platform_env_path.display()
                 ),
                 format!("portal_handles={portal_handle_count}"),
                 format!(

@@ -9,7 +9,7 @@ use aios_contracts::{
 
 use crate::db::Database;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MemorySummary {
     pub working_refs: usize,
     pub episodic_entries: usize,
