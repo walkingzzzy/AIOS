@@ -44,6 +44,7 @@ def main() -> int:
     parser.add_argument("--mcp-remote-registry", type=Path, default=default_mcp_remote_registry())
     parser.add_argument("--provider-registry-state-dir", type=Path, default=default_provider_registry_state_dir())
     parser.add_argument("--remote-registration-request", type=Path, default=default_remote_registration_request_path())
+    parser.add_argument("--runtime-platform-env", type=Path)
     parser.add_argument("--agent-socket", type=Path)
     parser.add_argument("--limit", type=int, default=8)
     parser.add_argument("--source")
